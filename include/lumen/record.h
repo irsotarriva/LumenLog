@@ -87,7 +87,8 @@ struct ProgressRecord {
     uint64_t          timestamp_ns;
 };
 
-// ── Record types forward-declared for buffer aliases ──────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
 inline uint64_t now_ns() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
@@ -121,9 +122,14 @@ using ProgressBuffer = RingBuffer<ProgressRecord, LUMEN_PROGRESS_CAPACITY>;
 namespace detail {
 const TagSet<8>& tls_tags();
 const TagSet<16>& proc_tags();
-void merge_context(LogRecord&, const TagSet<16>&, const TagSet<8>&);
-void merge_context(MetricRecord&, const TagSet<16>&, const TagSet<8>&);
-void merge_context(ProgressRecord&, const TagSet<16>&, const TagSet<8>&);
+void collect_scope_tags(TagSet<8>& out);
+const TagSet<8>* current_instance_tags();
+void merge_context(LogRecord&, const TagSet<16>&, const TagSet<8>&,
+                   const TagSet<8>*, const TagSet<8>*);
+void merge_context(MetricRecord&, const TagSet<16>&, const TagSet<8>&,
+                   const TagSet<8>*, const TagSet<8>*);
+void merge_context(ProgressRecord&, const TagSet<16>&, const TagSet<8>&,
+                   const TagSet<8>*, const TagSet<8>*);
 }  // namespace detail
 
 // ── RecordBuilder ─────────────────────────────────────────────────────────────
@@ -143,7 +149,12 @@ public:
     }
 
     ~RecordBuilder() {
-        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
+        TagSet<8> scope_tags;
+        detail::collect_scope_tags(scope_tags);
+        const TagSet<8>* inst_tags = detail::current_instance_tags();
+        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
+                              scope_tags.count() > 0 ? &scope_tags : nullptr,
+                              inst_tags);
         __buffer.push(std::move(__record));
     }
 
@@ -188,7 +199,12 @@ public:
     }
 
     ~MetricBuilder() {
-        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
+        TagSet<8> scope_tags;
+        detail::collect_scope_tags(scope_tags);
+        const TagSet<8>* inst_tags = detail::current_instance_tags();
+        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
+                              scope_tags.count() > 0 ? &scope_tags : nullptr,
+                              inst_tags);
         __buffer.push(std::move(__record));
     }
 
@@ -226,7 +242,7 @@ private:
 class ProgressHandle {
 public:
     ProgressHandle(ProgressBuffer& buffer, std::string_view label, uint64_t total)
-        : __buffer(buffer) {
+        : __buffer(&buffer) {
         static std::atomic<uint64_t> __next_id{1};
         __record.id = __next_id.fetch_add(1, std::memory_order_relaxed);
         __record.label = label;
@@ -237,13 +253,34 @@ public:
 
     ~ProgressHandle() {
         if (!__finished) {
-            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
-            __buffer.push(std::move(__record));
+            TagSet<8> scope_tags;
+            detail::collect_scope_tags(scope_tags);
+            const TagSet<8>* inst_tags = detail::current_instance_tags();
+            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
+                                  scope_tags.count() > 0 ? &scope_tags : nullptr,
+                                  inst_tags);
+            __buffer->push(std::move(__record));
         }
     }
 
     ProgressHandle(const ProgressHandle&) = delete;
     ProgressHandle& operator=(const ProgressHandle&) = delete;
+
+    ProgressHandle(ProgressHandle&& other) noexcept
+        : __buffer(other.__buffer)
+        , __record(other.__record)
+        , __finished(other.__finished) {
+        other.__finished = true;
+    }
+    ProgressHandle& operator=(ProgressHandle&& other) noexcept {
+        if (this != &other) {
+            __buffer = other.__buffer;
+            __record = other.__record;
+            __finished = other.__finished;
+            other.__finished = true;
+        }
+        return *this;
+    }
 
     void update(uint64_t current) {
         __record.current = current;
@@ -259,35 +296,114 @@ public:
         __record.current = __record.total;
         __record.timestamp_ns = now_ns();
         if (!__finished) {
-            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
-            __buffer.push(ProgressRecord{__record});
+            TagSet<8> scope_tags;
+            detail::collect_scope_tags(scope_tags);
+            const TagSet<8>* inst_tags = detail::current_instance_tags();
+            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
+                                  scope_tags.count() > 0 ? &scope_tags : nullptr,
+                                  inst_tags);
+            __buffer->push(ProgressRecord{__record});
             __finished = true;
         }
     }
 
 private:
     void __push_current() {
-        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
-        __buffer.push(ProgressRecord{__record});
+        TagSet<8> scope_tags;
+        detail::collect_scope_tags(scope_tags);
+        const TagSet<8>* inst_tags = detail::current_instance_tags();
+        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
+                              scope_tags.count() > 0 ? &scope_tags : nullptr,
+                              inst_tags);
+        __buffer->push(ProgressRecord{__record});
     }
 
-    ProgressBuffer& __buffer;
+    ProgressBuffer* __buffer;
     ProgressRecord __record{};
     bool __finished = false;
 };
 
 }  // namespace lumen
 
-#define LOG_TRACE(fmt, ...)
-#define LOG_DEBUG(fmt, ...)
-#define LOG_INFO(fmt, ...)
-#define LOG_WARN(fmt, ...)
-#define LOG_ERROR(fmt, ...)
-#define LOG_FATAL(fmt, ...)
+#include "lumen/detail/scope_stack.h"
 
-#define LUMEN_SCOPE(key, value, ...)
-#define LUMEN_LOOP(label, var, total)
-#define LUMEN_FRAME_SCOPE(frame_var)
-#define LUMEN_MEMBER_SCOPE
+// ── Level integer constants for compile-time macro elision ────────────────────
+
+#define LUMEN_LEVEL_TRACE 0
+#define LUMEN_LEVEL_DEBUG 1
+#define LUMEN_LEVEL_INFO  2
+#define LUMEN_LEVEL_WARN  3
+#define LUMEN_LEVEL_ERROR 4
+#define LUMEN_LEVEL_FATAL 5
+
+#define LUMEN_LEVEL_INT_TRACE  0
+#define LUMEN_LEVEL_INT_DEBUG  1
+#define LUMEN_LEVEL_INT_INFO   2
+#define LUMEN_LEVEL_INT_WARN   3
+#define LUMEN_LEVEL_INT_ERROR  4
+#define LUMEN_LEVEL_INT_FATAL  5
+
+#define LUMEN_LEVEL_CAT_IMPL(x) LUMEN_LEVEL_INT_##x
+#define LUMEN_LEVEL_CAT(x) LUMEN_LEVEL_CAT_IMPL(x)
+#define LUMEN_MIN_LEVEL_INT LUMEN_LEVEL_CAT(LUMEN_MIN_LEVEL)
+
+#define LUMEN_CONCAT_IMPL(a, b) a##b
+#define LUMEN_CONCAT(a, b) LUMEN_CONCAT_IMPL(a, b)
+
+// ── Macro helpers ─────────────────────────────────────────────────────────────
+
+#ifndef __has_cpp_attribute
+#define __has_cpp_attribute(x) 0
+#endif
+
+#define LUMEN_IF_ENABLED(LEVEL, expr) \
+    if constexpr (LUMEN_LEVEL_##LEVEL >= LUMEN_MIN_LEVEL_INT) expr
+
+// ── Log macros ────────────────────────────────────────────────────────────────
+
+#define LOG_TRACE(msg) \
+    LUMEN_IF_ENABLED(TRACE, \
+        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::TRACE, msg))
+
+#define LOG_DEBUG(msg) \
+    LUMEN_IF_ENABLED(DEBUG, \
+        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::DEBUG, msg))
+
+#define LOG_INFO(msg) \
+    LUMEN_IF_ENABLED(INFO, \
+        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::INFO, msg))
+
+#define LOG_WARN(msg) \
+    LUMEN_IF_ENABLED(WARN, \
+        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::WARN, msg))
+
+#define LOG_ERROR(msg) \
+    LUMEN_IF_ENABLED(ERROR, \
+        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::ERROR, msg))
+
+#define LOG_FATAL(msg) do { \
+    { \
+        lumen::RecordBuilder LUMEN_CONCAT(__lumen_fatal_, __LINE__) \
+            (lumen::core().log_buffer(), lumen::LogLevel::FATAL, msg); \
+    } \
+    lumen::core().flush(); \
+    std::terminate(); \
+} while(0)
+
+// ── Scope macros ──────────────────────────────────────────────────────────────
+
+#define LUMEN_SCOPE(key, value) \
+    lumen::detail::ScopeGuard LUMEN_CONCAT(__lumen_scope_, __LINE__)(key, value)
+
+#define LUMEN_FRAME_SCOPE(key, value) \
+    lumen::detail::ScopeGuard LUMEN_CONCAT(__lumen_frame_, __LINE__)(key, value)
+
+#define LUMEN_MEMBER_SCOPE \
+    auto LUMEN_CONCAT(__lumen_member_, __LINE__) = lumen_scope()
+
+#define LUMEN_LOOP(label, var, total) \
+    for (lumen::detail::LoopScope LUMEN_CONCAT(__lumen_loop_, __LINE__)(label, lumen::core().progress_buffer(), static_cast<uint64_t>(total)); \
+         LUMEN_CONCAT(__lumen_loop_, __LINE__).advance(); ) \
+        if (uint64_t var = LUMEN_CONCAT(__lumen_loop_, __LINE__).current(); true)
 
 #endif

@@ -52,6 +52,7 @@ add_library(lumen
   src/sink.cpp
   src/predicate.cpp
   src/context.cpp
+  src/tagged.cpp
 )
 
 target_include_directories(lumen PUBLIC include)
@@ -61,7 +62,7 @@ target_compile_features(lumen PUBLIC cxx_std_20)
 
 # Compile-time level threshold
 set(LUMEN_MIN_LEVEL "DEBUG" CACHE STRING "Elides records below this level at compile time")
-target_compile_definitions(lumen PRIVATE LUMEN_MIN_LEVEL=${LUMEN_MIN_LEVEL})
+target_compile_definitions(lumen PUBLIC LUMEN_MIN_LEVEL=${LUMEN_MIN_LEVEL})
 
 # Arena size
 set(LUMEN_ARENA_SIZE_KB "4" CACHE STRING "Per-thread arena size in KB")

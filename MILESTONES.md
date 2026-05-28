@@ -6,7 +6,7 @@ Branch-per-milestone strategy. Each branch merges into `main` when its section i
 |---|---|---|---|---|
 | M1 — Transport | `m1/transport` | — | First | DONE |
 | M2 — Dispatch & Predicates | `m2/dispatch` | M1 merged | After M1 | DONE |
-| M3 — Macros, Tagged, Sinks | `m3/sinks` | M1 merged | **Parallel with M2** | NOT STARTED |
+| M3 — Macros, Tagged, Sinks | `m3/sinks` | M1 merged | **Parallel with M2** | DONE |
 | M4 — Dashboard & Polish | `m4/dashboard` | M2 + M3 merged | After M2+M3 | NOT STARTED |
 | M5 — Extensions | `m5/extensions` | M4 merged | After M4 | NOT STARTED |
 
@@ -91,17 +91,17 @@ The producer-facing API: macros, scope helpers, `lumen::Tagged` mixin, and the t
 
 ### Files
 
-- [ ] `include/lumen/record.h` — **Add** `LUMEN_IF_ENABLED(LEVEL, expr)` macro. `#define LOG_TRACE`, `LOG_DEBUG`, `LOG_INFO`, `LOG_WARN`, `LOG_ERROR`, `LOG_FATAL` — each calls `make_builder()` with `std::source_location::current()`, conditionally on `LUMEN_IF_ENABLED`. `LOG_FATAL` calls `std::terminate` after commit.
-- [ ] `include/lumen/detail/scope_stack.h` — Thread-local linked list of `ScopeFrame`. `LUMEN_SCOPE(key, value)`, `LUMEN_LOOP(label, var, total)`, `LUMEN_FRAME_SCOPE(frame_var)` macros. RAII push/pop.
-- [ ] `include/lumen/record.h` — **Add** `LUMEN_MEMBER_SCOPE` macro.
-- [ ] `include/lumen/tagged.h` — **Update** implement `lumen_tag()` to store in `__tags` member. Implement `lumen_scope()` that returns RAII guard setting a thread-local pointer to the instance's tag set.
-- [ ] `src/tagged.cpp` — Tagged implementation.
-- [ ] `include/lumen/sink.h` — **Update** `TerminalSink::Config` with level colors, time format, inline tags. Update `FileSink::Config` fields.
-- [ ] `src/sink.cpp` — **Update** implement `NullSink` (trivial), `TerminalSink` with ANSI color output per level config, `FileSink` with async write thread + rotation (configurable size, max files), `JsonSink` with NDJSON output.
-- [ ] `tests/test_macros.cpp` — Verify macros compile to nothing below threshold. Verify `LOG_INFO(...).tag(...)` chaining works. Verify `LOG_FATAL` terminates. Verify source location is captured.
-- [ ] `tests/test_scope.cpp` — Verify `LUMEN_SCOPE` tags present inside scope, absent outside. Verify `LUMEN_LOOP` progress records emitted per iteration. Verify RAII under exception.
-- [ ] `tests/test_tagged.cpp` — Verify `lumen::Tagged` instance tags merged into records emitted from member functions with `LUMEN_MEMBER_SCOPE`.
-- [ ] `tests/test_sinks.cpp` — Verify `NullSink` discards. Verify `TerminalSink` produces ANSI output. Verify `FileSink` writes to disk. Verify `JsonSink` produces valid NDJSON. Verify sink `flush()` completes pending writes.
+- [x] `include/lumen/record.h` — **Add** `LUMEN_IF_ENABLED(LEVEL, expr)` macro. `#define LOG_TRACE`, `LOG_DEBUG`, `LOG_INFO`, `LOG_WARN`, `LOG_ERROR`, `LOG_FATAL` — each calls `make_builder()` with `std::source_location::current()`, conditionally on `LUMEN_IF_ENABLED`. `LOG_FATAL` calls `std::terminate` after commit.
+- [x] `include/lumen/detail/scope_stack.h` — Thread-local linked list of `ScopeFrame`. `LUMEN_SCOPE(key, value)`, `LUMEN_LOOP(label, var, total)`, `LUMEN_FRAME_SCOPE(frame_var)` macros. RAII push/pop.
+- [x] `include/lumen/record.h` — **Add** `LUMEN_MEMBER_SCOPE` macro.
+- [x] `include/lumen/tagged.h` — **Update** implement `lumen_tag()` to store in `__tags` member. Implement `lumen_scope()` that returns RAII guard setting a thread-local pointer to the instance's tag set.
+- [x] `src/tagged.cpp` — Tagged implementation.
+- [x] `include/lumen/sink.h` — **Update** `TerminalSink::Config` with level colors, time format, inline tags. Update `FileSink::Config` fields.
+- [x] `src/sink.cpp` — **Update** implement `NullSink` (trivial), `TerminalSink` with ANSI color output per level config, `FileSink` with async write thread + rotation (configurable size, max files), `JsonSink` with NDJSON output.
+- [x] `tests/test_macros.cpp` — Verify macros compile to nothing below threshold. Verify `LOG_INFO(...).tag(...)` chaining works. Verify `LOG_FATAL` terminates. Verify source location is captured.
+- [x] `tests/test_scope.cpp` — Verify `LUMEN_SCOPE` tags present inside scope, absent outside. Verify `LUMEN_LOOP` progress records emitted per iteration. Verify RAII under exception.
+- [x] `tests/test_tagged.cpp` — Verify `lumen::Tagged` instance tags merged into records emitted from member functions with `LUMEN_MEMBER_SCOPE`.
+- [x] `tests/test_sinks.cpp` — Verify `NullSink` discards. Verify `TerminalSink` produces ANSI output. Verify `FileSink` writes to disk. Verify `JsonSink` produces valid NDJSON. Verify sink `flush()` completes pending writes.
 
 ### Test expectations
 
