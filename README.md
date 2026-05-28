@@ -69,7 +69,7 @@ Optional dependencies (auto-resolved by vcpkg):
 
 ```sh
 # Clone
-git clone https://github.com/user/lumen.git
+git clone https://github.com/irsotarriva/LumenLog.git
 cd lumen
 
 # Configure & build (debug, with tests and examples)
