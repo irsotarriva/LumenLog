@@ -1,10 +1,18 @@
 #ifndef LUMEN_RECORD_H
 #define LUMEN_RECORD_H
 
-#include <cstdint>
-#include <string_view>
 #include <array>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+
 #include <source_location>
+#include <string_view>
+#include <thread>
+
+#include "lumen/detail/arena.h"
+#include "lumen/detail/overflow_policy.h"
+#include "lumen/detail/ring_buffer.h"
 
 namespace lumen {
 
@@ -20,7 +28,7 @@ enum LogLevel : uint32_t {
 struct SourceLocation {
     std::string_view       file;
     std::string_view       function;
-    std::string_view       class_name;  // C++26 reflection; empty otherwise
+    std::string_view       class_name;
     uint32_t               line;
 };
 
@@ -52,6 +60,8 @@ private:
     size_t __count = 0;
 };
 
+// ── Record types ──────────────────────────────────────────────────────────────
+
 struct LogRecord {
     LogLevel          level;
     std::string_view  message;
@@ -77,26 +87,180 @@ struct ProgressRecord {
     uint64_t          timestamp_ns;
 };
 
+// ── Record types forward-declared for buffer aliases ──────────────────────────
+inline uint64_t now_ns() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+inline uint32_t this_thread_id() {
+    static thread_local uint32_t __cached_id = 0;
+    if (__cached_id == 0) {
+        __cached_id = static_cast<uint32_t>(
+            std::hash<std::thread::id>{}(std::this_thread::get_id()) & 0xFFFFFFFFu);
+    }
+    return __cached_id;
+}
+
+// ── Buffer type aliases ───────────────────────────────────────────────────────
+
+#ifndef LUMEN_LOG_CAPACITY
+#define LUMEN_LOG_CAPACITY 65536
+#endif
+#ifndef LUMEN_METRIC_CAPACITY
+#define LUMEN_METRIC_CAPACITY 16384
+#endif
+#ifndef LUMEN_PROGRESS_CAPACITY
+#define LUMEN_PROGRESS_CAPACITY 4096
+#endif
+
+using LogBuffer     = RingBuffer<LogRecord, LUMEN_LOG_CAPACITY>;
+using MetricBuffer  = RingBuffer<MetricRecord, LUMEN_METRIC_CAPACITY>;
+using ProgressBuffer = RingBuffer<ProgressRecord, LUMEN_PROGRESS_CAPACITY>;
+
+// ── RecordBuilder ─────────────────────────────────────────────────────────────
+
 class RecordBuilder {
 public:
-    RecordBuilder& tag(std::string_view key, std::string_view value);
-    RecordBuilder& tag(std::string_view key, int64_t value);
-    RecordBuilder& tag(std::string_view key, double value);
+    RecordBuilder(LogBuffer& buffer, LogLevel level, std::string_view message,
+                  std::source_location loc = std::source_location::current())
+        : __buffer(buffer) {
+        __record.level = level;
+        __record.message = message;
+        __record.timestamp_ns = now_ns();
+        __record.thread_id = this_thread_id();
+        __record.source.file = loc.file_name();
+        __record.source.function = loc.function_name();
+        __record.source.line = loc.line();
+    }
+
+    ~RecordBuilder() {
+        __buffer.push(std::move(__record));
+    }
+
+    RecordBuilder(const RecordBuilder&) = delete;
+    RecordBuilder& operator=(const RecordBuilder&) = delete;
+
+    RecordBuilder& tag(std::string_view key, std::string_view value) {
+        __record.tags.add(key, value);
+        return *this;
+    }
+    RecordBuilder& tag(std::string_view key, int64_t value) {
+        char* buf = __arena_buf();
+        int n = std::snprintf(buf, 32, "%lld", static_cast<long long>(value));
+        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        return *this;
+    }
+    RecordBuilder& tag(std::string_view key, double value) {
+        char* buf = __arena_buf();
+        int n = std::snprintf(buf, 32, "%.6g", value);
+        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        return *this;
+    }
+
+private:
+    char* __arena_buf() {
+        return this_thread_arena.allocate(32);
+    }
+
+    LogBuffer& __buffer;
+    LogRecord __record{};
 };
+
+// ── MetricBuilder ─────────────────────────────────────────────────────────────
 
 class MetricBuilder {
 public:
-    MetricBuilder& tag(std::string_view key, std::string_view value);
-    MetricBuilder& tag(std::string_view key, int64_t value);
-    MetricBuilder& tag(std::string_view key, double value);
+    MetricBuilder(MetricBuffer& buffer, std::string_view name, double value)
+        : __buffer(buffer) {
+        __record.name = name;
+        __record.value = value;
+        __record.timestamp_ns = now_ns();
+    }
+
+    ~MetricBuilder() {
+        __buffer.push(std::move(__record));
+    }
+
+    MetricBuilder(const MetricBuilder&) = delete;
+    MetricBuilder& operator=(const MetricBuilder&) = delete;
+
+    MetricBuilder& tag(std::string_view key, std::string_view value) {
+        __record.tags.add(key, value);
+        return *this;
+    }
+    MetricBuilder& tag(std::string_view key, int64_t value) {
+        char* buf = __arena_buf();
+        int n = std::snprintf(buf, 32, "%lld", static_cast<long long>(value));
+        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        return *this;
+    }
+    MetricBuilder& tag(std::string_view key, double value) {
+        char* buf = __arena_buf();
+        int n = std::snprintf(buf, 32, "%.6g", value);
+        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        return *this;
+    }
+
+private:
+    char* __arena_buf() {
+        return this_thread_arena.allocate(32);
+    }
+
+    MetricBuffer& __buffer;
+    MetricRecord __record{};
 };
+
+// ── ProgressHandle ────────────────────────────────────────────────────────────
 
 class ProgressHandle {
 public:
-    void update(uint64_t current);
-    void tick();
-    void finish();
-    ~ProgressHandle();
+    ProgressHandle(ProgressBuffer& buffer, std::string_view label, uint64_t total)
+        : __buffer(buffer) {
+        static std::atomic<uint64_t> __next_id{1};
+        __record.id = __next_id.fetch_add(1, std::memory_order_relaxed);
+        __record.label = label;
+        __record.current = 0;
+        __record.total = total;
+        __record.timestamp_ns = now_ns();
+    }
+
+    ~ProgressHandle() {
+        if (!__finished) {
+            __buffer.push(std::move(__record));
+        }
+    }
+
+    ProgressHandle(const ProgressHandle&) = delete;
+    ProgressHandle& operator=(const ProgressHandle&) = delete;
+
+    void update(uint64_t current) {
+        __record.current = current;
+        __record.timestamp_ns = now_ns();
+        __push_current();
+    }
+
+    void tick() {
+        update(__record.current + 1);
+    }
+
+    void finish() {
+        __record.current = __record.total;
+        __record.timestamp_ns = now_ns();
+        if (!__finished) {
+            __buffer.push(ProgressRecord{__record});
+            __finished = true;
+        }
+    }
+
+private:
+    void __push_current() {
+        __buffer.push(ProgressRecord{__record});
+    }
+
+    ProgressBuffer& __buffer;
+    ProgressRecord __record{};
+    bool __finished = false;
 };
 
 }  // namespace lumen

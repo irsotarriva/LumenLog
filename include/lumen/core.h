@@ -26,12 +26,21 @@ public:
     void emit(MetricRecord&& record);
     void emit(ProgressRecord&& record);
 
+    LogBuffer&       log_buffer()       { return __log_buffer; }
+    MetricBuffer&    metric_buffer()    { return __metric_buffer; }
+    ProgressBuffer&  progress_buffer()  { return __progress_buffer; }
+
     Core();
     ~Core();
     Core(const Core&) = delete;
     Core& operator=(const Core&) = delete;
     Core(Core&&) = delete;
     Core& operator=(Core&&) = delete;
+
+private:
+    LogBuffer      __log_buffer;
+    MetricBuffer   __metric_buffer;
+    ProgressBuffer __progress_buffer;
 };
 
 Core& core();

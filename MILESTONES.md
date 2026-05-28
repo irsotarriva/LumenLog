@@ -2,15 +2,16 @@
 
 Branch-per-milestone strategy. Each branch merges into `main` when its section is complete and all tests pass.
 
-| Milestone | Branch | Depends on | Parallel |
-|---|---|---|---|
-| M1 — Transport | `m1/transport` | — | First |
-| M2 — Dispatch & Predicates | `m2/dispatch` | M1 merged | After M1 |
-| M3 — Macros, Tagged, Sinks | `m3/sinks` | M1 merged | **Parallel with M2** |
-| M4 — Dashboard & Polish | `m4/dashboard` | M2 + M3 merged | After M2+M3 |
-| M5 — Extensions | `m5/extensions` | M4 merged | After M4 |
+| Milestone | Branch | Depends on | Parallel | Status
+|---|---|---|---|---|
+| M1 — Transport | `m1/transport` | — | First | DONE |
+| M2 — Dispatch & Predicates | `m2/dispatch` | M1 merged | After M1 | NOT STARTED |
+| M3 — Macros, Tagged, Sinks | `m3/sinks` | M1 merged | **Parallel with M2** | NOT STARTED |
+| M4 — Dashboard & Polish | `m4/dashboard` | M2 + M3 merged | After M2+M3 | NOT STARTED |
+| M5 — Extensions | `m5/extensions` | M4 merged | After M4 | NOT STARTED |
 
 ---
+Remember to always update status after finishing milestones.
 
 ## M1 — Transport Layer (`m1/transport`)
 
