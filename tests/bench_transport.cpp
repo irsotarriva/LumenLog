@@ -32,7 +32,7 @@ protected:
 
     void TearDown() override {
         if (__sink_id != 0) {
-            core().remove_sink(__sink_id);
+            (void)core().remove_sink(__sink_id);
             __sink_id = 0;
         }
     }

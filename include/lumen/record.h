@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "lumen/detail/arena.h"
+#include "lumen/detail/class_name.hpp"
 #include "lumen/detail/overflow_policy.h"
 #include "lumen/detail/ring_buffer.h"
 
@@ -145,6 +146,7 @@ public:
         __record.thread_id = this_thread_id();
         __record.source.file = loc.file_name();
         __record.source.function = loc.function_name();
+        __record.source.class_name = detail::extract_class_name(loc.function_name());
         __record.source.line = loc.line();
     }
 
@@ -168,13 +170,13 @@ public:
     RecordBuilder& tag(std::string_view key, int64_t value) {
         char* buf = __arena_buf();
         int n = std::snprintf(buf, 32, "%lld", static_cast<long long>(value));
-        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
         return *this;
     }
     RecordBuilder& tag(std::string_view key, double value) {
         char* buf = __arena_buf();
         int n = std::snprintf(buf, 32, "%.6g", value);
-        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
         return *this;
     }
 
@@ -218,13 +220,13 @@ public:
     MetricBuilder& tag(std::string_view key, int64_t value) {
         char* buf = __arena_buf();
         int n = std::snprintf(buf, 32, "%lld", static_cast<long long>(value));
-        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
         return *this;
     }
     MetricBuilder& tag(std::string_view key, double value) {
         char* buf = __arena_buf();
         int n = std::snprintf(buf, 32, "%.6g", value);
-        if (n > 0) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
         return *this;
     }
 
@@ -318,7 +320,7 @@ private:
         __buffer->push(ProgressRecord{__record});
     }
 
-    ProgressBuffer* __buffer;
+    ProgressBuffer* __buffer;  // non-owning
     ProgressRecord __record{};
     bool __finished = false;
 };

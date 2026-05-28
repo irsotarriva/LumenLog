@@ -39,7 +39,7 @@ protected:
 
     void TearDown() override {
         for (auto id : __ids) {
-            core().remove_sink(id);
+            (void)core().remove_sink(id);
         }
         __ids.clear();
     }

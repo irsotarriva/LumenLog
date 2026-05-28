@@ -5,6 +5,7 @@
 #include <string>
 
 #include "lumen/detail/context.h"
+#include "lumen/detail/error.h"
 
 namespace lumen {
 
@@ -107,7 +108,7 @@ SinkId Core::add_sink(std::unique_ptr<Sink> sink, Predicate predicate) {
     return id;
 }
 
-std::unique_ptr<Sink> Core::remove_sink(SinkId id) {
+std::expected<std::unique_ptr<Sink>, std::error_code> Core::remove_sink(SinkId id) {
     std::lock_guard lock(__sink_mutex);
     for (auto it = __sinks.begin(); it != __sinks.end(); ++it) {
         if (it->id == id) {
@@ -116,7 +117,7 @@ std::unique_ptr<Sink> Core::remove_sink(SinkId id) {
             return sink;
         }
     }
-    return nullptr;
+    return std::unexpected(make_error_code(LumenError::invalid_sink_id));
 }
 
 void Core::flush() {

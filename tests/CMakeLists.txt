@@ -10,6 +10,7 @@ add_executable(lumen_tests
   test_dashboard.cpp
   test_latex.cpp
   test_error.cpp
+  test_reflection.cpp
 )
 
 if(LUMEN_ENABLE_DASHBOARD)
@@ -21,7 +22,7 @@ if(LUMEN_ENABLE_LATEX)
 endif()
 
 target_link_libraries(lumen_tests PRIVATE lumen GTest::GTest GTest::Main)
-target_compile_features(lumen_tests PRIVATE cxx_std_20)
+target_compile_features(lumen_tests PRIVATE cxx_std_23)
 
 include(GoogleTest)
 gtest_discover_tests(lumen_tests)
@@ -31,7 +32,7 @@ add_executable(lumen_bench
 )
 
 target_link_libraries(lumen_bench PRIVATE lumen GTest::GTest GTest::Main)
-target_compile_features(lumen_bench PRIVATE cxx_std_20)
+target_compile_features(lumen_bench PRIVATE cxx_std_23)
 
 include(GoogleTest)
 gtest_discover_tests(lumen_bench)

@@ -12,10 +12,10 @@ namespace detail {
 
 struct ScopeFrame {
     TagSet<8> tags;
-    ScopeFrame* next{nullptr};
+    ScopeFrame* next{nullptr};  // non-owning; frames live on the stack
 };
 
-inline thread_local ScopeFrame* tls_scope_head = nullptr;
+inline thread_local ScopeFrame* tls_scope_head = nullptr;  // non-owning; head of stack-linked list
 
 inline void collect_scope_tags(TagSet<8>& out) {
     for (const ScopeFrame* f = tls_scope_head; f; f = f->next) {

@@ -5,7 +5,7 @@ namespace lumen {
 namespace {
 
 const TagSet<8>*& tls_instance_tags() {
-    static thread_local const TagSet<8>* ptr = nullptr;
+    static thread_local const TagSet<8>* ptr = nullptr;  // non-owning
     return ptr;
 }
 

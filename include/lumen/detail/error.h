@@ -11,6 +11,9 @@ enum class LumenError : int {
     arena_overflow,
     buffer_full,
     invalid_sink_id,
+    io_error,
+    file_open_error,
+    sink_exception,
 };
 
 class LumenErrorCategory : public std::error_category {

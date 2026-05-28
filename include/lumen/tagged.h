@@ -20,7 +20,7 @@ public:
         Scope& operator=(Scope&&) = delete;
 
     private:
-        const TagSet<8>* __previous;
+        const TagSet<8>* __previous;  // non-owning
     };
 
     void lumen_tag(std::string_view key, std::string_view value);

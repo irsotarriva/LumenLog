@@ -16,6 +16,12 @@ std::string LumenErrorCategory::message(int ev) const {
             return "ring buffer is full";
         case LumenError::invalid_sink_id:
             return "sink id not found";
+        case LumenError::io_error:
+            return "I/O error";
+        case LumenError::file_open_error:
+            return "failed to open file";
+        case LumenError::sink_exception:
+            return "exception caught in sink callback";
     }
     return "unknown lumen error";
 }

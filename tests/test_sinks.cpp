@@ -26,7 +26,7 @@ protected:
 
     void TearDown() override {
         for (auto id : __ids) {
-            core().remove_sink(id);
+            (void)core().remove_sink(id);
         }
         __ids.clear();
     }
@@ -77,7 +77,7 @@ TEST_F(SinkTest, FileSinkWritesToDisk) {
 
         LOG_INFO("file message one").tag("test", "file");
         wait_flush();
-        core().remove_sink(id);
+        (void)core().remove_sink(id);
     }
 
     std::ifstream infile(path);
@@ -101,7 +101,7 @@ TEST_F(SinkTest, JsonSinkValidNdjson) {
 
         LOG_INFO("json message").tag("env", "test");
         wait_flush();
-        core().remove_sink(id);
+        (void)core().remove_sink(id);
     }
 
     std::ifstream infile(path);
@@ -154,7 +154,7 @@ TEST_F(SinkTest, FileSinkHandlesMultipleRecords) {
         LOG_INFO("second");
         LOG_INFO("third");
         wait_flush();
-        core().remove_sink(id);
+        (void)core().remove_sink(id);
     }
 
     std::ifstream infile(path);
@@ -208,7 +208,7 @@ TEST_F(SinkTest, JsonSinkHandlesRapidRecords) {
     }
 
     wait_flush();
-    core().remove_sink(id);
+    (void)core().remove_sink(id);
     {
         std::ifstream infile(path);
         ASSERT_TRUE(infile.is_open());
@@ -254,7 +254,7 @@ TEST_F(SinkTest, JsonSinkHandlesSpecialCharacters) {
     LOG_INFO("message with \"quotes\" and \\backslash").tag("special", "value\nwith\rnewline");
 
     wait_flush();
-    core().remove_sink(id);
+    (void)core().remove_sink(id);
 
     std::ifstream infile(path);
     ASSERT_TRUE(infile.is_open());

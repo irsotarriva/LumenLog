@@ -3,10 +3,12 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <expected>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "lumen/record.h"
@@ -28,8 +30,8 @@ public:
     void set_process_tag(std::string_view key, std::string_view value);
     void set_thread_tag(std::string_view key, std::string_view value);
 
-    SinkId add_sink(std::unique_ptr<Sink> sink, Predicate predicate);
-    std::unique_ptr<Sink> remove_sink(SinkId id);
+    [[nodiscard]] SinkId add_sink(std::unique_ptr<Sink> sink, Predicate predicate);
+    [[nodiscard]] std::expected<std::unique_ptr<Sink>, std::error_code> remove_sink(SinkId id);
 
     void flush();
 

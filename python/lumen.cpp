@@ -15,16 +15,32 @@ namespace {
 
 struct PySink : Sink, py::trampoline_self_life_support {
     void on_log(const LogRecord& record) override {
-        PYBIND11_OVERRIDE_PURE(void, Sink, on_log, record);
+        try {
+            PYBIND11_OVERRIDE_PURE(void, Sink, on_log, record);
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in Sink::on_log: %s\n", e.what());
+        }
     }
     void on_metric(const MetricRecord& record) override {
-        PYBIND11_OVERRIDE_PURE(void, Sink, on_metric, record);
+        try {
+            PYBIND11_OVERRIDE_PURE(void, Sink, on_metric, record);
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in Sink::on_metric: %s\n", e.what());
+        }
     }
     void on_progress(const ProgressRecord& record) override {
-        PYBIND11_OVERRIDE_PURE(void, Sink, on_progress, record);
+        try {
+            PYBIND11_OVERRIDE_PURE(void, Sink, on_progress, record);
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in Sink::on_progress: %s\n", e.what());
+        }
     }
     void flush() override {
-        PYBIND11_OVERRIDE_PURE(void, Sink, flush,);
+        try {
+            PYBIND11_OVERRIDE_PURE(void, Sink, flush,);
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in Sink::flush: %s\n", e.what());
+        }
     }
 };
 
@@ -114,20 +130,36 @@ public:
         , __flush(std::move(flush_fn)) {}
 
     void on_log(const LogRecord& record) override {
-        py::gil_scoped_acquire gil;
-        if (!__on_log.is_none()) __on_log(record);
+        try {
+            py::gil_scoped_acquire gil;
+            if (!__on_log.is_none()) __on_log(record);
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in CallbackSink::on_log: %s\n", e.what());
+        }
     }
     void on_metric(const MetricRecord& record) override {
-        py::gil_scoped_acquire gil;
-        if (!__on_metric.is_none()) __on_metric(record);
+        try {
+            py::gil_scoped_acquire gil;
+            if (!__on_metric.is_none()) __on_metric(record);
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in CallbackSink::on_metric: %s\n", e.what());
+        }
     }
     void on_progress(const ProgressRecord& record) override {
-        py::gil_scoped_acquire gil;
-        if (!__on_progress.is_none()) __on_progress(record);
+        try {
+            py::gil_scoped_acquire gil;
+            if (!__on_progress.is_none()) __on_progress(record);
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in CallbackSink::on_progress: %s\n", e.what());
+        }
     }
     void flush() override {
-        py::gil_scoped_acquire gil;
-        if (!__flush.is_none()) __flush();
+        try {
+            py::gil_scoped_acquire gil;
+            if (!__flush.is_none()) __flush();
+        } catch (const py::error_already_set& e) {
+            std::fprintf(stderr, "lumen: Python exception in CallbackSink::flush: %s\n", e.what());
+        }
     }
 
 private:
@@ -292,7 +324,15 @@ PYBIND11_MODULE(lumen_bindings, m) {
                  return c.add_sink(std::move(sink), std::move(pred));
              },
              py::arg("sink"), py::arg("predicate"))
-        .def("remove_sink", &Core::remove_sink, py::arg("id"))
+        .def("remove_sink",
+             [](Core& c, SinkId id) -> std::unique_ptr<Sink> {
+                 auto result = c.remove_sink(id);
+                 if (result.has_value()) {
+                     return std::move(*result);
+                 }
+                 return nullptr;
+             },
+             py::arg("id"))
         .def("flush", &Core::flush)
         .def("set_process_tag", &Core::set_process_tag,
              py::arg("key"), py::arg("value"))

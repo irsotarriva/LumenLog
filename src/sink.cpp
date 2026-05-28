@@ -208,6 +208,21 @@ struct TerminalSink::DashboardState {
     }
 
     std::string render(const TerminalSink::Config& cfg) {
+        try {
+            return __render_impl(cfg);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "lumen: FTXUI render exception: %s\n", e.what());
+            return __last_rendered;
+        } catch (...) {
+            std::fprintf(stderr, "lumen: FTXUI render unknown exception\n");
+            return __last_rendered;
+        }
+    }
+
+private:
+    std::string __last_rendered;
+
+    std::string __render_impl(const TerminalSink::Config& cfg) {
         using namespace ftxui;
 
         const int dashboard_h = cfg.dashboard_height > 0 ? cfg.dashboard_height : 5;
@@ -321,6 +336,7 @@ struct TerminalSink::DashboardState {
         }
         output += "\033[K";
 
+        __last_rendered = output;
         return output;
     }
 };
@@ -470,6 +486,10 @@ struct FileSink::Impl {
         }
         file = std::make_unique<std::ofstream>(std::string(cfg.path),
                                                std::ios::out | std::ios::app);
+        if (!file || !file->is_open()) {
+            std::fprintf(stderr, "lumen: failed to open log file '%s'\n",
+                         std::string(cfg.path).c_str());
+        }
         bytes_written = 0;
     }
 
@@ -485,14 +505,18 @@ struct FileSink::Impl {
         for (int i = cfg.max_files - 1; i >= 0; --i) {
             std::string old_name = base + "." + std::to_string(i);
             std::string new_name = base + "." + std::to_string(i + 1);
-            if (i == 0) {
-                std::rename(base.c_str(), new_name.c_str());
-            } else {
-                std::rename(old_name.c_str(), new_name.c_str());
+            const char* from = (i == 0) ? base.c_str() : old_name.c_str();
+            if (std::rename(from, new_name.c_str()) != 0) {
+                std::fprintf(stderr, "lumen: failed to rename '%s' -> '%s'\n",
+                             from, new_name.c_str());
             }
         }
 
         file = std::make_unique<std::ofstream>(base, std::ios::out | std::ios::app);
+        if (!file || !file->is_open()) {
+            std::fprintf(stderr, "lumen: failed to reopen log file '%s' after rotation\n",
+                         base.c_str());
+        }
         bytes_written = 0;
     }
 
@@ -518,6 +542,10 @@ struct FileSink::Impl {
 
             if (file && file->is_open()) {
                 *file << chunk;
+                if (!file->good()) {
+                    std::fprintf(stderr, "lumen: I/O error writing to log file '%s'\n",
+                                 std::string(cfg.path).c_str());
+                }
                 file->flush();
                 bytes_written += chunk.size();
                 maybe_rotate();
@@ -534,6 +562,10 @@ struct FileSink::Impl {
             }
             if (file && file->is_open()) {
                 *file << chunk;
+                if (!file->good()) {
+                    std::fprintf(stderr, "lumen: I/O error writing to log file '%s'\n",
+                                 std::string(cfg.path).c_str());
+                }
                 file->flush();
             }
         }
@@ -620,6 +652,10 @@ struct JsonSink::Impl {
 
     explicit Impl(std::string_view path)
         : file(std::string(path), std::ios::out | std::ios::app) {
+        if (!file.is_open()) {
+            std::fprintf(stderr, "lumen: failed to open JSON log file '%s'\n",
+                         std::string(path).c_str());
+        }
         worker = std::jthread(&Impl::run, this);
     }
 
@@ -656,6 +692,9 @@ struct JsonSink::Impl {
 
             if (file.is_open()) {
                 file << chunk;
+                if (!file.good()) {
+                    std::fprintf(stderr, "lumen: I/O error writing to JSON log file\n");
+                }
                 file.flush();
             }
         }
@@ -670,6 +709,9 @@ struct JsonSink::Impl {
             }
             if (file.is_open()) {
                 file << chunk;
+                if (!file.good()) {
+                    std::fprintf(stderr, "lumen: I/O error writing to JSON log file\n");
+                }
                 file.flush();
             }
         }

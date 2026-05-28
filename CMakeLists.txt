@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 project(lumen VERSION 0.1.0 LANGUAGES CXX)
 
 # ── C++ Standard ──────────────────────────────────────────────────────────────
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -40,7 +40,7 @@ endif()
 option(LUMEN_ENABLE_DASHBOARD  "Include FTXUI dependency; enables dashboard rendering" ON)
 option(LUMEN_ENABLE_LATEX     "Include MicroTeX; enables LaTeX math rendering in sinks" OFF)
 option(LUMEN_ENABLE_PYTHON    "Build pybind11 bindings" OFF)
-option(LUMEN_ENABLE_REFLECTION "Enable C++26 class-name harvesting when compiler supports it" AUTO)
+set(LUMEN_ENABLE_REFLECTION "AUTO" CACHE STRING "Enable C++26 class-name harvesting (AUTO, ON, OFF)")
 
 # ── vcpkg ─────────────────────────────────────────────────────────────────────
 # CMAKE_TOOLCHAIN_FILE is set via CMakePresets.json using $env{VCPKG_ROOT}.
@@ -59,7 +59,7 @@ add_library(lumen
 target_include_directories(lumen PUBLIC include)
 target_include_directories(lumen PRIVATE src)
 
-target_compile_features(lumen PUBLIC cxx_std_20)
+target_compile_features(lumen PUBLIC cxx_std_23)
 
 # Compile-time level threshold
 set(LUMEN_MIN_LEVEL "DEBUG" CACHE STRING "Elides records below this level at compile time")
@@ -95,6 +95,34 @@ if(LUMEN_ENABLE_PYTHON)
   target_compile_definitions(lumen PUBLIC LUMEN_ENABLE_PYTHON)
   find_package(pybind11 REQUIRED)
   target_link_libraries(lumen PUBLIC pybind11::headers)
+endif()
+
+# ── C++26 Reflection ───────────────────────────────────────────────────────────
+set(LUMEN_HAS_REFLECTION FALSE)
+
+if(LUMEN_ENABLE_REFLECTION STREQUAL "AUTO" OR LUMEN_ENABLE_REFLECTION STREQUAL "ON")
+    message(STATUS "Lumen: probing C++26 static reflection support...")
+
+    file(READ "${CMAKE_SOURCE_DIR}/cmake/try_reflection.cpp" __lumen_reflection_code)
+
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_FLAGS "-std=c++26")
+    check_cxx_source_compiles("${__lumen_reflection_code}" LUMEN_HAS_REFLECTION)
+    set(CMAKE_REQUIRED_FLAGS "")
+
+    if(LUMEN_HAS_REFLECTION)
+        message(STATUS "Lumen: C++26 static reflection detected — class-name harvesting enabled")
+    elseif(LUMEN_ENABLE_REFLECTION STREQUAL "AUTO")
+        message(STATUS "Lumen: C++26 static reflection not available — using function-name parsing fallback")
+    elseif(LUMEN_ENABLE_REFLECTION STREQUAL "ON")
+        message(SEND_ERROR "LUMEN_ENABLE_REFLECTION=ON but C++26 static reflection is not supported by this compiler"
+                           " (requires ^T operator and <meta> header)."
+                           " Set to AUTO for automatic fallback or OFF to disable.")
+    endif()
+endif()
+
+if(LUMEN_HAS_REFLECTION)
+    target_compile_definitions(lumen PUBLIC LUMEN_HAS_REFLECTION)
 endif()
 
 # ── Aliases for convenience ───────────────────────────────────────────────────

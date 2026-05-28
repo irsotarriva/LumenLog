@@ -68,7 +68,7 @@ protected:
 
     void TearDown() override {
         for (auto id : __ids) {
-            core().remove_sink(id);
+            (void)core().remove_sink(id);
         }
         __ids.clear();
     }
@@ -304,7 +304,7 @@ TEST_F(DispatchTest, AddAndRemoveSink) {
     EXPECT_EQ(raw->logs.size(), 1);
 
     auto removed = core().remove_sink(id);
-    EXPECT_NE(removed, nullptr);
+    EXPECT_TRUE(removed.has_value());
 
     {
         RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "after remove");
@@ -316,7 +316,7 @@ TEST_F(DispatchTest, AddAndRemoveSink) {
 
 TEST_F(DispatchTest, RemoveSinkReturnsNullForUnknownId) {
     auto removed = core().remove_sink(99999);
-    EXPECT_EQ(removed, nullptr);
+    EXPECT_FALSE(removed.has_value());
 }
 
 // ── Level-based filtering ─────────────────────────────────────────────────────
@@ -391,7 +391,7 @@ TEST_F(DispatchTest, EmptyTagSetDispatch) {
 TEST_F(DispatchTest, RemoveAllSinksThenEmit) {
     auto sink = std::make_unique<CaptureSink>();
     SinkId id = core().add_sink(std::move(sink), always());
-    core().remove_sink(id);
+    (void)core().remove_sink(id);
 
     {
         RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "after removal");
@@ -406,10 +406,10 @@ TEST_F(DispatchTest, MultipleRemoveSameSink) {
     SinkId id = core().add_sink(std::move(sink), always());
 
     auto removed1 = core().remove_sink(id);
-    EXPECT_NE(removed1, nullptr);
+    EXPECT_TRUE(removed1.has_value());
 
     auto removed2 = core().remove_sink(id);
-    EXPECT_EQ(removed2, nullptr);
+    EXPECT_FALSE(removed2.has_value());
 }
 
 }  // namespace
