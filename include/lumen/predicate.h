@@ -23,8 +23,16 @@ public:
     friend Predicate operator||(const Predicate& a, const Predicate& b);
     friend Predicate operator!(const Predicate& p);
 
-private:
+    friend Predicate always();
+    friend Predicate never();
+    friend Predicate level_at_least(LogLevel min_level);
+    friend Predicate level_equals(LogLevel level);
+    friend Predicate tag_equals(std::string_view key, std::string_view value);
+    friend Predicate tag_exists(std::string_view key);
+
     struct Node;
+
+private:
     explicit Predicate(std::unique_ptr<Node> node);
     std::unique_ptr<Node> __node;
 };

@@ -1,8 +1,13 @@
 #ifndef LUMEN_CORE_H
 #define LUMEN_CORE_H
 
+#include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "lumen/record.h"
 #include "lumen/predicate.h"
@@ -11,6 +16,12 @@
 namespace lumen {
 
 using SinkId = uint64_t;
+
+struct SinkEntry {
+    SinkId                    id;
+    std::unique_ptr<Sink>     sink;
+    Predicate                 predicate;
+};
 
 class Core {
 public:
@@ -38,9 +49,23 @@ public:
     Core& operator=(Core&&) = delete;
 
 private:
-    LogBuffer      __log_buffer;
-    MetricBuffer   __metric_buffer;
-    ProgressBuffer __progress_buffer;
+    void __dispatch_loop();
+    void __dispatch_log(const LogRecord& record);
+    void __dispatch_metric(const MetricRecord& record);
+    void __dispatch_progress(const ProgressRecord& record);
+
+    LogBuffer                     __log_buffer;
+    MetricBuffer                  __metric_buffer;
+    ProgressBuffer                __progress_buffer;
+
+    std::jthread                  __dispatch_thread;
+    std::mutex                    __wake_mutex;
+    std::condition_variable       __wake_cv;
+    std::atomic<bool>             __running{true};
+
+    std::mutex                    __sink_mutex;
+    std::vector<SinkEntry>        __sinks;
+    std::atomic<SinkId>           __next_sink_id{1};
 };
 
 Core& core();

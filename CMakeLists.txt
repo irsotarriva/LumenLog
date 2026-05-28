@@ -51,6 +51,7 @@ add_library(lumen
   src/core.cpp
   src/sink.cpp
   src/predicate.cpp
+  src/context.cpp
 )
 
 target_include_directories(lumen PUBLIC include)

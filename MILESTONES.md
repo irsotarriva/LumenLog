@@ -5,7 +5,7 @@ Branch-per-milestone strategy. Each branch merges into `main` when its section i
 | Milestone | Branch | Depends on | Parallel | Status
 |---|---|---|---|---|
 | M1 — Transport | `m1/transport` | — | First | DONE |
-| M2 — Dispatch & Predicates | `m2/dispatch` | M1 merged | After M1 | NOT STARTED |
+| M2 — Dispatch & Predicates | `m2/dispatch` | M1 merged | After M1 | DONE |
 | M3 — Macros, Tagged, Sinks | `m3/sinks` | M1 merged | **Parallel with M2** | NOT STARTED |
 | M4 — Dashboard & Polish | `m4/dashboard` | M2 + M3 merged | After M2+M3 | NOT STARTED |
 | M5 — Extensions | `m5/extensions` | M4 merged | After M4 | NOT STARTED |
@@ -48,14 +48,14 @@ The predicate engine, the dispatch thread that drains all three ring buffers, an
 
 ### Files
 
-- [ ] `include/lumen/predicate.h` — **Update** implement `Predicate::Node` subtypes: `TagEquals`, `LevelAtLeast`, `And`, `Or`, `Not`, `Always`, `Never`. Wire `evaluate()` to tree walk.
-- [ ] `src/predicate.cpp` — **Update** all DSL functions (`always()`, `never()`, `level_at_least()`, `tag_equals()`, `tag_exists()`, `operator&&`, `operator||`, `operator!`).
-- [ ] `include/lumen/detail/context.h` — Context merge algorithm: merges explicit → instance → scope → thread → process tags. First-wins per key. Linear scan over fixed-size arrays.
-- [ ] `include/lumen/core.h` — **Update** add dispatch thread (`std::jthread`), sink registry (`std::vector<SinkEntry>`), condition variable wake. Drain order: Progress → Metric → Log.
-- [ ] `src/core.cpp` — **Update** dispatch loop: wake on CV, drain all 3 buffers, evaluate each record against each sink's predicate, call `on_*` on matches. `add_sink()` / `remove_sink()` with mutex guard.
-- [ ] `include/lumen/core.h` — **Add** `set_process_tag()` / `set_thread_tag()` storage (thread-local `TagSet<8>` for thread tags, static `TagSet<16>` for process tags).
-- [ ] `tests/test_predicate.cpp` — Unit test every predicate node, composition with `&&` `||` `!`. Verify short-circuit. Test `tag_exists`.
-- [ ] `tests/test_dispatch.cpp` — End-to-end: emit records → dispatch thread evaluates → correct sink receives matching records. Verify context merge priority.
+- [x] `include/lumen/predicate.h` — **Update** implement `Predicate::Node` subtypes: `TagEquals`, `LevelAtLeast`, `And`, `Or`, `Not`, `Always`, `Never`. Wire `evaluate()` to tree walk.
+- [x] `src/predicate.cpp` — **Update** all DSL functions (`always()`, `never()`, `level_at_least()`, `tag_equals()`, `tag_exists()`, `operator&&`, `operator||`, `operator!`).
+- [x] `include/lumen/detail/context.h` — Context merge algorithm: merges explicit → instance → scope → thread → process tags. First-wins per key. Linear scan over fixed-size arrays.
+- [x] `include/lumen/core.h` — **Update** add dispatch thread (`std::jthread`), sink registry (`std::vector<SinkEntry>`), condition variable wake. Drain order: Progress → Metric → Log.
+- [x] `src/core.cpp` — **Update** dispatch loop: wake on CV, drain all 3 buffers, evaluate each record against each sink's predicate, call `on_*` on matches. `add_sink()` / `remove_sink()` with mutex guard.
+- [x] `include/lumen/core.h` — **Add** `set_process_tag()` / `set_thread_tag()` storage (thread-local `TagSet<8>` for thread tags, static `TagSet<16>` for process tags).
+- [x] `tests/test_predicate.cpp` — Unit test every predicate node, composition with `&&` `||` `!`. Verify short-circuit. Test `tag_exists`.
+- [x] `tests/test_dispatch.cpp` — End-to-end: emit records → dispatch thread evaluates → correct sink receives matching records. Verify context merge priority.
 
 ### Test expectations
 

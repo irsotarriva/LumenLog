@@ -118,6 +118,14 @@ using LogBuffer     = RingBuffer<LogRecord, LUMEN_LOG_CAPACITY>;
 using MetricBuffer  = RingBuffer<MetricRecord, LUMEN_METRIC_CAPACITY>;
 using ProgressBuffer = RingBuffer<ProgressRecord, LUMEN_PROGRESS_CAPACITY>;
 
+namespace detail {
+const TagSet<8>& tls_tags();
+const TagSet<16>& proc_tags();
+void merge_context(LogRecord&, const TagSet<16>&, const TagSet<8>&);
+void merge_context(MetricRecord&, const TagSet<16>&, const TagSet<8>&);
+void merge_context(ProgressRecord&, const TagSet<16>&, const TagSet<8>&);
+}  // namespace detail
+
 // ── RecordBuilder ─────────────────────────────────────────────────────────────
 
 class RecordBuilder {
@@ -135,6 +143,7 @@ public:
     }
 
     ~RecordBuilder() {
+        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
         __buffer.push(std::move(__record));
     }
 
@@ -179,6 +188,7 @@ public:
     }
 
     ~MetricBuilder() {
+        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
         __buffer.push(std::move(__record));
     }
 
@@ -227,6 +237,7 @@ public:
 
     ~ProgressHandle() {
         if (!__finished) {
+            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
             __buffer.push(std::move(__record));
         }
     }
@@ -248,6 +259,7 @@ public:
         __record.current = __record.total;
         __record.timestamp_ns = now_ns();
         if (!__finished) {
+            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
             __buffer.push(ProgressRecord{__record});
             __finished = true;
         }
@@ -255,6 +267,7 @@ public:
 
 private:
     void __push_current() {
+        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags());
         __buffer.push(ProgressRecord{__record});
     }
 
