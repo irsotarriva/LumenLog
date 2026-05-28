@@ -7,7 +7,7 @@ Branch-per-milestone strategy. Each branch merges into `main` when its section i
 | M1 — Transport | `m1/transport` | — | First | DONE |
 | M2 — Dispatch & Predicates | `m2/dispatch` | M1 merged | After M1 | DONE |
 | M3 — Macros, Tagged, Sinks | `m3/sinks` | M1 merged | **Parallel with M2** | DONE |
-| M4 — Dashboard & Polish | `m4/dashboard` | M2 + M3 merged | After M2+M3 | NOT STARTED |
+| M4 — Dashboard & Polish | `m4/dashboard` | M2 + M3 merged | After M2+M3 | DONE |
 | M5 — Extensions | `m5/extensions` | M4 merged | After M4 | NOT STARTED |
 
 ---
@@ -141,13 +141,13 @@ FTXUI-powered terminal dashboard, performance benchmarks, comprehensive error-pa
 
 ### Files
 
-- [ ] `src/sink.cpp` — **Update** `TerminalSink` with FTXUI dashboard mode: split view (dashboard top, log scroll region bottom). Dashboard shows sparklines per configured metric, one row per active progress bar. Gated by `#ifdef LUMEN_ENABLE_DASHBOARD`.
-- [ ] `include/lumen/sink.h` — **Update** `TerminalSink::Config` with `enable_dashboard`, `dashboard_metrics`.
-- [ ] `tests/test_dashboard.cpp` — FTXUI dashboard rendering tests (if dashboard enabled).
-- [ ] `tests/test_latex.cpp` — LaTeX tag handling (if latex enabled).
-- [ ] `tests/bench_transport.cpp` — Emit throughput benchmark (records/sec, M producers).
-- [ ] Error-path tests across all existing test files — ensure every `// TODO:` gap is covered.
-- [ ] `include/lumen/detail/error.h` — `std::error_code` enum + `std::error_category` for all Lumen error codes.
+- [x] `src/sink.cpp` — **Update** `TerminalSink` with FTXUI dashboard mode: split view (dashboard top, log scroll region bottom). Dashboard shows sparklines per configured metric, one row per active progress bar. Gated by `#ifdef LUMEN_ENABLE_DASHBOARD`.
+- [x] `include/lumen/sink.h` — **Update** `TerminalSink::Config` with `enable_dashboard`, `dashboard_metrics`.
+- [x] `tests/test_dashboard.cpp` — FTXUI dashboard rendering tests (if dashboard enabled).
+- [x] `tests/test_latex.cpp` — LaTeX tag handling (if latex enabled).
+- [x] `tests/bench_transport.cpp` — Emit throughput benchmark (records/sec, M producers).
+- [x] Error-path tests across all existing test files — ensure every `// TODO:` gap is covered.
+- [x] `include/lumen/detail/error.h` — `std::error_code` enum + `std::error_category` for all Lumen error codes.
 
 ### Test expectations
 

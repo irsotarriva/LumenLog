@@ -1,13 +1,24 @@
 #include "lumen/sink.h"
 
+#include <algorithm>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <fstream>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
+#include <unordered_map>
+
+#include "lumen/detail/error.h"
+
+#ifdef LUMEN_ENABLE_DASHBOARD
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
+#endif
 
 namespace lumen {
 
@@ -146,6 +157,181 @@ void format_record_json(std::string& out, const ProgressRecord& record) {
 
 // ── TerminalSink ─────────────────────────────────────────────────────────────
 
+#ifdef LUMEN_ENABLE_DASHBOARD
+
+namespace {
+
+constexpr size_t kMaxScrollback = 512;
+constexpr size_t kMaxMetricHistory = 128;
+
+struct MetricHistory {
+    std::vector<double> values;
+    double min_val = 0.0;
+    double max_val = 0.0;
+};
+
+struct ScrollLine {
+    std::string text;
+    AnsiColor color = AnsiColor::Default;
+};
+
+}  // namespace
+
+struct TerminalSink::DashboardState {
+    std::unordered_map<std::string, MetricHistory> metrics;
+    std::unordered_map<uint64_t, ProgressRecord> progress;
+    std::deque<ScrollLine> scrollback;
+
+    void record_metric(std::string_view name, double value) {
+        auto& hist = metrics[std::string(name)];
+        if (hist.values.size() >= kMaxMetricHistory) {
+            hist.values.erase(hist.values.begin());
+        }
+        hist.values.push_back(value);
+        hist.min_val = *std::min_element(hist.values.begin(), hist.values.end());
+        hist.max_val = *std::max_element(hist.values.begin(), hist.values.end());
+    }
+
+    void record_progress(const ProgressRecord& record) {
+        if (record.current >= record.total) {
+            progress.erase(record.id);
+        } else {
+            progress[record.id] = record;
+        }
+    }
+
+    void record_log(ScrollLine line) {
+        if (scrollback.size() >= kMaxScrollback) {
+            scrollback.pop_front();
+        }
+        scrollback.push_back(std::move(line));
+    }
+
+    std::string render(const TerminalSink::Config& cfg) {
+        using namespace ftxui;
+
+        const int dashboard_h = cfg.dashboard_height > 0 ? cfg.dashboard_height : 5;
+
+        Elements dash_rows;
+
+        for (const auto& name_sv : cfg.dashboard_metrics) {
+            std::string name(name_sv);
+            auto it = metrics.find(name);
+            if (it == metrics.end() || it->second.values.empty()) {
+                dash_rows.push_back(
+                    hbox({text(" " + name + " ") | bold | color(Color::GrayDark),
+                          text(" (no data)")}));
+                continue;
+            }
+
+            const auto& hist = it->second;
+            const double latest = hist.values.back();
+            char val_buf[32];
+            std::snprintf(val_buf, sizeof(val_buf), "%.3g", latest);
+
+            std::vector<int> graph_vals;
+            graph_vals.reserve(hist.values.size());
+            for (double v : hist.values) {
+                double range = hist.max_val - hist.min_val;
+                if (range < 1e-9) range = 1.0;
+                double norm = (v - hist.min_val) / range;
+                graph_vals.push_back(static_cast<int>(norm * 100.0));
+            }
+
+            auto sparkline = graph([vals = std::move(graph_vals)](int width, int height) {
+                                 std::vector<int> out;
+                                 out.reserve(static_cast<size_t>(width));
+                                 if (vals.empty()) return out;
+                                 for (int i = 0; i < width; ++i) {
+                                     size_t idx = static_cast<size_t>(i) * (vals.size() - 1)
+                                         / static_cast<size_t>(width > 1 ? width - 1 : 1);
+                                     out.push_back(vals[idx] * (height - 1) / 100);
+                                 }
+                                 return out;
+                             }) |
+                             size(WIDTH, GREATER_THAN, 20) |
+                             size(HEIGHT, EQUAL, 1);
+
+            dash_rows.push_back(
+                hbox({text(" " + name + " ") | bold,
+                      text(std::string(val_buf)) | color(Color::Cyan),
+                      text(" "),
+                      sparkline | flex}));
+        }
+
+        for (const auto& [id, rec] : progress) {
+            double ratio = rec.total > 0
+                ? static_cast<double>(rec.current) / static_cast<double>(rec.total)
+                : 0.0;
+            ratio = std::clamp(ratio, 0.0, 1.0);
+
+            char prog_buf[64];
+            std::snprintf(prog_buf, sizeof(prog_buf), " %llu/%llu",
+                          static_cast<unsigned long long>(rec.current),
+                          static_cast<unsigned long long>(rec.total));
+
+            dash_rows.push_back(
+                hbox({text(" " + std::string(rec.label) + " ") | bold,
+                      gauge(static_cast<float>(ratio)) | flex,
+                      text(std::string(prog_buf))}));
+        }
+
+        if (dash_rows.empty()) {
+            dash_rows.push_back(text(" (no dashboard data)") | dim);
+        }
+
+        Element dashboard = vbox(std::move(dash_rows)) |
+                            border |
+                            size(HEIGHT, GREATER_THAN, static_cast<int>(dashboard_h));
+
+        Elements log_lines;
+        for (const auto& line : scrollback) {
+            log_lines.push_back(text(line.text));
+        }
+
+        Element log_region;
+        if (log_lines.empty()) {
+            log_region = text(" (no log output)") | dim | flex;
+        } else {
+            log_region = vbox(std::move(log_lines)) | flex;
+        }
+
+        Element root = vbox({
+            dashboard,
+            separator(),
+            log_region | flex,
+        });
+
+        auto dim = Dimension::Full();
+        auto screen = Screen::Create(dim, dim);
+        Render(screen, root);
+
+        std::string output;
+        output.reserve(8192);
+
+        output += "\033[2J\033[H";
+
+        std::string screen_str = screen.ToString();
+        for (char c : screen_str) {
+            if (c == '\n') {
+                output += "\033[K\n";
+            } else {
+                output += c;
+            }
+        }
+        output += "\033[K";
+
+        return output;
+    }
+};
+
+#else
+
+struct TerminalSink::DashboardState {
+};
+
+#endif
+
 TerminalSink::Config TerminalSink::default_config() {
     Config cfg;
     for (int i = 0; i < 6; ++i) {
@@ -155,9 +341,47 @@ TerminalSink::Config TerminalSink::default_config() {
     return cfg;
 }
 
-TerminalSink::TerminalSink(Config cfg) : __cfg(std::move(cfg)) {}
+TerminalSink::TerminalSink(Config cfg)
+    : __cfg(std::move(cfg)) {
+#ifdef LUMEN_ENABLE_DASHBOARD
+    if (__cfg.enable_dashboard) {
+        __dashboard = std::make_unique<DashboardState>();
+        std::fprintf(stderr, "\033[?1049h");
+    }
+#endif
+}
+
+TerminalSink::~TerminalSink() {
+#ifdef LUMEN_ENABLE_DASHBOARD
+    if (__dashboard) {
+        std::fprintf(stderr, "\033[?1049l");
+    }
+#endif
+}
 
 void TerminalSink::on_log(const LogRecord& record) {
+#ifdef LUMEN_ENABLE_DASHBOARD
+    if (__dashboard) {
+        const auto& color = __cfg.colors[static_cast<size_t>(record.level)];
+        std::string ts = format_time_ns(record.timestamp_ns);
+        std::string tags = format_tags(record.tags, __cfg.inline_tags);
+
+        std::string line;
+        line += level_label(record.level);
+        line += " ";
+        line += ts;
+        line += " ";
+        line += record.message;
+        if (!tags.empty()) {
+            line += " ";
+            line += tags;
+        }
+        __dashboard->record_log(ScrollLine{std::move(line), color});
+        std::string rendered = __dashboard->render(__cfg);
+        std::fprintf(stderr, "%s", rendered.c_str());
+        return;
+    }
+#endif
     const auto& color  = __cfg.colors[static_cast<size_t>(record.level)];
     const auto* label  = level_label(record.level);
     std::string ts     = format_time_ns(record.timestamp_ns);
@@ -173,12 +397,28 @@ void TerminalSink::on_log(const LogRecord& record) {
 }
 
 void TerminalSink::on_metric(const MetricRecord& record) {
+#ifdef LUMEN_ENABLE_DASHBOARD
+    if (__dashboard) {
+        __dashboard->record_metric(record.name, record.value);
+        std::string rendered = __dashboard->render(__cfg);
+        std::fprintf(stderr, "%s", rendered.c_str());
+        return;
+    }
+#endif
     std::string ts = format_time_ns(record.timestamp_ns);
     std::fprintf(stderr, "METRIC %s %s = %.6g\n",
                  ts.c_str(), record.name.data(), record.value);
 }
 
 void TerminalSink::on_progress(const ProgressRecord& record) {
+#ifdef LUMEN_ENABLE_DASHBOARD
+    if (__dashboard) {
+        __dashboard->record_progress(record);
+        std::string rendered = __dashboard->render(__cfg);
+        std::fprintf(stderr, "%s", rendered.c_str());
+        return;
+    }
+#endif
     std::fprintf(stderr, "PROGRESS %s %llu/%llu\n",
                  record.label.data(),
                  static_cast<unsigned long long>(record.current),
@@ -186,6 +426,12 @@ void TerminalSink::on_progress(const ProgressRecord& record) {
 }
 
 void TerminalSink::flush() {
+#ifdef LUMEN_ENABLE_DASHBOARD
+    if (__dashboard) {
+        std::string rendered = __dashboard->render(__cfg);
+        std::fprintf(stderr, "%s", rendered.c_str());
+    }
+#endif
     std::fflush(stderr);
 }
 

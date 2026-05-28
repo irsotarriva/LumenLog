@@ -43,11 +43,13 @@ public:
         std::vector<std::string_view>     inline_tags;
         std::vector<std::string_view>     dashboard_metrics;
         int                               dashboard_height = 5;
+        bool                              enable_dashboard = false;
         std::array<AnsiColor, 6>          colors = {};
     };
 
     static Config default_config();
     explicit TerminalSink(Config cfg);
+    ~TerminalSink() override;
     void on_log(const LogRecord& record) override;
     void on_metric(const MetricRecord& record) override;
     void on_progress(const ProgressRecord& record) override;
@@ -55,6 +57,8 @@ public:
 
 private:
     Config __cfg;
+    struct DashboardState;
+    std::unique_ptr<DashboardState> __dashboard;
 };
 
 class FileSink : public Sink {

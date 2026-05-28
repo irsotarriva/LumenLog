@@ -12,7 +12,7 @@ class Predicate {
 public:
     bool evaluate(const TagSet<16>& tags, LogLevel level) const;
 
-    Predicate() = default;
+    Predicate();
     Predicate(const Predicate& other);
     Predicate(Predicate&&) noexcept;
     Predicate& operator=(const Predicate& other);

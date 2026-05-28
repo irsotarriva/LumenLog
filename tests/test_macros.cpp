@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -150,6 +151,119 @@ TEST_F(MacroTest, WarnErrorMacrosEmit) {
     }
     EXPECT_TRUE(found_warn);
     EXPECT_TRUE(found_error);
+}
+
+// ── Error-path tests ──────────────────────────────────────────────────────────
+
+TEST_F(MacroTest, EmptyMessageLog) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_INFO("");
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_TRUE(raw->logs[0].message.empty());
+}
+
+TEST_F(MacroTest, TagWithMaxValue) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_INFO("max int").tag("max_int64", static_cast<int64_t>(INT64_MAX));
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_FALSE(raw->logs[0].tags.find("max_int64").empty());
+}
+
+TEST_F(MacroTest, TagWithNegativeValue) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_INFO("negative").tag("neg", static_cast<int64_t>(-42));
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_FALSE(raw->logs[0].tags.find("neg").empty());
+}
+
+TEST_F(MacroTest, TagWithDoubleValue) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_INFO("double tag").tag("pi", 3.14159265358979);
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_FALSE(raw->logs[0].tags.find("pi").empty());
+}
+
+TEST_F(MacroTest, ManyTagsOnOneLog) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_INFO("many tags")
+        .tag("key0", "val0")
+        .tag("key1", "val1")
+        .tag("key2", "val2")
+        .tag("key3", "val3")
+        .tag("key4", "val4")
+        .tag("key5", "val5")
+        .tag("key6", "val6")
+        .tag("key7", "val7")
+        .tag("key8", "val8")
+        .tag("key9", "val9")
+        .tag("key10", "val10")
+        .tag("key11", "val11")
+        .tag("key12", "val12")
+        .tag("key13", "val13")
+        .tag("key14", "val14")
+        .tag("key15", "val15")
+        .tag("key16", "val16")
+        .tag("key17", "val17")
+        .tag("key18", "val18")
+        .tag("key19", "val19");
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_LE(raw->logs[0].tags.count(), 16);
+    EXPECT_GE(raw->logs[0].tags.count(), 1);
+}
+
+TEST_F(MacroTest, AllLevelsEmit) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_DEBUG("debug msg");
+    LOG_INFO("info msg");
+    LOG_WARN("warn msg");
+    LOG_ERROR("error msg");
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 4);
+
+    std::set<LogLevel> levels;
+    for (const auto& r : raw->logs) {
+        levels.insert(r.level);
+    }
+
+    EXPECT_NE(levels.find(LogLevel::DEBUG), levels.end());
+    EXPECT_NE(levels.find(LogLevel::INFO), levels.end());
+    EXPECT_NE(levels.find(LogLevel::WARN), levels.end());
+    EXPECT_NE(levels.find(LogLevel::ERROR), levels.end());
 }
 
 }  // namespace

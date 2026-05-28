@@ -53,6 +53,7 @@ add_library(lumen
   src/predicate.cpp
   src/context.cpp
   src/tagged.cpp
+  src/error.cpp
 )
 
 target_include_directories(lumen PUBLIC include)
@@ -82,6 +83,8 @@ target_compile_definitions(lumen PRIVATE
 # Feature flags
 if(LUMEN_ENABLE_DASHBOARD)
   target_compile_definitions(lumen PRIVATE LUMEN_ENABLE_DASHBOARD)
+  find_package(ftxui CONFIG REQUIRED)
+  target_link_libraries(lumen PRIVATE ftxui::dom ftxui::screen)
 endif()
 
 if(LUMEN_ENABLE_LATEX)

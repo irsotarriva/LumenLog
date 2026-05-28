@@ -117,5 +117,90 @@ TEST_F(TaggedTest, ExplicitTagOverridesInstanceTag) {
     EXPECT_EQ(raw->logs[0].tags.find("component"), "override");
 }
 
+// ── Error-path tests ──────────────────────────────────────────────────────────
+
+TEST_F(TaggedTest, EmptyTaggedInstance) {
+    class EmptyTagged : public Tagged {
+    public:
+        void do_work() {
+            LUMEN_MEMBER_SCOPE;
+            LOG_INFO("from empty tagged");
+        }
+    };
+
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    EmptyTagged obj;
+    obj.do_work();
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_EQ(raw->logs[0].message, "from empty tagged");
+}
+
+TEST_F(TaggedTest, MultipleTaggedInstances) {
+    MyComponent comp1;
+    MyComponent comp2;
+
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    comp1.do_work();
+    comp2.do_work();
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 2);
+}
+
+TEST_F(TaggedTest, TaggedLifetimeScope) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        MyComponent comp;
+        comp.do_work();
+    }
+
+    LOG_INFO("after component destroyed");
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 2);
+    EXPECT_TRUE(raw->logs[1].tags.find("component").empty());
+}
+
+TEST_F(TaggedTest, TagsCapacityLimit) {
+    class FullTagged : public Tagged {
+    public:
+        FullTagged() {
+            for (int i = 0; i < 16; ++i) {
+                lumen_tag("tag_" + std::to_string(i), "val_" + std::to_string(i));
+            }
+        }
+        void do_work() {
+            LUMEN_MEMBER_SCOPE;
+            LOG_INFO("full tags");
+        }
+    };
+
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    FullTagged obj;
+    obj.do_work();
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_GE(raw->logs[0].tags.count(), 8);
+}
+
 }  // namespace
 }  // namespace lumen

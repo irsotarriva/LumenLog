@@ -372,6 +372,46 @@ TEST_F(DispatchTest, ThreadTagsNotSharedBetweenThreads) {
     EXPECT_FALSE(has_owner_from_other);
 }
 
+// ── Error-path tests ──────────────────────────────────────────────────────────
+
+TEST_F(DispatchTest, EmptyTagSetDispatch) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), tag_exists("nonexistent"));
+
+    {
+        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "no tags");
+    }
+
+    wait_dispatch();
+
+    EXPECT_EQ(raw->logs.size(), 0);
+}
+
+TEST_F(DispatchTest, RemoveAllSinksThenEmit) {
+    auto sink = std::make_unique<CaptureSink>();
+    SinkId id = core().add_sink(std::move(sink), always());
+    core().remove_sink(id);
+
+    {
+        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "after removal");
+    }
+
+    wait_dispatch();
+    SUCCEED();
+}
+
+TEST_F(DispatchTest, MultipleRemoveSameSink) {
+    auto sink = std::make_unique<CaptureSink>();
+    SinkId id = core().add_sink(std::move(sink), always());
+
+    auto removed1 = core().remove_sink(id);
+    EXPECT_NE(removed1, nullptr);
+
+    auto removed2 = core().remove_sink(id);
+    EXPECT_EQ(removed2, nullptr);
+}
+
 }  // namespace
 
 // Test that runs outside the fixture (no sink cleanup needed)

@@ -114,6 +114,7 @@ struct NotNode : Predicate::Node {
 
 }  // namespace
 
+Predicate::Predicate() = default;
 Predicate::Predicate(std::unique_ptr<Node> node) : __node(std::move(node)) {}
 Predicate::~Predicate() = default;
 

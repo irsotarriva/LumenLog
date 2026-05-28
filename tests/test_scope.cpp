@@ -215,5 +215,89 @@ TEST_F(ScopeTest, LoopTagsAttached) {
     EXPECT_TRUE(has_loop_label);
 }
 
+// ── Error-path tests ──────────────────────────────────────────────────────────
+
+TEST_F(ScopeTest, EmptyScopeDoesNotCrash) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        LUMEN_SCOPE("", "");
+        LOG_INFO("empty scope");
+    }
+
+    wait_flush();
+    EXPECT_GE(raw->logs.size(), 1);
+}
+
+TEST_F(ScopeTest, MultipleScopesInSameBlock) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        LUMEN_SCOPE("a", "1");
+        LUMEN_SCOPE("b", "2");
+        LOG_INFO("double scope");
+    }
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_EQ(raw->logs[0].tags.find("a"), "1");
+    EXPECT_EQ(raw->logs[0].tags.find("b"), "2");
+}
+
+TEST_F(ScopeTest, ScopeAfterPrematureScopeExit) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        {
+            LUMEN_SCOPE("inner", "val");
+        }
+        LOG_INFO("after inner scope");
+    }
+
+    wait_flush();
+
+    ASSERT_GE(raw->logs.size(), 1);
+    EXPECT_TRUE(raw->logs[0].tags.find("inner").empty());
+}
+
+TEST_F(ScopeTest, LoopWithZeroIterations) {
+    auto sink = std::make_unique<ProgressCaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        LUMEN_LOOP("empty_loop", i, 0) {
+            (void)i;
+            FAIL() << "Should not enter loop with zero iterations";
+        }
+    }
+
+    wait_flush();
+    SUCCEED();
+}
+
+TEST_F(ScopeTest, LoopWithOneIteration) {
+    auto sink = std::make_unique<ProgressCaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        LUMEN_LOOP("single_loop", i, 1) {
+            LOG_INFO("single iteration");
+            (void)i;
+        }
+    }
+
+    wait_flush();
+    EXPECT_GE(raw->progress.size(), 1);
+}
+
 }  // namespace
 }  // namespace lumen

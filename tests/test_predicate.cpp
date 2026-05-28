@@ -248,5 +248,48 @@ TEST(PredicateTest, AssignmentPreservesBehavior) {
     EXPECT_FALSE(p2.evaluate(empty, LogLevel::INFO));
 }
 
+// ── Error-path tests ──────────────────────────────────────────────────────────
+
+TEST(PredicateTest, DefaultPredicateEvaluatesTrue) {
+    Predicate p;
+    TagSet<16> tags;
+    EXPECT_TRUE(p.evaluate(tags, LogLevel::TRACE));
+}
+
+TEST(PredicateTest, EmptyTagSetEvaluate) {
+    Predicate p = tag_equals("env", "prod") && level_at_least(LogLevel::INFO);
+    TagSet<16> empty;
+
+    EXPECT_FALSE(p.evaluate(empty, LogLevel::INFO));
+    EXPECT_FALSE(p.evaluate(empty, LogLevel::WARN));
+}
+
+TEST(PredicateTest, MaximumLevelEvaluate) {
+    Predicate p = level_at_least(LogLevel::FATAL);
+    TagSet<16> tags;
+
+    EXPECT_FALSE(p.evaluate(tags, LogLevel::TRACE));
+    EXPECT_FALSE(p.evaluate(tags, LogLevel::INFO));
+    EXPECT_TRUE(p.evaluate(tags, LogLevel::FATAL));
+}
+
+TEST(PredicateTest, NeverCombinedWithOr) {
+    Predicate p = never() || tag_equals("env", "prod");
+    auto tags = make_tags();
+    EXPECT_TRUE(p.evaluate(tags, LogLevel::TRACE));
+
+    Predicate p2 = never() || never();
+    EXPECT_FALSE(p2.evaluate(tags, LogLevel::TRACE));
+}
+
+TEST(PredicateTest, AlwaysCombinedWithAnd) {
+    Predicate p = always() && tag_equals("env", "prod");
+    auto tags = make_tags();
+    EXPECT_TRUE(p.evaluate(tags, LogLevel::TRACE));
+
+    Predicate p2 = always() && always();
+    EXPECT_TRUE(p2.evaluate(tags, LogLevel::TRACE));
+}
+
 }  // namespace
 }  // namespace lumen
