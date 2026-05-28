@@ -8,7 +8,7 @@ Branch-per-milestone strategy. Each branch merges into `main` when its section i
 | M2 — Dispatch & Predicates | `m2/dispatch` | M1 merged | After M1 | DONE |
 | M3 — Macros, Tagged, Sinks | `m3/sinks` | M1 merged | **Parallel with M2** | DONE |
 | M4 — Dashboard & Polish | `m4/dashboard` | M2 + M3 merged | After M2+M3 | DONE |
-| M5 — Extensions | `m5/extensions` | M4 merged | After M4 | NOT STARTED |
+| M5 — Extensions | `m5/extensions` | M4 merged | After M4 | DONE |
 
 ---
 Remember to always update status after finishing milestones.
@@ -169,14 +169,14 @@ Python bindings and framework bridges. Independent headers that depend only on t
 
 ### Files
 
-- [ ] `python/lumen.cpp` — pybind11 module exposing `lumen.info()`, `lumen.warn()`, `lumen.metric()`, `lumen.progress()`, `lumen.core()`, `lumen.set_process_tag()`, `TerminalSink`, `FileSink`, `JsonSink`, `Predicate` builder functions.
-- [ ] `python/logging_handler.py` — Python `logging.Handler` subclass that forwards to Lumen.
-- [ ] `bridges/torch.h` — PyTorch hook on `nn::Module` forward/backward, emits loss, grad_norm, lr as MetricRecords.
-- [ ] `bridges/root.h` — ROOT TTree fill hook.
-- [ ] `bridges/eigen.h` — Eigen large-matrix timing.
-- [ ] `bridges/openmp.h` — OpenMP thread pool metrics.
-- [ ] `tests/test_python.py` — Python-side integration tests.
-- [ ] `tests/test_bridge_torch.py` — If torch available, verify bridge emits.
+- [x] `python/lumen.cpp` — pybind11 module exposing `lumen.info()`, `lumen.warn()`, `lumen.metric()`, `lumen.progress()`, `lumen.core()`, `lumen.set_process_tag()`, `TerminalSink`, `FileSink`, `JsonSink`, `Predicate` builder functions.
+- [x] `python/logging_handler.py` — Python `logging.Handler` subclass that forwards to Lumen.
+- [x] `bridges/torch.h` — PyTorch hook on `nn::Module` forward/backward, emits loss, grad_norm, lr as MetricRecords.
+- [x] `bridges/root.h` — ROOT TTree fill hook.
+- [x] `bridges/eigen.h` — Eigen large-matrix timing.
+- [x] `bridges/openmp.h` — OpenMP thread pool metrics.
+- [x] `tests/test_python.py` — Python-side integration tests.
+- [x] `tests/test_bridge_torch.py` — If torch available, verify bridge emits.
 
 ### Test expectations
 

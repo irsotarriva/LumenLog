@@ -113,3 +113,8 @@ option(LUMEN_BUILD_EXAMPLES "Build examples" ON)
 if(LUMEN_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
+
+# ── Python bindings ───────────────────────────────────────────────────────────
+if(LUMEN_ENABLE_PYTHON)
+  add_subdirectory(python)
+endif()

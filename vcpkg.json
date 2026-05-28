@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "dependencies": [
     "gtest",
+    "pybind11",
     {
       "name": "ftxui",
       "platform": "!windows"
