@@ -9,7 +9,7 @@ LOG_INFO("cluster energy {:.2f} GeV", energy)
     .tag("subsystem", "calorimeter");
 ```
 
-Designed as core infrastructure for high-energy physics analysis, ML experiment tracking, and game engine development.
+Designed as core infrastructure for any project.
 
 ---
 
