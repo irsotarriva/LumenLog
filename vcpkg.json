@@ -1,0 +1,12 @@
+{
+  "name": "lumen",
+  "version": "0.1.0",
+  "dependencies": [
+    "gtest",
+    {
+      "name": "ftxui",
+      "platform": "!windows"
+    }
+  ],
+  "overrides": []
+}
