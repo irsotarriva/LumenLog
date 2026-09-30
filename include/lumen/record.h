@@ -2,7 +2,9 @@
 #define LUMEN_RECORD_H
 
 #include <array>
+#include <charconv>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -207,12 +209,15 @@ public:
         return __overflow.front();
     }
 
+    // Integers exactly; floating point as the shortest text that parses back
+    // to the same value, so numeric predicates see the value that was logged.
     template <typename T>
-    [[nodiscard]] std::string_view store_number(const char* fmt, T value) {
+        requires(std::integral<T> || std::floating_point<T>)
+    [[nodiscard]] std::string_view store_number(T value) {
         std::array<char, 32> buf{};
-        const int n = std::snprintf(buf.data(), buf.size(), fmt, value);
-        if (n <= 0 || static_cast<size_t>(n) >= buf.size()) return {};
-        return store(std::string_view(buf.data(), static_cast<size_t>(n)));
+        const auto [end, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), value);
+        if (ec != std::errc{}) return {};
+        return store(std::string_view(buf.data(), static_cast<size_t>(end - buf.data())));
     }
 
 private:
@@ -263,15 +268,20 @@ public:
         __record.tags.add(__scratch.store(key), __scratch.store(value));
         return *this;
     }
-    RecordBuilder& tag(std::string_view key, int64_t value) {
-        const std::string_view text = __scratch.store_number("%lld", static_cast<long long>(value));
+    // Any integer or floating-point type (a plain `int` would otherwise be
+    // ambiguous between int64_t and double). bool is logged as a string instead.
+    template <typename T>
+        requires((std::integral<T> && !std::same_as<T, bool>) || std::floating_point<T>)
+    RecordBuilder& tag(std::string_view key, T value) {
+        const std::string_view text = __scratch.store_number(value);
         if (!text.empty()) __record.tags.add(__scratch.store(key), text);
         return *this;
     }
-    RecordBuilder& tag(std::string_view key, double value) {
-        const std::string_view text = __scratch.store_number("%.6g", value);
-        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
-        return *this;
+    // A template so that string literals (const char* -> bool is a standard
+    // conversion) still pick the string_view overload.
+    template <std::same_as<bool> T>
+    RecordBuilder& tag(std::string_view key, T value) {
+        return tag(key, std::string_view(value ? "true" : "false"));
     }
 
 private:
@@ -303,15 +313,20 @@ public:
         __record.tags.add(__scratch.store(key), __scratch.store(value));
         return *this;
     }
-    MetricBuilder& tag(std::string_view key, int64_t value) {
-        const std::string_view text = __scratch.store_number("%lld", static_cast<long long>(value));
+    // Any integer or floating-point type (a plain `int` would otherwise be
+    // ambiguous between int64_t and double). bool is logged as a string instead.
+    template <typename T>
+        requires((std::integral<T> && !std::same_as<T, bool>) || std::floating_point<T>)
+    MetricBuilder& tag(std::string_view key, T value) {
+        const std::string_view text = __scratch.store_number(value);
         if (!text.empty()) __record.tags.add(__scratch.store(key), text);
         return *this;
     }
-    MetricBuilder& tag(std::string_view key, double value) {
-        const std::string_view text = __scratch.store_number("%.6g", value);
-        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
-        return *this;
+    // A template so that string literals (const char* -> bool is a standard
+    // conversion) still pick the string_view overload.
+    template <std::same_as<bool> T>
+    MetricBuilder& tag(std::string_view key, T value) {
+        return tag(key, std::string_view(value ? "true" : "false"));
     }
 
 private:

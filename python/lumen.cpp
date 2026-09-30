@@ -295,8 +295,13 @@ PYBIND11_MODULE(lumen_bindings, m) {
 
     py::class_<Predicate>(m, "Predicate")
         .def(py::init<>())
-        .def("evaluate", &Predicate::evaluate,
+        .def("evaluate",
+             py::overload_cast<const TagSet<16>&, LogLevel>(&Predicate::evaluate, py::const_),
              py::arg("tags"), py::arg("level"))
+        .def("evaluate",
+             py::overload_cast<const TagSet<16>&>(&Predicate::evaluate, py::const_),
+             py::arg("tags"),
+             "Evaluate for a record without a level (metric, progress); level conditions are ignored")
         .def("__and__", [](const Predicate& a, const Predicate& b) {
             return a && b;
         })
@@ -313,6 +318,23 @@ PYBIND11_MODULE(lumen_bindings, m) {
     m.def("level_equals", &level_equals, py::arg("level"));
     m.def("tag_equals", &tag_equals, py::arg("key"), py::arg("value"));
     m.def("tag_exists", &tag_exists, py::arg("key"));
+    m.def("tag_less", &tag_less, py::arg("key"), py::arg("value"));
+    m.def("tag_less_equal", &tag_less_equal, py::arg("key"), py::arg("value"));
+    m.def("tag_greater", &tag_greater, py::arg("key"), py::arg("value"));
+    m.def("tag_greater_equal", &tag_greater_equal, py::arg("key"), py::arg("value"));
+    m.def("parse_predicate",
+          [](std::string_view query) -> Predicate {
+              auto parsed = parse_predicate(query);
+              if (!parsed) {
+                  // Python callers expect an exception, not an error value.
+                  throw py::value_error("invalid predicate at offset " +
+                                        std::to_string(parsed.error().position) + ": " +
+                                        parsed.error().message);
+              }
+              return std::move(*parsed);
+          },
+          py::arg("query"),
+          "Build a Predicate from a query such as 'level >= WARN && vessel_id == 42'");
 
     py::class_<Core, std::unique_ptr<Core, py::nodelete>>(m, "Core")
         .def("add_sink",

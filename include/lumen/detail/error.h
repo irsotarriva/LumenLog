@@ -13,6 +13,7 @@ enum class LumenError : int {
     io_error,
     file_open_error,
     sink_exception,
+    invalid_predicate,
 };
 
 class LumenErrorCategory : public std::error_category {

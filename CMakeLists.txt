@@ -74,6 +74,7 @@ add_library(lumen
   src/core.cpp
   src/sink.cpp
   src/predicate.cpp
+  src/predicate_parser.cpp
   src/context.cpp
   src/tagged.cpp
   src/error.cpp
@@ -115,6 +116,8 @@ endif()
 
 if(LUMEN_ENABLE_PYTHON)
   target_compile_definitions(lumen PUBLIC LUMEN_ENABLE_PYTHON)
+  # The static library is linked into the Python extension module (a shared object).
+  set_target_properties(lumen PROPERTIES POSITION_INDEPENDENT_CODE ON)
   find_package(pybind11 REQUIRED)
   target_link_libraries(lumen PUBLIC pybind11::headers)
 endif()

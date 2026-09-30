@@ -317,7 +317,7 @@ TEST_F(MacroTest, NumericTagsSurviveLargeBurst) {
         const auto& rec = raw->logs[static_cast<size_t>(i)];
         EXPECT_EQ(rec.tags.find("i"), std::to_string(i));
         char expected[32];
-        std::snprintf(expected, sizeof(expected), "%.6g", static_cast<double>(i) / 2.0);
+        std::snprintf(expected, sizeof(expected), "%g", static_cast<double>(i) / 2.0);
         EXPECT_EQ(rec.tags.find("half"), std::string_view(expected));
     }
 }
@@ -413,6 +413,38 @@ TEST_F(MacroTest, ContextPriorityScopeOverThreadOverProcess) {
     EXPECT_EQ(raw->logs[0].tags.find("prio_key"), "thread");
     EXPECT_EQ(raw->logs[1].tags.find("prio_key"), "scope");
     EXPECT_EQ(raw->logs[2].tags.find("prio_key"), "explicit");
+}
+
+TEST_F(MacroTest, NumericTagsAcceptAnyArithmeticTypeAndRoundTrip) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    const int vessel = 42;
+    const unsigned stage = 3u;
+    const float thrust = 0.5f;
+    LOG_INFO("types")
+        .tag("vessel_id", vessel)
+        .tag("stage", stage)
+        .tag("big", uint64_t{18446744073709551615u})
+        .tag("thrust", thrust)
+        .tag("altitude", 69999.97)
+        .tag("tenth", 0.1)
+        .tag("armed", true)
+        .tag("label", "literal still a string");
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), 1u);
+    const auto& tags = raw->logs[0].tags;
+    EXPECT_EQ(tags.find("vessel_id"), "42");
+    EXPECT_EQ(tags.find("stage"), "3");
+    EXPECT_EQ(tags.find("big"), "18446744073709551615");
+    EXPECT_EQ(tags.find("thrust"), "0.5");
+    EXPECT_EQ(tags.find("altitude"), "69999.97");  // not rounded to "70000"
+    EXPECT_EQ(tags.find("tenth"), "0.1");
+    EXPECT_EQ(tags.find("armed"), "true");
+    EXPECT_EQ(tags.find("label"), "literal still a string");
 }
 
 }  // namespace

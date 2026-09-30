@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -8,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "lumen/core.h"
+#include "lumen/detail/error.h"
 #include "lumen/predicate.h"
 #include "lumen/record.h"
 #include "lumen/sink.h"
@@ -517,6 +519,79 @@ TEST_F(DispatchTest, ProgressLabelFromTemporaryIsCopied) {
     EXPECT_EQ(raw->progress[0].current, 3u);
     EXPECT_EQ(raw->progress[1].current, 10u);
     EXPECT_EQ(raw->progress[1].tags.count(), raw->progress[0].tags.count());
+}
+
+// ── Throwing sinks ───────────────────────────────────────────────────────────
+
+TEST_F(DispatchTest, ThrowingSinkIsContainedAndOtherSinksStillReceive) {
+    struct ThrowingSink : public Sink {
+        void on_log(const LogRecord&) override { throw std::runtime_error("disk on fire"); }
+        void flush() override { throw 42; }  // not even a std::exception
+    };
+    const SinkId bad = register_sink(std::make_unique<ThrowingSink>(), always());
+    auto good = std::make_unique<CaptureSink>();
+    auto* raw = good.get();
+    register_sink(std::move(good), always());
+
+    LOG_INFO("first");
+    LOG_INFO("second");
+    EXPECT_NO_THROW(core().flush());
+
+    {
+        std::lock_guard lock(raw->mtx);
+        EXPECT_EQ(raw->logs.size(), 2u);
+    }
+    const auto count = core().sink_exception_count(bad);
+    ASSERT_TRUE(count.has_value());
+    EXPECT_EQ(*count, 3u);  // two on_log + one flush
+}
+
+TEST_F(DispatchTest, SinkExceptionCountForUnknownSinkIsError) {
+    const auto count = core().sink_exception_count(SinkId{0});
+    ASSERT_FALSE(count.has_value());
+    EXPECT_EQ(count.error(), make_error_code(LumenError::invalid_sink_id));
+}
+
+// ── Level filters and records without a level ────────────────────────────────
+
+TEST_F(DispatchTest, LevelFilteredSinkReceivesAllMetricsAndProgress) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), level_at_least(LogLevel::WARN));
+
+    LOG_INFO("filtered out");
+    LOG_ERROR("passes");
+    lumen::metric("altitude", 69999.97);
+    {
+        auto handle = lumen::progress("burn", 2);
+        handle.finish();
+    }
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    EXPECT_EQ(raw->logs.size(), 1u);
+    EXPECT_EQ(raw->metrics.size(), 1u);
+    EXPECT_EQ(raw->progress.size(), 1u);
+}
+
+TEST_F(DispatchTest, ParsedQueryFiltersMetricsByTagsOnly) {
+    auto parsed = parse_predicate("level >= WARN && vessel_id == 42");
+    ASSERT_TRUE(parsed.has_value());
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), std::move(*parsed));
+
+    lumen::metric("thrust", 1.0).tag("vessel_id", 42);
+    lumen::metric("thrust", 2.0).tag("vessel_id", 7);
+    LOG_INFO("wrong level").tag("vessel_id", 42);
+    LOG_WARN("right level").tag("vessel_id", 42);
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->metrics.size(), 1u);
+    EXPECT_DOUBLE_EQ(raw->metrics[0].value, 1.0);
+    ASSERT_EQ(raw->logs.size(), 1u);
+    EXPECT_EQ(raw->logs[0].message, "right level");
 }
 
 }  // namespace

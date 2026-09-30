@@ -23,6 +23,7 @@ struct SinkEntry {
     SinkId                    id;
     std::unique_ptr<Sink>     sink;
     Predicate                 predicate;
+    uint64_t                  exceptions = 0;  // thrown from this sink's callbacks
 };
 
 class Core {
@@ -39,6 +40,12 @@ public:
     // dispatch thread, so sinks are never called concurrently. Calling flush()
     // from inside a sink callback is a no-op.
     void flush();
+
+    // Sinks should not throw, but an exception escaping a sink's on_* or
+    // flush() is caught at this boundary: it is counted, the first one per
+    // sink is reported on stderr, and dispatch continues with the next sink.
+    // Nothing propagates into LOG_*, flush() or the dispatch thread.
+    [[nodiscard]] std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id);
 
     void emit(LogRecord&& record);
     void emit(MetricRecord&& record);

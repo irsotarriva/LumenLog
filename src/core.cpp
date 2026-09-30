@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdio>
+#include <exception>
 #include <string>
 #include <thread>
 
@@ -43,6 +45,31 @@ void rebuild_tls_tagset() {
     __tls_tagset = TagSet<8>{};
     for (size_t i = 0; i < __tls_tag_count; ++i) {
         __tls_tagset.add(__tls_tags[i].key, __tls_tags[i].value);
+    }
+}
+
+// Runs one sink callback; an escaping exception is counted and reported once
+// per sink instead of terminating the dispatch thread or reaching the caller.
+void report_sink_exception(SinkEntry& entry, const char* callback, const char* what) {
+    if (entry.exceptions++ == 0) {
+        std::fprintf(stderr,
+                     "lumen: sink %llu threw from %s: %s "
+                     "(further exceptions from this sink are only counted)\n",
+                     static_cast<unsigned long long>(entry.id), callback, what);
+    }
+}
+
+// Runs one sink callback; an escaping exception is counted and reported once
+// per sink instead of terminating the dispatch thread or reaching the caller.
+// Reporting happens inside the handler: e.what() dies with the exception.
+template <typename F>
+void call_sink(SinkEntry& entry, const char* callback, F&& fn) noexcept {
+    try {
+        fn();
+    } catch (const std::exception& e) {
+        report_sink_exception(entry, callback, e.what());
+    } catch (...) {
+        report_sink_exception(entry, callback, "unknown exception");
     }
 }
 
@@ -229,15 +256,25 @@ void Core::__flush_sinks() {
     const DispatchScope in_dispatch;
     std::lock_guard lock(__sink_mutex);
     for (auto& entry : __sinks) {
-        entry.sink->flush();
+        call_sink(entry, "flush", [&] { entry.sink->flush(); });
     }
+}
+
+std::expected<uint64_t, std::error_code> Core::sink_exception_count(SinkId id) {
+    std::lock_guard lock(__sink_mutex);
+    for (const auto& entry : __sinks) {
+        if (entry.id == id) {
+            return entry.exceptions;
+        }
+    }
+    return std::unexpected(make_error_code(LumenError::invalid_sink_id));
 }
 
 void Core::__dispatch_log(const LogRecord& record) {
     std::lock_guard lock(__sink_mutex);
     for (auto& entry : __sinks) {
         if (entry.predicate.evaluate(record.tags, record.level)) {
-            entry.sink->on_log(record);
+            call_sink(entry, "on_log", [&] { entry.sink->on_log(record); });
         }
     }
 }
@@ -245,8 +282,8 @@ void Core::__dispatch_log(const LogRecord& record) {
 void Core::__dispatch_metric(const MetricRecord& record) {
     std::lock_guard lock(__sink_mutex);
     for (auto& entry : __sinks) {
-        if (entry.predicate.evaluate(record.tags, LogLevel::TRACE)) {
-            entry.sink->on_metric(record);
+        if (entry.predicate.evaluate(record.tags)) {
+            call_sink(entry, "on_metric", [&] { entry.sink->on_metric(record); });
         }
     }
 }
@@ -254,8 +291,8 @@ void Core::__dispatch_metric(const MetricRecord& record) {
 void Core::__dispatch_progress(const ProgressRecord& record) {
     std::lock_guard lock(__sink_mutex);
     for (auto& entry : __sinks) {
-        if (entry.predicate.evaluate(record.tags, LogLevel::TRACE)) {
-            entry.sink->on_progress(record);
+        if (entry.predicate.evaluate(record.tags)) {
+            call_sink(entry, "on_progress", [&] { entry.sink->on_progress(record); });
         }
     }
 }
