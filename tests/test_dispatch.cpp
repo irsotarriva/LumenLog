@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -8,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "lumen/core.h"
+#include "lumen/detail/error.h"
 #include "lumen/predicate.h"
 #include "lumen/record.h"
 #include "lumen/sink.h"
@@ -517,6 +519,37 @@ TEST_F(DispatchTest, ProgressLabelFromTemporaryIsCopied) {
     EXPECT_EQ(raw->progress[0].current, 3u);
     EXPECT_EQ(raw->progress[1].current, 10u);
     EXPECT_EQ(raw->progress[1].tags.count(), raw->progress[0].tags.count());
+}
+
+// ── Throwing sinks ───────────────────────────────────────────────────────────
+
+TEST_F(DispatchTest, ThrowingSinkIsContainedAndOtherSinksStillReceive) {
+    struct ThrowingSink : public Sink {
+        void on_log(const LogRecord&) override { throw std::runtime_error("disk on fire"); }
+        void flush() override { throw 42; }  // not even a std::exception
+    };
+    const SinkId bad = register_sink(std::make_unique<ThrowingSink>(), always());
+    auto good = std::make_unique<CaptureSink>();
+    auto* raw = good.get();
+    register_sink(std::move(good), always());
+
+    LOG_INFO("first");
+    LOG_INFO("second");
+    EXPECT_NO_THROW(core().flush());
+
+    {
+        std::lock_guard lock(raw->mtx);
+        EXPECT_EQ(raw->logs.size(), 2u);
+    }
+    const auto count = core().sink_exception_count(bad);
+    ASSERT_TRUE(count.has_value());
+    EXPECT_EQ(*count, 3u);  // two on_log + one flush
+}
+
+TEST_F(DispatchTest, SinkExceptionCountForUnknownSinkIsError) {
+    const auto count = core().sink_exception_count(SinkId{0});
+    ASSERT_FALSE(count.has_value());
+    EXPECT_EQ(count.error(), make_error_code(LumenError::invalid_sink_id));
 }
 
 }  // namespace
