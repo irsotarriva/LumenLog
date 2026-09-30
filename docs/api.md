@@ -53,6 +53,14 @@ void set_thread_tag(std::string_view key, std::string_view value);
 
 Set a tag attached to every record from the calling thread. Call at thread creation.
 
+### `Core::sink_exception_count`
+
+```cpp
+std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id);
+```
+
+Number of exceptions that escaped this sink's callbacks and were contained by the core. `LumenError::invalid_sink_id` if the sink is not registered.
+
 ### `Core::flush`
 
 ```cpp
@@ -223,11 +231,19 @@ Predicate level_at_least(LogLevel min_level);
 Predicate level_equals(LogLevel level);
 Predicate tag_equals(std::string_view key, std::string_view value);
 Predicate tag_exists(std::string_view key);
+Predicate level_compare(CompareOp op, LogLevel level);      // CompareOp: EQ NE LT LE GT GE
+Predicate tag_compare(std::string_view key, CompareOp op, double value);
+Predicate tag_less(std::string_view key, double value);     // also tag_less_equal,
+Predicate tag_greater(std::string_view key, double value);  // tag_greater_equal
+
+std::expected<Predicate, PredicateParseError> parse_predicate(std::string_view query);
 
 Predicate operator&&(Predicate a, Predicate b);
 Predicate operator||(Predicate a, Predicate b);
 Predicate operator!(Predicate a);
 ```
+
+See [Predicates](predicates.md) for numeric comparison semantics and the query grammar.
 
 ## Built-in sinks
 

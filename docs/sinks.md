@@ -133,6 +133,7 @@ Key rules for custom sinks:
 - `on_log` / `on_metric` / `on_progress` are called from the dispatch thread and **must not block**
 - Defer I/O to an internal thread
 - `flush()` must complete all pending I/O
+- Sinks should not throw. If an exception does escape `on_*` or `flush()`, Lumen catches it at the sink boundary, reports the first one per sink on stderr, counts the rest (`core.sink_exception_count(id)`), and carries on with the next sink. It never reaches `LOG_*`, `flush()` or the dispatch thread
 - Sinks are owned by `Core` via `unique_ptr` — registration transfers ownership
 
 ## Registering sinks

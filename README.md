@@ -213,6 +213,11 @@ core.add_sink(
     std::make_unique<lumen::FileSink>("run_42.log"),
     tag_equals("run_id", "42") && !tag_exists("suppress")
 );
+
+// The same filter as text, e.g. from a config file or a CLI flag
+if (auto query = lumen::parse_predicate("run_id == 42 && altitude < 70000 && !exists(suppress)")) {
+    core.add_sink(std::make_unique<lumen::FileSink>("low.log"), std::move(*query));
+}
 ```
 
 ### Custom sinks
