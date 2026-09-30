@@ -353,7 +353,7 @@ TEST_F(DispatchTest, ThreadTagsNotSharedBetweenThreads) {
     register_sink(std::move(sink), tag_exists("owner"));
 
     // Emit from a different thread that has no thread tags
-    std::thread other([this]() {
+    std::thread other([]() {
         {
             RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "from other thread");
         }

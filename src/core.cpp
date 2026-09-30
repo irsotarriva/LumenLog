@@ -105,7 +105,7 @@ const TagSet<16>& proc_tags() {
 }  // namespace detail
 
 Core::Core() {
-    dispatch_thread_ = std::jthread(&Core::dispatch_loop_, this);
+    dispatch_thread_ = std::thread(&Core::dispatch_loop_, this);
 }
 
 Core::~Core() {

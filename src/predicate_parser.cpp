@@ -1,5 +1,4 @@
 #include <cctype>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -8,6 +7,7 @@
 
 #include "lumen/detail/error.h"
 #include "lumen/predicate.h"
+#include "number_parse.h"
 
 namespace lumen {
 
@@ -197,19 +197,17 @@ private:
         const size_t start = pos_;
         while (pos_ < query_.size() && !is_delimiter(query_[pos_])) ++pos_;
         const std::string_view text = query_.substr(start, pos_ - start);
-        // from_chars rejects a leading '+', so skip it ourselves.
+        // Tag values never carry a leading '+', but a query may: skip it here.
         const std::string_view digits = !text.empty() && text[0] == '+' ? text.substr(1) : text;
-        double value = 0.0;
-        const char* const end = digits.data() + digits.size();
-        const auto [ptr, ec] = std::from_chars(digits.data(), end, value);
-        if (digits.empty() || ec != std::errc{} || ptr != end) {
+        const std::optional<double> value = detail::parse_double(digits);
+        if (!value) {
             error_ = make_error_(start, "invalid number '" + std::string(text) +
                                               "' (quote it to compare as text)");
             return false;
         }
         token_.kind = TokenKind::Number;
         token_.text = std::string(text);
-        token_.number = value;
+        token_.number = *value;
         return true;
     }
 

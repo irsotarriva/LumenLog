@@ -1,6 +1,7 @@
 #include "lumen/predicate.h"
 
-#include <charconv>
+#include "number_parse.h"
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -32,17 +33,6 @@ bool compare(CompareOp op, T lhs, T rhs) {
         case CompareOp::GE: return lhs >= rhs;
     }
     return false;
-}
-
-// The whole string must be a number; "42abc" and "" are not.
-std::optional<double> parse_number(std::string_view text) {
-    double value = 0.0;
-    const char* const end = text.data() + text.size();
-    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
-    if (text.empty() || ec != std::errc{} || ptr != end) {
-        return std::nullopt;
-    }
-    return value;
 }
 
 struct AlwaysNode : Predicate::Node {
@@ -126,7 +116,7 @@ struct TagCompareNode : Predicate::Node {
     TagCompareNode(std::string_view k, CompareOp o, double v) : key(k), op(o), value(v) {}
     Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel>) const override {
         if (!tags.contains(key)) return false;
-        const std::optional<double> tag_value = parse_number(tags.find(key));
+        const std::optional<double> tag_value = detail::parse_double(tags.find(key));
         return tag_value.has_value() && compare(op, *tag_value, value);
     }
     std::unique_ptr<Predicate::Node> clone() const override {

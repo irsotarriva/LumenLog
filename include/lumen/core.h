@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "lumen/record.h"
@@ -75,7 +76,7 @@ private:
     MetricBuffer                  metric_buffer_;
     ProgressBuffer                progress_buffer_;
 
-    std::jthread                  dispatch_thread_;
+    std::thread                   dispatch_thread_;
     std::mutex                    wake_mutex_;
     std::condition_variable       wake_cv_;
     std::atomic<bool>             running_{true};

@@ -42,7 +42,7 @@ int64_t run_producers(int num_producers, int64_t records_per_producer) {
     std::atomic<bool> start{false};
     std::atomic<int64_t> total{0};
 
-    std::vector<std::jthread> producers;
+    std::vector<std::thread> producers;
     for (int p = 0; p < num_producers; ++p) {
         producers.emplace_back([&, records_per_producer]() {
             while (!start.load(std::memory_order_acquire)) {
