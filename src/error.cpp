@@ -20,6 +20,8 @@ std::string LumenErrorCategory::message(int ev) const {
             return "failed to open file";
         case LumenError::sink_exception:
             return "exception caught in sink callback";
+        case LumenError::invalid_predicate:
+            return "invalid predicate query";
     }
     return "unknown lumen error";
 }

@@ -1,6 +1,8 @@
 #include "lumen/predicate.h"
 
+#include <charconv>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lumen {
@@ -12,6 +14,30 @@ struct Predicate::Node {
 };
 
 namespace {
+
+template <typename T>
+bool compare(CompareOp op, T lhs, T rhs) {
+    switch (op) {
+        case CompareOp::EQ: return lhs == rhs;
+        case CompareOp::NE: return lhs != rhs;
+        case CompareOp::LT: return lhs < rhs;
+        case CompareOp::LE: return lhs <= rhs;
+        case CompareOp::GT: return lhs > rhs;
+        case CompareOp::GE: return lhs >= rhs;
+    }
+    return false;
+}
+
+// The whole string must be a number; "42abc" and "" are not.
+std::optional<double> parse_number(std::string_view text) {
+    double value = 0.0;
+    const char* const end = text.data() + text.size();
+    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
+    if (text.empty() || ec != std::errc{} || ptr != end) {
+        return std::nullopt;
+    }
+    return value;
+}
 
 struct AlwaysNode : Predicate::Node {
     bool evaluate(const TagSet<16>&, LogLevel) const override { return true; }
@@ -65,10 +91,37 @@ struct TagExistsNode : Predicate::Node {
     std::string key;
     explicit TagExistsNode(std::string_view k) : key(k) {}
     bool evaluate(const TagSet<16>& tags, LogLevel) const override {
-        return !tags.find(key).empty();
+        return tags.contains(key);
     }
     std::unique_ptr<Predicate::Node> clone() const override {
         return std::make_unique<TagExistsNode>(key);
+    }
+};
+
+struct LevelCompareNode : Predicate::Node {
+    CompareOp op;
+    LogLevel target;
+    LevelCompareNode(CompareOp o, LogLevel l) : op(o), target(l) {}
+    bool evaluate(const TagSet<16>&, LogLevel level) const override {
+        return compare(op, static_cast<uint32_t>(level), static_cast<uint32_t>(target));
+    }
+    std::unique_ptr<Predicate::Node> clone() const override {
+        return std::make_unique<LevelCompareNode>(op, target);
+    }
+};
+
+struct TagCompareNode : Predicate::Node {
+    std::string key;
+    CompareOp op;
+    double value;
+    TagCompareNode(std::string_view k, CompareOp o, double v) : key(k), op(o), value(v) {}
+    bool evaluate(const TagSet<16>& tags, LogLevel) const override {
+        if (!tags.contains(key)) return false;
+        const std::optional<double> tag_value = parse_number(tags.find(key));
+        return tag_value.has_value() && compare(op, *tag_value, value);
+    }
+    std::unique_ptr<Predicate::Node> clone() const override {
+        return std::make_unique<TagCompareNode>(key, op, value);
     }
 };
 
@@ -159,6 +212,30 @@ Predicate tag_equals(std::string_view key, std::string_view value) {
 
 Predicate tag_exists(std::string_view key) {
     return Predicate(std::make_unique<TagExistsNode>(key));
+}
+
+Predicate level_compare(CompareOp op, LogLevel level) {
+    return Predicate(std::make_unique<LevelCompareNode>(op, level));
+}
+
+Predicate tag_compare(std::string_view key, CompareOp op, double value) {
+    return Predicate(std::make_unique<TagCompareNode>(key, op, value));
+}
+
+Predicate tag_less(std::string_view key, double value) {
+    return tag_compare(key, CompareOp::LT, value);
+}
+
+Predicate tag_less_equal(std::string_view key, double value) {
+    return tag_compare(key, CompareOp::LE, value);
+}
+
+Predicate tag_greater(std::string_view key, double value) {
+    return tag_compare(key, CompareOp::GT, value);
+}
+
+Predicate tag_greater_equal(std::string_view key, double value) {
+    return tag_compare(key, CompareOp::GE, value);
 }
 
 Predicate operator&&(const Predicate& a, const Predicate& b) {

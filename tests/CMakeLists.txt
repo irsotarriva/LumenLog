@@ -2,6 +2,7 @@ add_executable(lumen_tests
   test_record.cpp
   test_transport.cpp
   test_predicate.cpp
+  test_predicate_parser.cpp
   test_dispatch.cpp
   test_macros.cpp
   test_scope.cpp
