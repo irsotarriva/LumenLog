@@ -31,8 +31,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "LUMEN_BUILD_TESTS": "ON",
-        "LUMEN_BUILD_EXAMPLES": "ON",
-        "LUMEN_MIN_LEVEL": "WARN"
+        "LUMEN_BUILD_EXAMPLES": "ON"
       }
     }
   ],

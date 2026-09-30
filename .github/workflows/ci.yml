@@ -10,14 +10,32 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    env:
+      # The runner image ships vcpkg but does not set VCPKG_ROOT, which the
+      # presets use to locate the toolchain file.
+      VCPKG_ROOT: /usr/local/share/vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      - name: Prepare vcpkg
+        run: |
+          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
       - name: Configure CMake
         run: cmake --preset ci
 
       - name: Build
-        run: cmake --build build/ci
+        run: cmake --build build/ci --parallel
 
       - name: Run tests
         run: ctest --preset ci
