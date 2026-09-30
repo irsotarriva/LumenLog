@@ -22,7 +22,7 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 |---|---|
 | Classes / Concepts | `PascalCase` |
 | Functions / methods | `snake_case` |
-| Private members | `__snake_case` prefix |
+| Private members | `snake_case_` suffix (never a leading `__`: reserved) |
 | Protected members | `_snake_case` prefix |
 | File names | `snake_case` |
 | Macros / `#define` | `ALL_CAPS` |

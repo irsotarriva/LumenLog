@@ -31,14 +31,14 @@ inline void collect_scope_tags(TagSet<8>& out) {
 class ScopeGuard {
 public:
     ScopeGuard(std::string_view key, std::string_view value)
-        : __key(key), __value(value) {
-        __frame.tags.add(__key, __value);
-        __frame.next = tls_scope_head;
-        tls_scope_head = &__frame;
+        : key_(key), value_(value) {
+        frame_.tags.add(key_, value_);
+        frame_.next = tls_scope_head;
+        tls_scope_head = &frame_;
     }
 
     ~ScopeGuard() {
-        tls_scope_head = __frame.next;
+        tls_scope_head = frame_.next;
     }
 
     ScopeGuard(const ScopeGuard&) = delete;
@@ -47,25 +47,25 @@ public:
     ScopeGuard& operator=(ScopeGuard&&) = delete;
 
 private:
-    std::string __key;
-    std::string __value;
-    ScopeFrame __frame;
+    std::string key_;
+    std::string value_;
+    ScopeFrame frame_;
 };
 
 class LoopScope {
 public:
     LoopScope(std::string_view label, ProgressBuffer& pb, uint64_t total)
-        : __label(label), __total(total), __current(0),
-          __ph(pb, label, total) {
-        __frame.tags.add("loop_label", __label);
-        __frame.next = tls_scope_head;
-        tls_scope_head = &__frame;
+        : label_(label), total_(total), current_(0),
+          ph_(pb, label, total) {
+        frame_.tags.add("loop_label", label_);
+        frame_.next = tls_scope_head;
+        tls_scope_head = &frame_;
     }
 
     ~LoopScope() {
-        tls_scope_head = __frame.next;
-        if (!__ph_done) {
-            __ph.finish();
+        tls_scope_head = frame_.next;
+        if (!ph_done_) {
+            ph_.finish();
         }
     }
 
@@ -75,40 +75,40 @@ public:
     LoopScope& operator=(LoopScope&&) = delete;
 
     [[nodiscard]] bool advance() {
-        if (__current >= __total) {
+        if (current_ >= total_) {
             return false;
         }
-        __frame.tags.set("iteration",
-            std::string_view{__iter_buf, static_cast<size_t>(
-                snprintf(__iter_buf, 24, "%llu",
-                    static_cast<unsigned long long>(__current)))});
-        __frame.tags.set("total",
-            std::string_view{__total_buf, static_cast<size_t>(
-                snprintf(__total_buf, 24, "%llu",
-                    static_cast<unsigned long long>(__total)))});
-        __ph.update(__current);
-        ++__current;
-        if (__current >= __total) {
-            __ph.finish();
-            __ph_done = true;
+        frame_.tags.set("iteration",
+            std::string_view{iter_buf_, static_cast<size_t>(
+                snprintf(iter_buf_, 24, "%llu",
+                    static_cast<unsigned long long>(current_)))});
+        frame_.tags.set("total",
+            std::string_view{total_buf_, static_cast<size_t>(
+                snprintf(total_buf_, 24, "%llu",
+                    static_cast<unsigned long long>(total_)))});
+        ph_.update(current_);
+        ++current_;
+        if (current_ >= total_) {
+            ph_.finish();
+            ph_done_ = true;
         }
         return true;
     }
 
     [[nodiscard]] uint64_t current() const {
-        if (__current == 0) return 0;
-        return __current - 1;
+        if (current_ == 0) return 0;
+        return current_ - 1;
     }
 
 private:
-    ScopeFrame __frame;
-    std::string __label;
-    uint64_t __total;
-    uint64_t __current;
-    ProgressHandle __ph;
-    bool __ph_done{false};
-    char __iter_buf[24]{};
-    char __total_buf[24]{};
+    ScopeFrame frame_;
+    std::string label_;
+    uint64_t total_;
+    uint64_t current_;
+    ProgressHandle ph_;
+    bool ph_done_{false};
+    char iter_buf_[24]{};
+    char total_buf_[24]{};
 };
 
 }  // namespace detail

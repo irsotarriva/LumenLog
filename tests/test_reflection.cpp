@@ -121,18 +121,18 @@ namespace {
 
 class ReflectionMacroTest : public ::testing::Test {
 protected:
-    std::vector<SinkId> __ids;
+    std::vector<SinkId> ids_;
 
     void TearDown() override {
-        for (auto id : __ids) {
+        for (auto id : ids_) {
             (void)core().remove_sink(id);
         }
-        __ids.clear();
+        ids_.clear();
     }
 
     SinkId register_sink(std::unique_ptr<Sink> sink, Predicate pred) {
         SinkId id = core().add_sink(std::move(sink), std::move(pred));
-        __ids.push_back(id);
+        ids_.push_back(id);
         return id;
     }
 };

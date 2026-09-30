@@ -100,14 +100,14 @@ Implement the `Sink` interface:
 
 ```cpp
 class NetworkSink : public lumen::Sink {
-    std::thread __worker;
-    lumen::detail::RingBuffer<lumen::LogRecord, 1024> __queue;  // internal queue
-    std::atomic<bool> __running{true};
+    std::thread worker_;
+    lumen::detail::RingBuffer<lumen::LogRecord, 1024> queue_;  // internal queue
+    std::atomic<bool> running_{true};
 
 public:
     NetworkSink() {
-        __worker = std::thread([this] {
-            while (__running) {
+        worker_ = std::thread([this] {
+            while (running_) {
                 // Drain internal queue, write to socket
                 // ...
             }
@@ -115,7 +115,7 @@ public:
     }
 
     void on_log(const lumen::LogRecord& r) override {
-        __queue.push(r);   // non-blocking — just enqueue and return
+        queue_.push(r);   // non-blocking — just enqueue and return
     }
 
     void flush() override {
@@ -123,8 +123,8 @@ public:
     }
 
     ~NetworkSink() override {
-        __running = false;
-        __worker.join();
+        running_ = false;
+        worker_.join();
     }
 };
 ```

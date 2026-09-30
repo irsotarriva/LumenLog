@@ -94,7 +94,7 @@ The producer-facing API: macros, scope helpers, `lumen::Tagged` mixin, and the t
 - [x] `include/lumen/record.h` — **Add** `LUMEN_IF_ENABLED(LEVEL, expr)` macro. `#define LOG_TRACE`, `LOG_DEBUG`, `LOG_INFO`, `LOG_WARN`, `LOG_ERROR`, `LOG_FATAL` — each calls `make_builder()` with `std::source_location::current()`, conditionally on `LUMEN_IF_ENABLED`. `LOG_FATAL` calls `std::terminate` after commit.
 - [x] `include/lumen/detail/scope_stack.h` — Thread-local linked list of `ScopeFrame`. `LUMEN_SCOPE(key, value)`, `LUMEN_LOOP(label, var, total)`, `LUMEN_FRAME_SCOPE(frame_var)` macros. RAII push/pop.
 - [x] `include/lumen/record.h` — **Add** `LUMEN_MEMBER_SCOPE` macro.
-- [x] `include/lumen/tagged.h` — **Update** implement `lumen_tag()` to store in `__tags` member. Implement `lumen_scope()` that returns RAII guard setting a thread-local pointer to the instance's tag set.
+- [x] `include/lumen/tagged.h` — **Update** implement `lumen_tag()` to store in `tags_` member. Implement `lumen_scope()` that returns RAII guard setting a thread-local pointer to the instance's tag set.
 - [x] `src/tagged.cpp` — Tagged implementation.
 - [x] `include/lumen/sink.h` — **Update** `TerminalSink::Config` with level colors, time format, inline tags. Update `FileSink::Config` fields.
 - [x] `src/sink.cpp` — **Update** implement `NullSink` (trivial), `TerminalSink` with ANSI color output per level config, `FileSink` with async write thread + rotation (configurable size, max files), `JsonSink` with NDJSON output.

@@ -29,24 +29,24 @@ inline void openmp_emit_thread_metrics() {
 class OmpParallelTimer {
 public:
     explicit OmpParallelTimer(std::string label)
-        : __label(std::move(label))
-        , __start(std::chrono::high_resolution_clock::now()) {}
+        : label_(std::move(label))
+        , start_(std::chrono::high_resolution_clock::now()) {}
     ~OmpParallelTimer() {
         auto end = std::chrono::high_resolution_clock::now();
         double us =
             static_cast<double>(
                 std::chrono::duration_cast<std::chrono::microseconds>(
-                    end - __start).count());
+                    end - start_).count());
         lumen::metric("openmp.parallel_duration_us", us)
-            .tag("region", __label);
+            .tag("region", label_);
     }
 
     OmpParallelTimer(const OmpParallelTimer&) = delete;
     OmpParallelTimer& operator=(const OmpParallelTimer&) = delete;
 
 private:
-    std::string __label;
-    std::chrono::high_resolution_clock::time_point __start;
+    std::string label_;
+    std::chrono::high_resolution_clock::time_point start_;
 };
 
 inline void openmp_emit_loop_metrics(std::string label,

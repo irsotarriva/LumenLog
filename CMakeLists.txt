@@ -130,7 +130,7 @@ if(LUMEN_ENABLE_REFLECTION STREQUAL "AUTO" OR LUMEN_ENABLE_REFLECTION STREQUAL "
 
     # CMAKE_CURRENT_SOURCE_DIR, not CMAKE_SOURCE_DIR: the latter is the parent
     # project's root when Lumen is added with add_subdirectory/FetchContent.
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/try_reflection.cpp" __lumen_reflection_code)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/try_reflection.cpp" lumen_reflection_code_)
 
     include(CheckCXXSourceCompiles)
     include(CMakePushCheckState)
@@ -138,7 +138,7 @@ if(LUMEN_ENABLE_REFLECTION STREQUAL "AUTO" OR LUMEN_ENABLE_REFLECTION STREQUAL "
     set(CMAKE_REQUIRED_FLAGS "-std=c++26")
     # The result variable must not be pre-set: check_cxx_source_compiles skips
     # the probe entirely when the variable is already defined.
-    check_cxx_source_compiles("${__lumen_reflection_code}" LUMEN_REFLECTION_PROBE)
+    check_cxx_source_compiles("${lumen_reflection_code_}" LUMEN_REFLECTION_PROBE)
     cmake_pop_check_state()
     set(LUMEN_HAS_REFLECTION ${LUMEN_REFLECTION_PROBE})
 

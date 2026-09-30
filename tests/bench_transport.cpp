@@ -24,16 +24,16 @@ struct NullSink : public Sink {
 
 class BenchTransport : public ::testing::Test {
 protected:
-    SinkId __sink_id = 0;
+    SinkId sink_id_ = 0;
 
     void SetUp() override {
-        __sink_id = core().add_sink(std::make_unique<NullSink>(), always());
+        sink_id_ = core().add_sink(std::make_unique<NullSink>(), always());
     }
 
     void TearDown() override {
-        if (__sink_id != 0) {
-            (void)core().remove_sink(__sink_id);
-            __sink_id = 0;
+        if (sink_id_ != 0) {
+            (void)core().remove_sink(sink_id_);
+            sink_id_ = 0;
         }
     }
 };
@@ -42,7 +42,7 @@ int64_t run_producers(int num_producers, int64_t records_per_producer) {
     std::atomic<bool> start{false};
     std::atomic<int64_t> total{0};
 
-    std::vector<std::jthread> producers;
+    std::vector<std::thread> producers;
     for (int p = 0; p < num_producers; ++p) {
         producers.emplace_back([&, records_per_producer]() {
             while (!start.load(std::memory_order_acquire)) {

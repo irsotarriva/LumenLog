@@ -48,47 +48,47 @@ public:
     };
 
     void add(std::string_view key, std::string_view value) {
-        if (__count < N) {
-            __entries[__count++] = {key, value};
+        if (count_ < N) {
+            entries_[count_++] = {key, value};
         }
     }
     // Replaces the value of an existing key, or adds the pair if absent.
     void set(std::string_view key, std::string_view value) {
-        for (size_t i = 0; i < __count; ++i) {
-            if (__entries[i].key == key) {
-                __entries[i].value = value;
+        for (size_t i = 0; i < count_; ++i) {
+            if (entries_[i].key == key) {
+                entries_[i].value = value;
                 return;
             }
         }
         add(key, value);
     }
     [[nodiscard]] std::string_view find(std::string_view key) const {
-        for (size_t i = 0; i < __count; ++i) {
-            if (__entries[i].key == key) return __entries[i].value;
+        for (size_t i = 0; i < count_; ++i) {
+            if (entries_[i].key == key) return entries_[i].value;
         }
         return {};
     }
     [[nodiscard]] bool contains(std::string_view key) const {
-        for (size_t i = 0; i < __count; ++i) {
-            if (__entries[i].key == key) return true;
+        for (size_t i = 0; i < count_; ++i) {
+            if (entries_[i].key == key) return true;
         }
         return false;
     }
     // Re-points every key and value through `f` (used to move them into owned storage).
     template <typename F>
     void remap(F&& f) {
-        for (size_t i = 0; i < __count; ++i) {
-            __entries[i].key = f(__entries[i].key);
-            __entries[i].value = f(__entries[i].value);
+        for (size_t i = 0; i < count_; ++i) {
+            entries_[i].key = f(entries_[i].key);
+            entries_[i].value = f(entries_[i].value);
         }
     }
-    [[nodiscard]] size_t count() const { return __count; }
-    [[nodiscard]] const Entry* begin() const { return __entries.data(); }
-    [[nodiscard]] const Entry* end() const { return __entries.data() + __count; }
+    [[nodiscard]] size_t count() const { return count_; }
+    [[nodiscard]] const Entry* begin() const { return entries_.data(); }
+    [[nodiscard]] const Entry* end() const { return entries_.data() + count_; }
 
 private:
-    std::array<Entry, N> __entries{};
-    size_t __count = 0;
+    std::array<Entry, N> entries_{};
+    size_t count_ = 0;
 };
 
 // ── Record types ──────────────────────────────────────────────────────────────
@@ -143,12 +143,12 @@ inline uint64_t now_ns() {
 }
 
 inline uint32_t this_thread_id() {
-    static thread_local uint32_t __cached_id = 0;
-    if (__cached_id == 0) {
-        __cached_id = static_cast<uint32_t>(
+    static thread_local uint32_t cached_id_ = 0;
+    if (cached_id_ == 0) {
+        cached_id_ = static_cast<uint32_t>(
             std::hash<std::thread::id>{}(std::this_thread::get_id()) & 0xFFFFFFFFu);
     }
-    return __cached_id;
+    return cached_id_;
 }
 
 // ── Buffer type aliases ───────────────────────────────────────────────────────
@@ -199,14 +199,14 @@ public:
     StringScratch& operator=(StringScratch&&) = delete;
 
     [[nodiscard]] std::string_view store(std::string_view s) {
-        if (s.size() <= INLINE_CAPACITY - __used) {
-            char* dst = __inline_buf.data() + __used;
+        if (s.size() <= INLINE_CAPACITY - used_) {
+            char* dst = inline_buf_.data() + used_;
             if (!s.empty()) std::memcpy(dst, s.data(), s.size());
-            __used += s.size();
+            used_ += s.size();
             return {dst, s.size()};
         }
-        __overflow.emplace_front(s);
-        return __overflow.front();
+        overflow_.emplace_front(s);
+        return overflow_.front();
     }
 
     // Integers exactly; floating point as the shortest text that parses back
@@ -221,9 +221,9 @@ public:
     }
 
 private:
-    std::array<char, INLINE_CAPACITY> __inline_buf;
-    size_t __used = 0;
-    std::forward_list<std::string> __overflow;
+    std::array<char, INLINE_CAPACITY> inline_buf_;
+    size_t used_ = 0;
+    std::forward_list<std::string> overflow_;
 };
 
 // LOG_* with a single argument logs it verbatim (no format parsing); with more
@@ -245,27 +245,27 @@ class RecordBuilder {
 public:
     RecordBuilder(LogBuffer& buffer, LogLevel level, std::string_view message,
                   std::source_location loc = std::source_location::current())
-        : __buffer(buffer) {
-        __record.level = level;
-        __record.message = __scratch.store(message);
-        __record.timestamp_ns = now_ns();
-        __record.thread_id = this_thread_id();
-        __record.source.file = loc.file_name();
-        __record.source.function = loc.function_name();
-        __record.source.class_name = detail::extract_class_name(loc.function_name());
-        __record.source.line = loc.line();
+        : buffer_(buffer) {
+        record_.level = level;
+        record_.message = scratch_.store(message);
+        record_.timestamp_ns = now_ns();
+        record_.thread_id = this_thread_id();
+        record_.source.file = loc.file_name();
+        record_.source.function = loc.function_name();
+        record_.source.class_name = detail::extract_class_name(loc.function_name());
+        record_.source.line = loc.line();
     }
 
     ~RecordBuilder() {
-        detail::finalize(__record);
-        __buffer.push(std::move(__record));
+        detail::finalize(record_);
+        buffer_.push(std::move(record_));
     }
 
     RecordBuilder(const RecordBuilder&) = delete;
     RecordBuilder& operator=(const RecordBuilder&) = delete;
 
     RecordBuilder& tag(std::string_view key, std::string_view value) {
-        __record.tags.add(__scratch.store(key), __scratch.store(value));
+        record_.tags.add(scratch_.store(key), scratch_.store(value));
         return *this;
     }
     // Any integer or floating-point type (a plain `int` would otherwise be
@@ -273,8 +273,8 @@ public:
     template <typename T>
         requires((std::integral<T> && !std::same_as<T, bool>) || std::floating_point<T>)
     RecordBuilder& tag(std::string_view key, T value) {
-        const std::string_view text = __scratch.store_number(value);
-        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
+        const std::string_view text = scratch_.store_number(value);
+        if (!text.empty()) record_.tags.add(scratch_.store(key), text);
         return *this;
     }
     // A template so that string literals (const char* -> bool is a standard
@@ -285,9 +285,9 @@ public:
     }
 
 private:
-    LogBuffer& __buffer;
-    LogRecord __record{};
-    detail::StringScratch __scratch;
+    LogBuffer& buffer_;
+    LogRecord record_{};
+    detail::StringScratch scratch_;
 };
 
 // ── MetricBuilder ─────────────────────────────────────────────────────────────
@@ -295,22 +295,22 @@ private:
 class MetricBuilder {
 public:
     MetricBuilder(MetricBuffer& buffer, std::string_view name, double value)
-        : __buffer(buffer) {
-        __record.name = __scratch.store(name);
-        __record.value = value;
-        __record.timestamp_ns = now_ns();
+        : buffer_(buffer) {
+        record_.name = scratch_.store(name);
+        record_.value = value;
+        record_.timestamp_ns = now_ns();
     }
 
     ~MetricBuilder() {
-        detail::finalize(__record);
-        __buffer.push(std::move(__record));
+        detail::finalize(record_);
+        buffer_.push(std::move(record_));
     }
 
     MetricBuilder(const MetricBuilder&) = delete;
     MetricBuilder& operator=(const MetricBuilder&) = delete;
 
     MetricBuilder& tag(std::string_view key, std::string_view value) {
-        __record.tags.add(__scratch.store(key), __scratch.store(value));
+        record_.tags.add(scratch_.store(key), scratch_.store(value));
         return *this;
     }
     // Any integer or floating-point type (a plain `int` would otherwise be
@@ -318,8 +318,8 @@ public:
     template <typename T>
         requires((std::integral<T> && !std::same_as<T, bool>) || std::floating_point<T>)
     MetricBuilder& tag(std::string_view key, T value) {
-        const std::string_view text = __scratch.store_number(value);
-        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
+        const std::string_view text = scratch_.store_number(value);
+        if (!text.empty()) record_.tags.add(scratch_.store(key), text);
         return *this;
     }
     // A template so that string literals (const char* -> bool is a standard
@@ -330,9 +330,9 @@ public:
     }
 
 private:
-    MetricBuffer& __buffer;
-    MetricRecord __record{};
-    detail::StringScratch __scratch;
+    MetricBuffer& buffer_;
+    MetricRecord record_{};
+    detail::StringScratch scratch_;
 };
 
 // ── ProgressHandle ────────────────────────────────────────────────────────────
@@ -340,14 +340,14 @@ private:
 class ProgressHandle {
 public:
     ProgressHandle(ProgressBuffer& buffer, std::string_view label, uint64_t total)
-        : __buffer(&buffer), __label(label), __total(total), __timestamp_ns(now_ns()) {
-        static std::atomic<uint64_t> __next_id{1};
-        __id = __next_id.fetch_add(1, std::memory_order_relaxed);
+        : buffer_(&buffer), label_(label), total_(total), timestamp_ns_(now_ns()) {
+        static std::atomic<uint64_t> next_id_{1};
+        id_ = next_id_.fetch_add(1, std::memory_order_relaxed);
     }
 
     ~ProgressHandle() {
-        if (!__finished) {
-            __push();
+        if (!finished_) {
+            push_();
         }
     }
 
@@ -355,70 +355,70 @@ public:
     ProgressHandle& operator=(const ProgressHandle&) = delete;
 
     ProgressHandle(ProgressHandle&& other) noexcept
-        : __buffer(other.__buffer)
-        , __label(std::move(other.__label))
-        , __id(other.__id)
-        , __current(other.__current)
-        , __total(other.__total)
-        , __timestamp_ns(other.__timestamp_ns)
-        , __finished(other.__finished) {
-        other.__finished = true;
+        : buffer_(other.buffer_)
+        , label_(std::move(other.label_))
+        , id_(other.id_)
+        , current_(other.current_)
+        , total_(other.total_)
+        , timestamp_ns_(other.timestamp_ns_)
+        , finished_(other.finished_) {
+        other.finished_ = true;
     }
     ProgressHandle& operator=(ProgressHandle&& other) noexcept {
         if (this != &other) {
-            if (!__finished) {
-                __push();
+            if (!finished_) {
+                push_();
             }
-            __buffer = other.__buffer;
-            __label = std::move(other.__label);
-            __id = other.__id;
-            __current = other.__current;
-            __total = other.__total;
-            __timestamp_ns = other.__timestamp_ns;
-            __finished = other.__finished;
-            other.__finished = true;
+            buffer_ = other.buffer_;
+            label_ = std::move(other.label_);
+            id_ = other.id_;
+            current_ = other.current_;
+            total_ = other.total_;
+            timestamp_ns_ = other.timestamp_ns_;
+            finished_ = other.finished_;
+            other.finished_ = true;
         }
         return *this;
     }
 
     void update(uint64_t current) {
-        __current = current;
-        __timestamp_ns = now_ns();
-        __push();
+        current_ = current;
+        timestamp_ns_ = now_ns();
+        push_();
     }
 
     void tick() {
-        update(__current + 1);
+        update(current_ + 1);
     }
 
     void finish() {
-        __current = __total;
-        __timestamp_ns = now_ns();
-        if (!__finished) {
-            __push();
-            __finished = true;
+        current_ = total_;
+        timestamp_ns_ = now_ns();
+        if (!finished_) {
+            push_();
+            finished_ = true;
         }
     }
 
 private:
-    void __push() {
+    void push_() {
         ProgressRecord record{};
-        record.id = __id;
-        record.label = __label;
-        record.current = __current;
-        record.total = __total;
-        record.timestamp_ns = __timestamp_ns;
+        record.id = id_;
+        record.label = label_;
+        record.current = current_;
+        record.total = total_;
+        record.timestamp_ns = timestamp_ns_;
         detail::finalize(record);
-        __buffer->push(std::move(record));
+        buffer_->push(std::move(record));
     }
 
-    ProgressBuffer* __buffer;  // non-owning
-    std::string __label;
-    uint64_t __id = 0;
-    uint64_t __current = 0;
-    uint64_t __total = 0;
-    uint64_t __timestamp_ns = 0;
-    bool __finished = false;
+    ProgressBuffer* buffer_;  // non-owning
+    std::string label_;
+    uint64_t id_ = 0;
+    uint64_t current_ = 0;
+    uint64_t total_ = 0;
+    uint64_t timestamp_ns_ = 0;
+    bool finished_ = false;
 };
 
 }  // namespace lumen
@@ -450,8 +450,8 @@ private:
 
 // ── Macro helpers ─────────────────────────────────────────────────────────────
 
-#ifndef __has_cpp_attribute
-#define __has_cpp_attribute(x) 0
+#ifndef has_cpp_attribute_
+#define has_cpp_attribute_(x) 0
 #endif
 
 // Written as `if constexpr (!enabled) {} else expr` so that a user's
@@ -478,7 +478,7 @@ private:
 
 #define LOG_FATAL(...) do { \
     { \
-        lumen::RecordBuilder LUMEN_CONCAT(__lumen_fatal_, __LINE__) \
+        lumen::RecordBuilder LUMEN_CONCAT(lumen_fatal_, __LINE__) \
             (lumen::core().log_buffer(), lumen::LogLevel::FATAL, \
              lumen::detail::format_message(__VA_ARGS__)); \
     } \
@@ -489,17 +489,17 @@ private:
 // ── Scope macros ──────────────────────────────────────────────────────────────
 
 #define LUMEN_SCOPE(key, value) \
-    lumen::detail::ScopeGuard LUMEN_CONCAT(__lumen_scope_, __LINE__)(key, value)
+    lumen::detail::ScopeGuard LUMEN_CONCAT(lumen_scope_, __LINE__)(key, value)
 
 #define LUMEN_FRAME_SCOPE(key, value) \
-    lumen::detail::ScopeGuard LUMEN_CONCAT(__lumen_frame_, __LINE__)(key, value)
+    lumen::detail::ScopeGuard LUMEN_CONCAT(lumen_frame_, __LINE__)(key, value)
 
 #define LUMEN_MEMBER_SCOPE \
-    auto LUMEN_CONCAT(__lumen_member_, __LINE__) = lumen_scope()
+    auto LUMEN_CONCAT(lumen_member_, __LINE__) = lumen_scope()
 
 #define LUMEN_LOOP(label, var, total) \
-    for (lumen::detail::LoopScope LUMEN_CONCAT(__lumen_loop_, __LINE__)(label, lumen::core().progress_buffer(), static_cast<uint64_t>(total)); \
-         LUMEN_CONCAT(__lumen_loop_, __LINE__).advance(); ) \
-        if (uint64_t var = LUMEN_CONCAT(__lumen_loop_, __LINE__).current(); true)
+    for (lumen::detail::LoopScope LUMEN_CONCAT(lumen_loop_, __LINE__)(label, lumen::core().progress_buffer(), static_cast<uint64_t>(total)); \
+         LUMEN_CONCAT(lumen_loop_, __LINE__).advance(); ) \
+        if (uint64_t var = LUMEN_CONCAT(lumen_loop_, __LINE__).current(); true)
 
 #endif

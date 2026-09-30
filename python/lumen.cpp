@@ -82,20 +82,20 @@ void py_metric(std::string name, double value) {
 
 struct PyProgressHandle {
     explicit PyProgressHandle(std::string label, uint64_t total)
-        : __handle(core().progress_buffer(), label, total) {}
+        : handle_(core().progress_buffer(), label, total) {}
 
-    void update(uint64_t current) { __handle.update(current); }
-    void tick() { __handle.tick(); }
-    void finish() { __handle.finish(); }
+    void update(uint64_t current) { handle_.update(current); }
+    void tick() { handle_.tick(); }
+    void finish() { handle_.finish(); }
 
 private:
-    ProgressHandle __handle;
+    ProgressHandle handle_;
 };
 
 class PyProgressHandleWrapper {
 public:
     PyProgressHandleWrapper(std::string label, uint64_t total)
-        : __handle(std::make_unique<ProgressHandle>(
+        : handle_(std::make_unique<ProgressHandle>(
               core().progress_buffer(), label, total)) {}
 
     PyProgressHandleWrapper(PyProgressHandleWrapper&&) noexcept = default;
@@ -103,32 +103,32 @@ public:
     PyProgressHandleWrapper(const PyProgressHandleWrapper&) = delete;
     PyProgressHandleWrapper& operator=(const PyProgressHandleWrapper&) = delete;
 
-    void update(uint64_t current) { __handle->update(current); }
-    void tick() { __handle->tick(); }
+    void update(uint64_t current) { handle_->update(current); }
+    void tick() { handle_->tick(); }
     void finish() {
-        if (__handle) {
-            __handle->finish();
-            __handle.reset();
+        if (handle_) {
+            handle_->finish();
+            handle_.reset();
         }
     }
 
 private:
-    std::unique_ptr<ProgressHandle> __handle;
+    std::unique_ptr<ProgressHandle> handle_;
 };
 
 class PySinkWrapper : public Sink {
 public:
     PySinkWrapper(py::object on_log_fn, py::object on_metric_fn,
                   py::object on_progress_fn, py::object flush_fn)
-        : __on_log(std::move(on_log_fn))
-        , __on_metric(std::move(on_metric_fn))
-        , __on_progress(std::move(on_progress_fn))
-        , __flush(std::move(flush_fn)) {}
+        : on_log_(std::move(on_log_fn))
+        , on_metric_(std::move(on_metric_fn))
+        , on_progress_(std::move(on_progress_fn))
+        , flush_(std::move(flush_fn)) {}
 
     void on_log(const LogRecord& record) override {
         try {
             py::gil_scoped_acquire gil;
-            if (!__on_log.is_none()) __on_log(record);
+            if (!on_log_.is_none()) on_log_(record);
         } catch (const py::error_already_set& e) {
             std::fprintf(stderr, "lumen: Python exception in CallbackSink::on_log: %s\n", e.what());
         }
@@ -136,7 +136,7 @@ public:
     void on_metric(const MetricRecord& record) override {
         try {
             py::gil_scoped_acquire gil;
-            if (!__on_metric.is_none()) __on_metric(record);
+            if (!on_metric_.is_none()) on_metric_(record);
         } catch (const py::error_already_set& e) {
             std::fprintf(stderr, "lumen: Python exception in CallbackSink::on_metric: %s\n", e.what());
         }
@@ -144,7 +144,7 @@ public:
     void on_progress(const ProgressRecord& record) override {
         try {
             py::gil_scoped_acquire gil;
-            if (!__on_progress.is_none()) __on_progress(record);
+            if (!on_progress_.is_none()) on_progress_(record);
         } catch (const py::error_already_set& e) {
             std::fprintf(stderr, "lumen: Python exception in CallbackSink::on_progress: %s\n", e.what());
         }
@@ -152,17 +152,17 @@ public:
     void flush() override {
         try {
             py::gil_scoped_acquire gil;
-            if (!__flush.is_none()) __flush();
+            if (!flush_.is_none()) flush_();
         } catch (const py::error_already_set& e) {
             std::fprintf(stderr, "lumen: Python exception in CallbackSink::flush: %s\n", e.what());
         }
     }
 
 private:
-    py::object __on_log;
-    py::object __on_metric;
-    py::object __on_progress;
-    py::object __flush;
+    py::object on_log_;
+    py::object on_metric_;
+    py::object on_progress_;
+    py::object flush_;
 };
 
 }  // namespace

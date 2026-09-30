@@ -56,7 +56,7 @@ public:
 
 private:
     explicit Predicate(std::unique_ptr<Node> node);
-    std::unique_ptr<Node> __node;
+    std::unique_ptr<Node> node_;
 };
 
 Predicate always();
