@@ -103,7 +103,7 @@ struct MyFrameworkHook {
 };
 
 // Register hooks at static init
-static int __registered = []() {
+static int registered_ = []() {
     my_framework::register_callback(MyFrameworkHook::on_operation);
     return 0;
 }();

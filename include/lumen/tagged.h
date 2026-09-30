@@ -22,7 +22,7 @@ public:
         Scope& operator=(Scope&&) = delete;
 
     private:
-        const TagSet<8>* __previous;  // non-owning
+        const TagSet<8>* previous_;  // non-owning
     };
 
     Tagged() = default;
@@ -34,7 +34,7 @@ public:
     // Copies key and value; temporaries are fine.
     void lumen_tag(std::string_view key, std::string_view value);
 
-    [[nodiscard]] const TagSet<8>& tags() const { return __tags; }
+    [[nodiscard]] const TagSet<8>& tags() const { return tags_; }
 
     [[nodiscard]] Scope lumen_scope();
 
@@ -43,12 +43,12 @@ public:
     virtual ~Tagged() = default;
 
 private:
-    void __rebuild_tags();
+    void rebuild_tags_();
 
-    std::array<std::string, 8> __keys;
-    std::array<std::string, 8> __values;
-    size_t __count = 0;
-    TagSet<8> __tags;  // views into __keys/__values
+    std::array<std::string, 8> keys_;
+    std::array<std::string, 8> values_;
+    size_t count_ = 0;
+    TagSet<8> tags_;  // views into keys_/values_
 };
 
 }  // namespace lumen

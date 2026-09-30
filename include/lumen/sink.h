@@ -56,9 +56,9 @@ public:
     void flush() override;
 
 private:
-    Config __cfg;
+    Config cfg_;
     struct DashboardState;
-    std::unique_ptr<DashboardState> __dashboard;
+    std::unique_ptr<DashboardState> dashboard_;
 };
 
 class FileSink : public Sink {
@@ -78,9 +78,9 @@ public:
     void flush() override;
 
 private:
-    Config __cfg;
+    Config cfg_;
     struct Impl;
-    std::unique_ptr<Impl> __impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 class JsonSink : public Sink {
@@ -94,7 +94,7 @@ public:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> __impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 class NullSink : public Sink {

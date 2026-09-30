@@ -12,68 +12,68 @@ const TagSet<8>*& tls_instance_tags() {
 }  // namespace
 
 Tagged::Scope::Scope(const TagSet<8>* tags)
-    : __previous(tls_instance_tags()) {
+    : previous_(tls_instance_tags()) {
     tls_instance_tags() = tags;
 }
 
 Tagged::Scope::~Scope() {
-    tls_instance_tags() = __previous;
+    tls_instance_tags() = previous_;
 }
 
 Tagged::Tagged(const Tagged& other)
-    : __keys(other.__keys), __values(other.__values), __count(other.__count) {
-    __rebuild_tags();
+    : keys_(other.keys_), values_(other.values_), count_(other.count_) {
+    rebuild_tags_();
 }
 
 Tagged& Tagged::operator=(const Tagged& other) {
     if (this != &other) {
-        __keys = other.__keys;
-        __values = other.__values;
-        __count = other.__count;
-        __rebuild_tags();
+        keys_ = other.keys_;
+        values_ = other.values_;
+        count_ = other.count_;
+        rebuild_tags_();
     }
     return *this;
 }
 
 Tagged::Tagged(Tagged&& other) noexcept
-    : __keys(std::move(other.__keys)), __values(std::move(other.__values)),
-      __count(other.__count) {
-    __rebuild_tags();
-    other.__count = 0;
-    other.__rebuild_tags();
+    : keys_(std::move(other.keys_)), values_(std::move(other.values_)),
+      count_(other.count_) {
+    rebuild_tags_();
+    other.count_ = 0;
+    other.rebuild_tags_();
 }
 
 Tagged& Tagged::operator=(Tagged&& other) noexcept {
     if (this != &other) {
-        __keys = std::move(other.__keys);
-        __values = std::move(other.__values);
-        __count = other.__count;
-        __rebuild_tags();
-        other.__count = 0;
-        other.__rebuild_tags();
+        keys_ = std::move(other.keys_);
+        values_ = std::move(other.values_);
+        count_ = other.count_;
+        rebuild_tags_();
+        other.count_ = 0;
+        other.rebuild_tags_();
     }
     return *this;
 }
 
 void Tagged::lumen_tag(std::string_view key, std::string_view value) {
-    if (__count >= __keys.size()) {
+    if (count_ >= keys_.size()) {
         return;
     }
-    __keys[__count] = key;
-    __values[__count] = value;
-    ++__count;
-    __rebuild_tags();
+    keys_[count_] = key;
+    values_[count_] = value;
+    ++count_;
+    rebuild_tags_();
 }
 
-void Tagged::__rebuild_tags() {
-    __tags = TagSet<8>{};
-    for (size_t i = 0; i < __count; ++i) {
-        __tags.add(__keys[i], __values[i]);
+void Tagged::rebuild_tags_() {
+    tags_ = TagSet<8>{};
+    for (size_t i = 0; i < count_; ++i) {
+        tags_.add(keys_[i], values_[i]);
     }
 }
 
 Tagged::Scope Tagged::lumen_scope() {
-    return Scope(&__tags);
+    return Scope(&tags_);
 }
 
 const TagSet<8>* Tagged::current_instance_tags() {

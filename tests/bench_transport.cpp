@@ -24,16 +24,16 @@ struct NullSink : public Sink {
 
 class BenchTransport : public ::testing::Test {
 protected:
-    SinkId __sink_id = 0;
+    SinkId sink_id_ = 0;
 
     void SetUp() override {
-        __sink_id = core().add_sink(std::make_unique<NullSink>(), always());
+        sink_id_ = core().add_sink(std::make_unique<NullSink>(), always());
     }
 
     void TearDown() override {
-        if (__sink_id != 0) {
-            (void)core().remove_sink(__sink_id);
-            __sink_id = 0;
+        if (sink_id_ != 0) {
+            (void)core().remove_sink(sink_id_);
+            sink_id_ = 0;
         }
     }
 };

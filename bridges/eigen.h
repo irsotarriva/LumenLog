@@ -1,7 +1,7 @@
 #ifndef LUMEN_BRIDGES_EIGEN_H
 #define LUMEN_BRIDGES_EIGEN_H
 
-#if __has_include(<Eigen/Core>)
+#if has_include_(<Eigen/Core>)
 
 #include <Eigen/Core>
 #include <chrono>
@@ -14,24 +14,24 @@ namespace lumen::bridges {
 class EigenTimer {
 public:
     explicit EigenTimer(std::string name)
-        : __name(std::move(name))
-        , __start(std::chrono::high_resolution_clock::now()) {}
+        : name_(std::move(name))
+        , start_(std::chrono::high_resolution_clock::now()) {}
     ~EigenTimer() {
         auto end = std::chrono::high_resolution_clock::now();
         double us =
             static_cast<double>(
                 std::chrono::duration_cast<std::chrono::microseconds>(
-                    end - __start).count());
+                    end - start_).count());
         lumen::metric("eigen.op.duration_us", us)
-            .tag("operation", __name);
+            .tag("operation", name_);
     }
 
     EigenTimer(const EigenTimer&) = delete;
     EigenTimer& operator=(const EigenTimer&) = delete;
 
 private:
-    std::string __name;
-    std::chrono::high_resolution_clock::time_point __start;
+    std::string name_;
+    std::chrono::high_resolution_clock::time_point start_;
 };
 
 template <typename MatrixType>

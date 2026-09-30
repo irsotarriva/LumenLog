@@ -51,9 +51,9 @@ public:
     void emit(MetricRecord&& record);
     void emit(ProgressRecord&& record);
 
-    LogBuffer&       log_buffer()       { return __log_buffer; }
-    MetricBuffer&    metric_buffer()    { return __metric_buffer; }
-    ProgressBuffer&  progress_buffer()  { return __progress_buffer; }
+    LogBuffer&       log_buffer()       { return log_buffer_; }
+    MetricBuffer&    metric_buffer()    { return metric_buffer_; }
+    ProgressBuffer&  progress_buffer()  { return progress_buffer_; }
 
     Core();
     ~Core();
@@ -63,27 +63,27 @@ public:
     Core& operator=(Core&&) = delete;
 
 private:
-    void __dispatch_loop();
-    void __drain_available();
-    void __drain_until(uint64_t log_target, uint64_t metric_target, uint64_t progress_target);
-    void __flush_sinks();
-    void __dispatch_log(const LogRecord& record);
-    void __dispatch_metric(const MetricRecord& record);
-    void __dispatch_progress(const ProgressRecord& record);
+    void dispatch_loop_();
+    void drain_available_();
+    void drain_until_(uint64_t log_target, uint64_t metric_target, uint64_t progress_target);
+    void flush_sinks_();
+    void dispatch_log_(const LogRecord& record);
+    void dispatch_metric_(const MetricRecord& record);
+    void dispatch_progress_(const ProgressRecord& record);
 
-    LogBuffer                     __log_buffer;
-    MetricBuffer                  __metric_buffer;
-    ProgressBuffer                __progress_buffer;
+    LogBuffer                     log_buffer_;
+    MetricBuffer                  metric_buffer_;
+    ProgressBuffer                progress_buffer_;
 
-    std::jthread                  __dispatch_thread;
-    std::mutex                    __wake_mutex;
-    std::condition_variable       __wake_cv;
-    std::atomic<bool>             __running{true};
-    std::mutex                    __consume_mutex;  // single-consumer guard for the ring buffers
+    std::jthread                  dispatch_thread_;
+    std::mutex                    wake_mutex_;
+    std::condition_variable       wake_cv_;
+    std::atomic<bool>             running_{true};
+    std::mutex                    consume_mutex_;  // single-consumer guard for the ring buffers
 
-    std::mutex                    __sink_mutex;
-    std::vector<SinkEntry>        __sinks;
-    std::atomic<SinkId>           __next_sink_id{1};
+    std::mutex                    sink_mutex_;
+    std::vector<SinkEntry>        sinks_;
+    std::atomic<SinkId>           next_sink_id_{1};
 };
 
 Core& core();

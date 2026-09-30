@@ -18,8 +18,8 @@ template <typename T, size_t N>
 class RingBuffer {
     static_assert(N > 0 && (N & (N - 1)) == 0, "RingBuffer capacity must be a power of two");
 
-    static constexpr size_t __capacity = N;
-    static constexpr size_t __mask = N - 1;
+    static constexpr size_t capacity_ = N;
+    static constexpr size_t mask_ = N - 1;
 
     struct Slot {
         alignas(64) std::atomic<uint64_t> sequence;
@@ -28,13 +28,13 @@ class RingBuffer {
 
 public:
     RingBuffer() {
-        for (size_t i = 0; i < __capacity; ++i) {
-            __slots[i].sequence.store(i, std::memory_order_relaxed);
+        for (size_t i = 0; i < capacity_; ++i) {
+            slots_[i].sequence.store(i, std::memory_order_relaxed);
         }
         // Initialize elements that are not trivially default-constructible
         if constexpr (!std::is_trivially_default_constructible_v<T>) {
-            for (size_t i = 0; i < __capacity; ++i) {
-                new (&__slots[i].data) T();
+            for (size_t i = 0; i < capacity_; ++i) {
+                new (&slots_[i].data) T();
             }
         }
     }
@@ -42,13 +42,13 @@ public:
     ~RingBuffer() {
         // Destroy any unconsumed elements
         if constexpr (!std::is_trivially_destructible_v<T>) {
-            uint64_t t = __tail.load(std::memory_order_relaxed);
-            uint64_t h = __head.load(std::memory_order_relaxed);
+            uint64_t t = tail_.load(std::memory_order_relaxed);
+            uint64_t h = head_.load(std::memory_order_relaxed);
             while (t < h) {
-                size_t idx = t & __mask;
-                uint64_t seq = __slots[idx].sequence.load(std::memory_order_relaxed);
+                size_t idx = t & mask_;
+                uint64_t seq = slots_[idx].sequence.load(std::memory_order_relaxed);
                 if (seq == t + 1) {
-                    __slots[idx].data.~T();
+                    slots_[idx].data.~T();
                 }
                 ++t;
             }
@@ -63,22 +63,22 @@ public:
     template <OverflowPolicy Policy = OverflowPolicy::DROP_NEWEST, typename U = T>
     bool push(U&& item) {
         while (true) {
-            uint64_t pos = __head.load(std::memory_order_relaxed);
-            size_t idx = pos & __mask;
-            uint64_t seq = __slots[idx].sequence.load(std::memory_order_acquire);
+            uint64_t pos = head_.load(std::memory_order_relaxed);
+            size_t idx = pos & mask_;
+            uint64_t seq = slots_[idx].sequence.load(std::memory_order_acquire);
             int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos);
 
             if (diff == 0) {
-                if (__head.compare_exchange_weak(pos, pos + 1, std::memory_order_acq_rel)) {
-                    __slots[idx].data = std::forward<U>(item);
-                    __slots[idx].sequence.store(pos + 1, std::memory_order_release);
+                if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_acq_rel)) {
+                    slots_[idx].data = std::forward<U>(item);
+                    slots_[idx].sequence.store(pos + 1, std::memory_order_release);
                     return true;
                 }
                 continue;
             }
 
             if (diff > 0) {
-                // Another producer claimed `pos` after we read __head; reload
+                // Another producer claimed `pos` after we read head_; reload
                 // and retry. Only diff < 0 means the buffer is full.
                 continue;
             }
@@ -87,17 +87,17 @@ public:
                 return false;
             } else if constexpr (Policy == OverflowPolicy::DROP_OLDEST) {
                 if (diff < 0) {
-                    uint64_t t = __tail.load(std::memory_order_relaxed);
-                    if (pos - t >= __capacity) {
-                        if (__tail.compare_exchange_weak(t, t + 1, std::memory_order_acq_rel)) {
-                            size_t tail_idx = t & __mask;
-                            __slots[tail_idx].sequence.store(t + __capacity, std::memory_order_release);
+                    uint64_t t = tail_.load(std::memory_order_relaxed);
+                    if (pos - t >= capacity_) {
+                        if (tail_.compare_exchange_weak(t, t + 1, std::memory_order_acq_rel)) {
+                            size_t tail_idx = t & mask_;
+                            slots_[tail_idx].sequence.store(t + capacity_, std::memory_order_release);
                         }
                     }
                 }
                 continue;
             } else {
-                while (__slots[idx].sequence.load(std::memory_order_acquire) != pos) {
+                while (slots_[idx].sequence.load(std::memory_order_acquire) != pos) {
                     std::this_thread::yield();
                 }
                 continue;
@@ -107,20 +107,20 @@ public:
 
     bool pop(T& item) {
         while (true) {
-            uint64_t t = __tail.load(std::memory_order_relaxed);
-            size_t idx = t & __mask;
-            uint64_t seq = __slots[idx].sequence.load(std::memory_order_acquire);
+            uint64_t t = tail_.load(std::memory_order_relaxed);
+            size_t idx = t & mask_;
+            uint64_t seq = slots_[idx].sequence.load(std::memory_order_acquire);
             int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(t + 1);
 
             if (diff == 0) {
-                item = std::move(__slots[idx].data);
-                __slots[idx].sequence.store(t + __capacity, std::memory_order_release);
-                __tail.store(t + 1, std::memory_order_release);
+                item = std::move(slots_[idx].data);
+                slots_[idx].sequence.store(t + capacity_, std::memory_order_release);
+                tail_.store(t + 1, std::memory_order_release);
                 return true;
             }
 
             if (diff > 0) {
-                __tail.store(t + 1, std::memory_order_release);
+                tail_.store(t + 1, std::memory_order_release);
                 continue;
             }
 
@@ -129,8 +129,8 @@ public:
     }
 
     uint64_t size() const {
-        uint64_t h = __head.load(std::memory_order_acquire);
-        uint64_t t = __tail.load(std::memory_order_acquire);
+        uint64_t h = head_.load(std::memory_order_acquire);
+        uint64_t t = tail_.load(std::memory_order_acquire);
         return h - t;
     }
 
@@ -139,16 +139,16 @@ public:
     }
 
     // Number of slots claimed by producers so far (monotonic).
-    [[nodiscard]] uint64_t head_position() const { return __head.load(std::memory_order_acquire); }
+    [[nodiscard]] uint64_t head_position() const { return head_.load(std::memory_order_acquire); }
     // Number of slots released by the consumer so far (monotonic).
-    [[nodiscard]] uint64_t tail_position() const { return __tail.load(std::memory_order_acquire); }
+    [[nodiscard]] uint64_t tail_position() const { return tail_.load(std::memory_order_acquire); }
 
-    static constexpr uint64_t capacity() { return __capacity; }
+    static constexpr uint64_t capacity() { return capacity_; }
 
 private:
-    std::array<Slot, __capacity> __slots;
-    alignas(64) std::atomic<uint64_t> __head{0};
-    alignas(64) std::atomic<uint64_t> __tail{0};
+    std::array<Slot, capacity_> slots_;
+    alignas(64) std::atomic<uint64_t> head_{0};
+    alignas(64) std::atomic<uint64_t> tail_{0};
 };
 
 }  // namespace lumen

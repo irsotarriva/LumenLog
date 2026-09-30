@@ -189,17 +189,17 @@ struct NotNode : Predicate::Node {
 }  // namespace
 
 Predicate::Predicate() = default;
-Predicate::Predicate(std::unique_ptr<Node> node) : __node(std::move(node)) {}
+Predicate::Predicate(std::unique_ptr<Node> node) : node_(std::move(node)) {}
 Predicate::~Predicate() = default;
 
 Predicate::Predicate(const Predicate& other)
-    : __node(other.__node ? other.__node->clone() : nullptr) {}
+    : node_(other.node_ ? other.node_->clone() : nullptr) {}
 
 Predicate::Predicate(Predicate&&) noexcept = default;
 
 Predicate& Predicate::operator=(const Predicate& other) {
     if (this != &other) {
-        __node = other.__node ? other.__node->clone() : nullptr;
+        node_ = other.node_ ? other.node_->clone() : nullptr;
     }
     return *this;
 }
@@ -207,15 +207,15 @@ Predicate& Predicate::operator=(const Predicate& other) {
 Predicate& Predicate::operator=(Predicate&&) noexcept = default;
 
 bool Predicate::evaluate(const TagSet<16>& tags, LogLevel level) const {
-    if (!__node) return true;
-    return __node->evaluate(tags, level).value_or(true);
+    if (!node_) return true;
+    return node_->evaluate(tags, level).value_or(true);
 }
 
 bool Predicate::evaluate(const TagSet<16>& tags) const {
-    if (!__node) return true;
+    if (!node_) return true;
     // Only level conditions can be undecided, and a predicate made only of
     // them places no constraint on a record without a level.
-    return __node->evaluate(tags, std::nullopt).value_or(true);
+    return node_->evaluate(tags, std::nullopt).value_or(true);
 }
 
 Predicate always() {
@@ -268,21 +268,21 @@ Predicate tag_greater_equal(std::string_view key, double value) {
 
 Predicate operator&&(const Predicate& a, const Predicate& b) {
     auto node = std::make_unique<AndNode>();
-    node->left = a.__node ? a.__node->clone() : std::make_unique<AlwaysNode>();
-    node->right = b.__node ? b.__node->clone() : std::make_unique<AlwaysNode>();
+    node->left = a.node_ ? a.node_->clone() : std::make_unique<AlwaysNode>();
+    node->right = b.node_ ? b.node_->clone() : std::make_unique<AlwaysNode>();
     return Predicate(std::move(node));
 }
 
 Predicate operator||(const Predicate& a, const Predicate& b) {
     auto node = std::make_unique<OrNode>();
-    node->left = a.__node ? a.__node->clone() : std::make_unique<AlwaysNode>();
-    node->right = b.__node ? b.__node->clone() : std::make_unique<AlwaysNode>();
+    node->left = a.node_ ? a.node_->clone() : std::make_unique<AlwaysNode>();
+    node->right = b.node_ ? b.node_->clone() : std::make_unique<AlwaysNode>();
     return Predicate(std::move(node));
 }
 
 Predicate operator!(const Predicate& p) {
     auto node = std::make_unique<NotNode>();
-    node->child = p.__node ? p.__node->clone() : std::make_unique<AlwaysNode>();
+    node->child = p.node_ ? p.node_->clone() : std::make_unique<AlwaysNode>();
     return Predicate(std::move(node));
 }
 

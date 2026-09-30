@@ -1,7 +1,7 @@
 #ifndef LUMEN_BRIDGES_TORCH_H
 #define LUMEN_BRIDGES_TORCH_H
 
-#if __has_include(<torch/torch.h>)
+#if has_include_(<torch/torch.h>)
 
 #include <torch/torch.h>
 #include <string>
@@ -14,13 +14,13 @@ namespace lumen::bridges {
 class TorchHook {
 public:
     explicit TorchHook(std::string_view prefix = "")
-        : __prefix(prefix) {}
+        : prefix_(prefix) {}
 
     void on_batch_complete(const torch::nn::Module& module,
                            double loss,
                            double lr = 0.0) {
         auto m = lumen::metric("torch.loss", loss);
-        if (!__prefix.empty()) m.tag("prefix", __prefix);
+        if (!prefix_.empty()) m.tag("prefix", prefix_);
 
         auto total_norm = 0.0;
         for (const auto& p : module.parameters()) {
@@ -29,23 +29,23 @@ public:
             }
         }
         lumen::metric("torch.grad_norm", total_norm)
-            .tag("prefix", __prefix.empty() ? "model" : __prefix);
+            .tag("prefix", prefix_.empty() ? "model" : prefix_);
 
         if (lr > 0.0) {
             lumen::metric("torch.learning_rate", lr)
-                .tag("prefix", __prefix.empty() ? "model" : __prefix);
+                .tag("prefix", prefix_.empty() ? "model" : prefix_);
         }
     }
 
     void on_epoch_start(uint64_t epoch) {
         lumen::metric("torch.epoch", static_cast<double>(epoch))
-            .tag("prefix", __prefix.empty() ? "model" : __prefix)
+            .tag("prefix", prefix_.empty() ? "model" : prefix_)
             .tag("phase", "start");
     }
 
     void on_epoch_end(uint64_t epoch) {
         lumen::metric("torch.epoch", static_cast<double>(epoch))
-            .tag("prefix", __prefix.empty() ? "model" : __prefix)
+            .tag("prefix", prefix_.empty() ? "model" : prefix_)
             .tag("phase", "end");
     }
 
@@ -60,7 +60,7 @@ public:
     }
 
 private:
-    std::string __prefix;
+    std::string prefix_;
 };
 
 inline TorchHook make_torch_hook(std::string_view prefix = "") {

@@ -161,15 +161,15 @@ void format_record_json(std::string& out, const ProgressRecord& record) {
 class BackgroundWriter {
 public:
     explicit BackgroundWriter(std::function<void(const std::string&)> write)
-        : __write(std::move(write)), __worker([this] { __run(); }) {}
+        : write_(std::move(write)), worker_([this] { run_(); }) {}
 
     ~BackgroundWriter() {
         {
-            std::lock_guard lock(__mtx);
-            __stopping = true;
+            std::lock_guard lock(mtx_);
+            stopping_ = true;
         }
-        __cv.notify_one();
-        __worker.join();
+        cv_.notify_one();
+        worker_.join();
     }
 
     BackgroundWriter(const BackgroundWriter&) = delete;
@@ -179,46 +179,46 @@ public:
 
     void enqueue(std::string chunk) {
         {
-            std::lock_guard lock(__mtx);
-            __queue.push(std::move(chunk));
-            ++__enqueued;
+            std::lock_guard lock(mtx_);
+            queue_.push(std::move(chunk));
+            ++enqueued_;
         }
-        __cv.notify_one();
+        cv_.notify_one();
     }
 
     void wait_idle() {
-        std::unique_lock lock(__mtx);
-        const uint64_t target = __enqueued;
-        __idle_cv.wait(lock, [this, target] { return __written >= target; });
+        std::unique_lock lock(mtx_);
+        const uint64_t target = enqueued_;
+        idle_cv_.wait(lock, [this, target] { return written_ >= target; });
     }
 
 private:
-    void __run() {
-        std::unique_lock lock(__mtx);
+    void run_() {
+        std::unique_lock lock(mtx_);
         while (true) {
-            __cv.wait(lock, [this] { return !__queue.empty() || __stopping; });
-            if (__queue.empty()) {
+            cv_.wait(lock, [this] { return !queue_.empty() || stopping_; });
+            if (queue_.empty()) {
                 return;  // stopping and fully drained
             }
-            std::string chunk = std::move(__queue.front());
-            __queue.pop();
+            std::string chunk = std::move(queue_.front());
+            queue_.pop();
             lock.unlock();
-            __write(chunk);
+            write_(chunk);
             lock.lock();
-            ++__written;
-            __idle_cv.notify_all();
+            ++written_;
+            idle_cv_.notify_all();
         }
     }
 
-    std::function<void(const std::string&)> __write;
-    std::mutex __mtx;
-    std::condition_variable __cv;
-    std::condition_variable __idle_cv;
-    std::queue<std::string> __queue;
-    uint64_t __enqueued = 0;
-    uint64_t __written = 0;
-    bool __stopping = false;
-    std::thread __worker;  // last: starts after every other member is ready
+    std::function<void(const std::string&)> write_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    std::condition_variable idle_cv_;
+    std::queue<std::string> queue_;
+    uint64_t enqueued_ = 0;
+    uint64_t written_ = 0;
+    bool stopping_ = false;
+    std::thread worker_;  // last: starts after every other member is ready
 };
 
 }  // namespace
@@ -277,20 +277,20 @@ struct TerminalSink::DashboardState {
 
     std::string render(const TerminalSink::Config& cfg) {
         try {
-            return __render_impl(cfg);
+            return render_impl_(cfg);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "lumen: FTXUI render exception: %s\n", e.what());
-            return __last_rendered;
+            return last_rendered_;
         } catch (...) {
             std::fprintf(stderr, "lumen: FTXUI render unknown exception\n");
-            return __last_rendered;
+            return last_rendered_;
         }
     }
 
 private:
-    std::string __last_rendered;
+    std::string last_rendered_;
 
-    std::string __render_impl(const TerminalSink::Config& cfg) {
+    std::string render_impl_(const TerminalSink::Config& cfg) {
         using namespace ftxui;
 
         const int dashboard_h = cfg.dashboard_height > 0 ? cfg.dashboard_height : 5;
@@ -404,7 +404,7 @@ private:
         }
         output += "\033[K";
 
-        __last_rendered = output;
+        last_rendered_ = output;
         return output;
     }
 };
@@ -426,10 +426,10 @@ TerminalSink::Config TerminalSink::default_config() {
 }
 
 TerminalSink::TerminalSink(Config cfg)
-    : __cfg(std::move(cfg)) {
+    : cfg_(std::move(cfg)) {
 #ifdef LUMEN_ENABLE_DASHBOARD
-    if (__cfg.enable_dashboard) {
-        __dashboard = std::make_unique<DashboardState>();
+    if (cfg_.enable_dashboard) {
+        dashboard_ = std::make_unique<DashboardState>();
         std::fprintf(stderr, "\033[?1049h");
     }
 #endif
@@ -437,7 +437,7 @@ TerminalSink::TerminalSink(Config cfg)
 
 TerminalSink::~TerminalSink() {
 #ifdef LUMEN_ENABLE_DASHBOARD
-    if (__dashboard) {
+    if (dashboard_) {
         std::fprintf(stderr, "\033[?1049l");
     }
 #endif
@@ -445,10 +445,10 @@ TerminalSink::~TerminalSink() {
 
 void TerminalSink::on_log(const LogRecord& record) {
 #ifdef LUMEN_ENABLE_DASHBOARD
-    if (__dashboard) {
-        const auto& color = __cfg.colors[static_cast<size_t>(record.level)];
+    if (dashboard_) {
+        const auto& color = cfg_.colors[static_cast<size_t>(record.level)];
         std::string ts = format_time_ns(record.timestamp_ns);
-        std::string tags = format_tags(record.tags, __cfg.inline_tags);
+        std::string tags = format_tags(record.tags, cfg_.inline_tags);
 
         std::string line;
         line += level_label(record.level);
@@ -460,16 +460,16 @@ void TerminalSink::on_log(const LogRecord& record) {
             line += " ";
             line += tags;
         }
-        __dashboard->record_log(ScrollLine{std::move(line), color});
-        std::string rendered = __dashboard->render(__cfg);
+        dashboard_->record_log(ScrollLine{std::move(line), color});
+        std::string rendered = dashboard_->render(cfg_);
         std::fprintf(stderr, "%s", rendered.c_str());
         return;
     }
 #endif
-    const auto& color  = __cfg.colors[static_cast<size_t>(record.level)];
+    const auto& color  = cfg_.colors[static_cast<size_t>(record.level)];
     const auto* label  = level_label(record.level);
     std::string ts     = format_time_ns(record.timestamp_ns);
-    std::string tags   = format_tags(record.tags, __cfg.inline_tags);
+    std::string tags   = format_tags(record.tags, cfg_.inline_tags);
 
     std::fprintf(stderr, "%s%s %s%s %.*s %s%s %s\n",
                  ansi_code(color), label,
@@ -482,9 +482,9 @@ void TerminalSink::on_log(const LogRecord& record) {
 
 void TerminalSink::on_metric(const MetricRecord& record) {
 #ifdef LUMEN_ENABLE_DASHBOARD
-    if (__dashboard) {
-        __dashboard->record_metric(record.name, record.value);
-        std::string rendered = __dashboard->render(__cfg);
+    if (dashboard_) {
+        dashboard_->record_metric(record.name, record.value);
+        std::string rendered = dashboard_->render(cfg_);
         std::fprintf(stderr, "%s", rendered.c_str());
         return;
     }
@@ -497,9 +497,9 @@ void TerminalSink::on_metric(const MetricRecord& record) {
 
 void TerminalSink::on_progress(const ProgressRecord& record) {
 #ifdef LUMEN_ENABLE_DASHBOARD
-    if (__dashboard) {
-        __dashboard->record_progress(record);
-        std::string rendered = __dashboard->render(__cfg);
+    if (dashboard_) {
+        dashboard_->record_progress(record);
+        std::string rendered = dashboard_->render(cfg_);
         std::fprintf(stderr, "%s", rendered.c_str());
         return;
     }
@@ -512,8 +512,8 @@ void TerminalSink::on_progress(const ProgressRecord& record) {
 
 void TerminalSink::flush() {
 #ifdef LUMEN_ENABLE_DASHBOARD
-    if (__dashboard) {
-        std::string rendered = __dashboard->render(__cfg);
+    if (dashboard_) {
+        std::string rendered = dashboard_->render(cfg_);
         std::fprintf(stderr, "%s", rendered.c_str());
     }
 #endif
@@ -584,14 +584,14 @@ struct FileSink::Impl {
     }
 };
 
-FileSink::FileSink(Config cfg) : __cfg(std::move(cfg)), __impl(std::make_unique<Impl>(__cfg)) {}
+FileSink::FileSink(Config cfg) : cfg_(std::move(cfg)), impl_(std::make_unique<Impl>(cfg_)) {}
 
 FileSink::~FileSink() = default;
 
 void FileSink::on_log(const LogRecord& record) {
     std::string ts = format_time_ns(record.timestamp_ns);
     std::string line;
-    if (__cfg.format == FileFormat::Json) {
+    if (cfg_.format == FileFormat::Json) {
         line = "LOG ";
     }
     line += ts;
@@ -613,7 +613,7 @@ void FileSink::on_log(const LogRecord& record) {
         line += e.value;
     }
     line += "\n";
-    __impl->writer.enqueue(std::move(line));
+    impl_->writer.enqueue(std::move(line));
 }
 
 void FileSink::on_metric(const MetricRecord& record) {
@@ -628,7 +628,7 @@ void FileSink::on_metric(const MetricRecord& record) {
         line += e.value;
     }
     line += "\n";
-    __impl->writer.enqueue(std::move(line));
+    impl_->writer.enqueue(std::move(line));
 }
 
 void FileSink::on_progress(const ProgressRecord& record) {
@@ -639,11 +639,11 @@ void FileSink::on_progress(const ProgressRecord& record) {
     line += "/";
     line += std::to_string(record.total);
     line += "\n";
-    __impl->writer.enqueue(std::move(line));
+    impl_->writer.enqueue(std::move(line));
 }
 
 void FileSink::flush() {
-    __impl->writer.wait_idle();
+    impl_->writer.wait_idle();
 }
 
 // ── JsonSink ──────────────────────────────────────────────────────────────────
@@ -674,30 +674,30 @@ struct JsonSink::Impl {
     }
 };
 
-JsonSink::JsonSink(std::string_view path) : __impl(std::make_unique<Impl>(path)) {}
+JsonSink::JsonSink(std::string_view path) : impl_(std::make_unique<Impl>(path)) {}
 
 JsonSink::~JsonSink() = default;
 
 void JsonSink::on_log(const LogRecord& record) {
     std::string out;
     format_record_json(out, record);
-    __impl->writer.enqueue(std::move(out));
+    impl_->writer.enqueue(std::move(out));
 }
 
 void JsonSink::on_metric(const MetricRecord& record) {
     std::string out;
     format_record_json(out, record);
-    __impl->writer.enqueue(std::move(out));
+    impl_->writer.enqueue(std::move(out));
 }
 
 void JsonSink::on_progress(const ProgressRecord& record) {
     std::string out;
     format_record_json(out, record);
-    __impl->writer.enqueue(std::move(out));
+    impl_->writer.enqueue(std::move(out));
 }
 
 void JsonSink::flush() {
-    __impl->writer.wait_idle();
+    impl_->writer.wait_idle();
 }
 
 }  // namespace lumen
