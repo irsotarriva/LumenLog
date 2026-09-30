@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <thread>
 
 #include "lumen/detail/context.h"
 #include "lumen/detail/error.h"
@@ -16,22 +17,27 @@ struct OwnedTag {
     std::string value;
 };
 
+// Process tags: the authoritative copy lives under a mutex. Each thread keeps
+// its own snapshot and refreshes it when the version changes, so emitting a
+// record never reads strings another thread may be rewriting.
+std::mutex __proc_tag_mutex;
 std::array<OwnedTag, 16> __proc_tags;
 size_t __proc_tag_count = 0;
-std::mutex __proc_tag_mutex;
+std::atomic<uint64_t> __proc_tag_version{1};
+
+struct ProcTagSnapshot {
+    uint64_t version = 0;
+    std::array<OwnedTag, 16> tags;
+    TagSet<16> tagset;
+};
+thread_local ProcTagSnapshot __proc_snapshot;
 
 thread_local std::array<OwnedTag, 8> __tls_tags;
 thread_local size_t __tls_tag_count = 0;
-
 thread_local TagSet<8> __tls_tagset;
-TagSet<16> __proc_tagset;
 
-void rebuild_proc_tagset() {
-    __proc_tagset = TagSet<16>{};
-    for (size_t i = 0; i < __proc_tag_count; ++i) {
-        __proc_tagset.add(__proc_tags[i].key, __proc_tags[i].value);
-    }
-}
+// True while this thread is invoking sink callbacks.
+thread_local bool __in_dispatch = false;
 
 void rebuild_tls_tagset() {
     __tls_tagset = TagSet<8>{};
@@ -39,6 +45,13 @@ void rebuild_tls_tagset() {
         __tls_tagset.add(__tls_tags[i].key, __tls_tags[i].value);
     }
 }
+
+struct DispatchScope {
+    DispatchScope() { __in_dispatch = true; }
+    ~DispatchScope() { __in_dispatch = false; }
+    DispatchScope(const DispatchScope&) = delete;
+    DispatchScope& operator=(const DispatchScope&) = delete;
+};
 
 }  // namespace
 
@@ -49,7 +62,17 @@ const TagSet<8>& tls_tags() {
 }
 
 const TagSet<16>& proc_tags() {
-    return __proc_tagset;
+    const uint64_t version = __proc_tag_version.load(std::memory_order_acquire);
+    if (__proc_snapshot.version != version) {
+        std::lock_guard lock(__proc_tag_mutex);
+        __proc_snapshot.tagset = TagSet<16>{};
+        for (size_t i = 0; i < __proc_tag_count; ++i) {
+            __proc_snapshot.tags[i] = __proc_tags[i];
+            __proc_snapshot.tagset.add(__proc_snapshot.tags[i].key, __proc_snapshot.tags[i].value);
+        }
+        __proc_snapshot.version = __proc_tag_version.load(std::memory_order_relaxed);
+    }
+    return __proc_snapshot.tagset;
 }
 
 }  // namespace detail
@@ -64,6 +87,10 @@ Core::~Core() {
     if (__dispatch_thread.joinable()) {
         __dispatch_thread.join();
     }
+    // Deliver whatever was still queued when the dispatcher stopped.
+    std::lock_guard consume(__consume_mutex);
+    __drain_available();
+    __flush_sinks();
 }
 
 void Core::set_process_tag(std::string_view key, std::string_view value) {
@@ -71,15 +98,15 @@ void Core::set_process_tag(std::string_view key, std::string_view value) {
     for (size_t i = 0; i < __proc_tag_count; ++i) {
         if (__proc_tags[i].key == key) {
             __proc_tags[i].value = value;
-            rebuild_proc_tagset();
+            __proc_tag_version.fetch_add(1, std::memory_order_release);
             return;
         }
     }
-    if (__proc_tag_count < 16) {
+    if (__proc_tag_count < __proc_tags.size()) {
         __proc_tags[__proc_tag_count].key = key;
         __proc_tags[__proc_tag_count].value = value;
         ++__proc_tag_count;
-        rebuild_proc_tagset();
+        __proc_tag_version.fetch_add(1, std::memory_order_release);
     }
 }
 
@@ -91,7 +118,7 @@ void Core::set_thread_tag(std::string_view key, std::string_view value) {
             return;
         }
     }
-    if (__tls_tag_count < 8) {
+    if (__tls_tag_count < __tls_tags.size()) {
         __tls_tags[__tls_tag_count].key = key;
         __tls_tags[__tls_tag_count].value = value;
         ++__tls_tag_count;
@@ -121,20 +148,33 @@ std::expected<std::unique_ptr<Sink>, std::error_code> Core::remove_sink(SinkId i
 }
 
 void Core::flush() {
-    __wake_cv.notify_one();
+    if (__in_dispatch) {
+        return;  // called from a sink callback; the records are already being drained
+    }
+    // Everything claimed before this point must be delivered before we return.
+    const uint64_t log_target = __log_buffer.head_position();
+    const uint64_t metric_target = __metric_buffer.head_position();
+    const uint64_t progress_target = __progress_buffer.head_position();
+
+    std::lock_guard consume(__consume_mutex);
+    __drain_until(log_target, metric_target, progress_target);
+    __flush_sinks();
 }
 
 void Core::emit(LogRecord&& record) {
+    detail::own_strings(record);
     __log_buffer.push(std::move(record));
     __wake_cv.notify_one();
 }
 
 void Core::emit(MetricRecord&& record) {
+    detail::own_strings(record);
     __metric_buffer.push(std::move(record));
     __wake_cv.notify_one();
 }
 
 void Core::emit(ProgressRecord&& record) {
+    detail::own_strings(record);
     __progress_buffer.push(std::move(record));
     __wake_cv.notify_one();
 }
@@ -145,21 +185,51 @@ void Core::__dispatch_loop() {
             std::unique_lock lock(__wake_mutex);
             __wake_cv.wait_for(lock, std::chrono::milliseconds(10));
         }
+        std::lock_guard consume(__consume_mutex);
+        __drain_available();
+    }
+}
 
-        ProgressRecord pr;
-        while (__progress_buffer.pop(pr)) {
-            __dispatch_progress(pr);
-        }
+// Caller holds __consume_mutex.
+void Core::__drain_available() {
+    const DispatchScope in_dispatch;
 
-        MetricRecord mr;
-        while (__metric_buffer.pop(mr)) {
-            __dispatch_metric(mr);
-        }
+    ProgressRecord pr;
+    while (__progress_buffer.pop(pr)) {
+        __dispatch_progress(pr);
+    }
 
-        LogRecord lr;
-        while (__log_buffer.pop(lr)) {
-            __dispatch_log(lr);
+    MetricRecord mr;
+    while (__metric_buffer.pop(mr)) {
+        __dispatch_metric(mr);
+    }
+
+    LogRecord lr;
+    while (__log_buffer.pop(lr)) {
+        __dispatch_log(lr);
+    }
+}
+
+// Caller holds __consume_mutex. A producer may have claimed a slot but not yet
+// published it; in that case pop() fails and we wait for the publish.
+void Core::__drain_until(uint64_t log_target, uint64_t metric_target,
+                         uint64_t progress_target) {
+    while (true) {
+        __drain_available();
+        if (__progress_buffer.tail_position() >= progress_target &&
+            __metric_buffer.tail_position() >= metric_target &&
+            __log_buffer.tail_position() >= log_target) {
+            return;
         }
+        std::this_thread::yield();
+    }
+}
+
+void Core::__flush_sinks() {
+    const DispatchScope in_dispatch;
+    std::lock_guard lock(__sink_mutex);
+    for (auto& entry : __sinks) {
+        entry.sink->flush();
     }
 }
 

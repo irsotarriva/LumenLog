@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <string_view>
 
 #include "lumen/record.h"
@@ -25,10 +26,13 @@ inline void collect_scope_tags(TagSet<8>& out) {
     }
 }
 
+// Owns copies of its key and value, so a temporary such as
+// LUMEN_SCOPE("run", std::to_string(n)) is safe.
 class ScopeGuard {
 public:
-    ScopeGuard(std::string_view key, std::string_view value) {
-        __frame.tags.add(key, value);
+    ScopeGuard(std::string_view key, std::string_view value)
+        : __key(key), __value(value) {
+        __frame.tags.add(__key, __value);
         __frame.next = tls_scope_head;
         tls_scope_head = &__frame;
     }
@@ -43,6 +47,8 @@ public:
     ScopeGuard& operator=(ScopeGuard&&) = delete;
 
 private:
+    std::string __key;
+    std::string __value;
     ScopeFrame __frame;
 };
 
@@ -51,7 +57,7 @@ public:
     LoopScope(std::string_view label, ProgressBuffer& pb, uint64_t total)
         : __label(label), __total(total), __current(0),
           __ph(pb, label, total) {
-        __frame.tags.add("loop_label", label);
+        __frame.tags.add("loop_label", __label);
         __frame.next = tls_scope_head;
         tls_scope_head = &__frame;
     }
@@ -72,11 +78,11 @@ public:
         if (__current >= __total) {
             return false;
         }
-        __frame.tags.add("iteration",
+        __frame.tags.set("iteration",
             std::string_view{__iter_buf, static_cast<size_t>(
                 snprintf(__iter_buf, 24, "%llu",
                     static_cast<unsigned long long>(__current)))});
-        __frame.tags.add("total",
+        __frame.tags.set("total",
             std::string_view{__total_buf, static_cast<size_t>(
                 snprintf(__total_buf, 24, "%llu",
                     static_cast<unsigned long long>(__total)))});
@@ -96,7 +102,7 @@ public:
 
 private:
     ScopeFrame __frame;
-    std::string_view __label;
+    std::string __label;
     uint64_t __total;
     uint64_t __current;
     ProgressHandle __ph;

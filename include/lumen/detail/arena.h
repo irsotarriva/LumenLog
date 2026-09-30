@@ -82,8 +82,6 @@ private:
     bool __warned = false;
 };
 
-inline thread_local Arena this_thread_arena;
-
 }  // namespace lumen
 
 #endif
