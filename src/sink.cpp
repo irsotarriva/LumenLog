@@ -7,6 +7,7 @@
 #include <ctime>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -152,6 +153,73 @@ void format_record_json(std::string& out, const ProgressRecord& record) {
     }
     out += "}\n";
 }
+
+// Writes chunks on a sink-owned thread so that on_* never blocks on I/O.
+// wait_idle() returns once every chunk enqueued before the call has been
+// handed to `write` (and `write` has returned). The destructor drains the
+// queue before joining.
+class BackgroundWriter {
+public:
+    explicit BackgroundWriter(std::function<void(const std::string&)> write)
+        : __write(std::move(write)), __worker([this] { __run(); }) {}
+
+    ~BackgroundWriter() {
+        {
+            std::lock_guard lock(__mtx);
+            __stopping = true;
+        }
+        __cv.notify_one();
+        __worker.join();
+    }
+
+    BackgroundWriter(const BackgroundWriter&) = delete;
+    BackgroundWriter& operator=(const BackgroundWriter&) = delete;
+    BackgroundWriter(BackgroundWriter&&) = delete;
+    BackgroundWriter& operator=(BackgroundWriter&&) = delete;
+
+    void enqueue(std::string chunk) {
+        {
+            std::lock_guard lock(__mtx);
+            __queue.push(std::move(chunk));
+            ++__enqueued;
+        }
+        __cv.notify_one();
+    }
+
+    void wait_idle() {
+        std::unique_lock lock(__mtx);
+        const uint64_t target = __enqueued;
+        __idle_cv.wait(lock, [this, target] { return __written >= target; });
+    }
+
+private:
+    void __run() {
+        std::unique_lock lock(__mtx);
+        while (true) {
+            __cv.wait(lock, [this] { return !__queue.empty() || __stopping; });
+            if (__queue.empty()) {
+                return;  // stopping and fully drained
+            }
+            std::string chunk = std::move(__queue.front());
+            __queue.pop();
+            lock.unlock();
+            __write(chunk);
+            lock.lock();
+            ++__written;
+            __idle_cv.notify_all();
+        }
+    }
+
+    std::function<void(const std::string&)> __write;
+    std::mutex __mtx;
+    std::condition_variable __cv;
+    std::condition_variable __idle_cv;
+    std::queue<std::string> __queue;
+    uint64_t __enqueued = 0;
+    uint64_t __written = 0;
+    bool __stopping = false;
+    std::thread __worker;  // last: starts after every other member is ready
+};
 
 }  // namespace
 
@@ -403,10 +471,10 @@ void TerminalSink::on_log(const LogRecord& record) {
     std::string ts     = format_time_ns(record.timestamp_ns);
     std::string tags   = format_tags(record.tags, __cfg.inline_tags);
 
-    std::fprintf(stderr, "%s%s %s%s %s %s%s %s\n",
+    std::fprintf(stderr, "%s%s %s%s %.*s %s%s %s\n",
                  ansi_code(color), label,
                  ansi_code(AnsiColor::Default), ts.c_str(),
-                 record.message.data(),
+                 static_cast<int>(record.message.size()), record.message.data(),
                  tags.empty() ? "" : " ",
                  tags.c_str(),
                  ansi_code(AnsiColor::Default));
@@ -422,8 +490,9 @@ void TerminalSink::on_metric(const MetricRecord& record) {
     }
 #endif
     std::string ts = format_time_ns(record.timestamp_ns);
-    std::fprintf(stderr, "METRIC %s %s = %.6g\n",
-                 ts.c_str(), record.name.data(), record.value);
+    std::fprintf(stderr, "METRIC %s %.*s = %.6g\n",
+                 ts.c_str(), static_cast<int>(record.name.size()), record.name.data(),
+                 record.value);
 }
 
 void TerminalSink::on_progress(const ProgressRecord& record) {
@@ -435,8 +504,8 @@ void TerminalSink::on_progress(const ProgressRecord& record) {
         return;
     }
 #endif
-    std::fprintf(stderr, "PROGRESS %s %llu/%llu\n",
-                 record.label.data(),
+    std::fprintf(stderr, "PROGRESS %.*s %llu/%llu\n",
+                 static_cast<int>(record.label.size()), record.label.data(),
                  static_cast<unsigned long long>(record.current),
                  static_cast<unsigned long long>(record.total));
 }
@@ -455,40 +524,26 @@ void TerminalSink::flush() {
 
 struct FileSink::Impl {
     Config cfg;
+    std::string path;  // owned copy: cfg.path is a view into the caller's string
     std::unique_ptr<std::ofstream> file;
     uint64_t bytes_written{0};
+    BackgroundWriter writer;  // last: joined before the file is closed
 
-    std::mutex mtx;
-    std::condition_variable cv;
-    std::queue<std::string> queue;
-    std::atomic<bool> running{true};
-    std::jthread worker;
-
-    explicit Impl(Config c) : cfg(std::move(c)) {
+    explicit Impl(Config c)
+        : cfg(c), path(c.path), writer([this](const std::string& chunk) { write(chunk); }) {
+        cfg.path = path;
         open_file();
-        worker = std::jthread(&Impl::run, this);
     }
 
-    ~Impl() {
-        running.store(false, std::memory_order_relaxed);
-        cv.notify_one();
-        if (worker.joinable()) {
-            worker.join();
-        }
-        if (file && file->is_open()) {
-            file->close();
-        }
-    }
+    ~Impl() = default;
+
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
 
     void open_file() {
-        if (file && file->is_open()) {
-            file->close();
-        }
-        file = std::make_unique<std::ofstream>(std::string(cfg.path),
-                                               std::ios::out | std::ios::app);
-        if (!file || !file->is_open()) {
-            std::fprintf(stderr, "lumen: failed to open log file '%s'\n",
-                         std::string(cfg.path).c_str());
+        file = std::make_unique<std::ofstream>(path, std::ios::out | std::ios::app);
+        if (!file->is_open()) {
+            std::fprintf(stderr, "lumen: failed to open log file '%s'\n", path.c_str());
         }
         bytes_written = 0;
     }
@@ -501,74 +556,31 @@ struct FileSink::Impl {
             file->close();
         }
 
-        std::string base(cfg.path);
         for (int i = cfg.max_files - 1; i >= 0; --i) {
-            std::string old_name = base + "." + std::to_string(i);
-            std::string new_name = base + "." + std::to_string(i + 1);
-            const char* from = (i == 0) ? base.c_str() : old_name.c_str();
-            if (std::rename(from, new_name.c_str()) != 0) {
+            std::string old_name = path + "." + std::to_string(i);
+            std::string new_name = path + "." + std::to_string(i + 1);
+            const char* from = (i == 0) ? path.c_str() : old_name.c_str();
+            if (std::rename(from, new_name.c_str()) != 0 && i == 0) {
                 std::fprintf(stderr, "lumen: failed to rename '%s' -> '%s'\n",
                              from, new_name.c_str());
             }
         }
 
-        file = std::make_unique<std::ofstream>(base, std::ios::out | std::ios::app);
+        open_file();
+    }
+
+    // Runs on the writer thread only.
+    void write(const std::string& chunk) {
         if (!file || !file->is_open()) {
-            std::fprintf(stderr, "lumen: failed to reopen log file '%s' after rotation\n",
-                         base.c_str());
+            return;
         }
-        bytes_written = 0;
-    }
-
-    void enqueue(std::string chunk) {
-        {
-            std::lock_guard lock(mtx);
-            queue.push(std::move(chunk));
+        *file << chunk;
+        file->flush();
+        if (!file->good()) {
+            std::fprintf(stderr, "lumen: I/O error writing to log file '%s'\n", path.c_str());
         }
-        cv.notify_one();
-    }
-
-    void run() {
-        while (running.load(std::memory_order_relaxed)) {
-            std::string chunk;
-            {
-                std::unique_lock lock(mtx);
-                cv.wait_for(lock, std::chrono::milliseconds(100),
-                            [this] { return !queue.empty() || !running.load(std::memory_order_relaxed); });
-                if (queue.empty()) continue;
-                chunk = std::move(queue.front());
-                queue.pop();
-            }
-
-            if (file && file->is_open()) {
-                *file << chunk;
-                if (!file->good()) {
-                    std::fprintf(stderr, "lumen: I/O error writing to log file '%s'\n",
-                                 std::string(cfg.path).c_str());
-                }
-                file->flush();
-                bytes_written += chunk.size();
-                maybe_rotate();
-            }
-        }
-
-        while (true) {
-            std::string chunk;
-            {
-                std::lock_guard lock(mtx);
-                if (queue.empty()) break;
-                chunk = std::move(queue.front());
-                queue.pop();
-            }
-            if (file && file->is_open()) {
-                *file << chunk;
-                if (!file->good()) {
-                    std::fprintf(stderr, "lumen: I/O error writing to log file '%s'\n",
-                                 std::string(cfg.path).c_str());
-                }
-                file->flush();
-            }
-        }
+        bytes_written += chunk.size();
+        maybe_rotate();
     }
 };
 
@@ -601,7 +613,7 @@ void FileSink::on_log(const LogRecord& record) {
         line += e.value;
     }
     line += "\n";
-    __impl->enqueue(std::move(line));
+    __impl->writer.enqueue(std::move(line));
 }
 
 void FileSink::on_metric(const MetricRecord& record) {
@@ -616,7 +628,7 @@ void FileSink::on_metric(const MetricRecord& record) {
         line += e.value;
     }
     line += "\n";
-    __impl->enqueue(std::move(line));
+    __impl->writer.enqueue(std::move(line));
 }
 
 void FileSink::on_progress(const ProgressRecord& record) {
@@ -627,93 +639,37 @@ void FileSink::on_progress(const ProgressRecord& record) {
     line += "/";
     line += std::to_string(record.total);
     line += "\n";
-    __impl->enqueue(std::move(line));
+    __impl->writer.enqueue(std::move(line));
 }
 
 void FileSink::flush() {
-    std::unique_lock lock(__impl->mtx);
-    while (!__impl->queue.empty()) {
-        lock.unlock();
-        __impl->cv.notify_one();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        lock.lock();
-    }
+    __impl->writer.wait_idle();
 }
 
 // ── JsonSink ──────────────────────────────────────────────────────────────────
 
 struct JsonSink::Impl {
     std::ofstream file;
-    std::mutex mtx;
-    std::condition_variable cv;
-    std::queue<std::string> queue;
-    std::atomic<bool> running{true};
-    std::jthread worker;
+    BackgroundWriter writer;  // last: joined before the file is closed
 
     explicit Impl(std::string_view path)
-        : file(std::string(path), std::ios::out | std::ios::app) {
+        : file(std::string(path), std::ios::out | std::ios::app),
+          writer([this](const std::string& chunk) { write(chunk); }) {
         if (!file.is_open()) {
             std::fprintf(stderr, "lumen: failed to open JSON log file '%s'\n",
                          std::string(path).c_str());
         }
-        worker = std::jthread(&Impl::run, this);
     }
 
-    ~Impl() {
-        running.store(false, std::memory_order_relaxed);
-        cv.notify_one();
-        if (worker.joinable()) {
-            worker.join();
+    // Runs on the writer thread only.
+    void write(const std::string& chunk) {
+        if (!file.is_open()) {
+            return;
         }
-        if (file.is_open()) {
-            file.close();
-        }
-    }
-
-    void enqueue(std::string chunk) {
-        {
-            std::lock_guard lock(mtx);
-            queue.push(std::move(chunk));
-        }
-        cv.notify_one();
-    }
-
-    void run() {
-        while (running.load(std::memory_order_relaxed)) {
-            std::string chunk;
-            {
-                std::unique_lock lock(mtx);
-                cv.wait_for(lock, std::chrono::milliseconds(100),
-                            [this] { return !queue.empty() || !running.load(std::memory_order_relaxed); });
-                if (queue.empty()) continue;
-                chunk = std::move(queue.front());
-                queue.pop();
-            }
-
-            if (file.is_open()) {
-                file << chunk;
-                if (!file.good()) {
-                    std::fprintf(stderr, "lumen: I/O error writing to JSON log file\n");
-                }
-                file.flush();
-            }
-        }
-
-        while (true) {
-            std::string chunk;
-            {
-                std::lock_guard lock(mtx);
-                if (queue.empty()) break;
-                chunk = std::move(queue.front());
-                queue.pop();
-            }
-            if (file.is_open()) {
-                file << chunk;
-                if (!file.good()) {
-                    std::fprintf(stderr, "lumen: I/O error writing to JSON log file\n");
-                }
-                file.flush();
-            }
+        file << chunk;
+        file.flush();
+        if (!file.good()) {
+            std::fprintf(stderr, "lumen: I/O error writing to JSON log file\n");
         }
     }
 };
@@ -725,29 +681,23 @@ JsonSink::~JsonSink() = default;
 void JsonSink::on_log(const LogRecord& record) {
     std::string out;
     format_record_json(out, record);
-    __impl->enqueue(std::move(out));
+    __impl->writer.enqueue(std::move(out));
 }
 
 void JsonSink::on_metric(const MetricRecord& record) {
     std::string out;
     format_record_json(out, record);
-    __impl->enqueue(std::move(out));
+    __impl->writer.enqueue(std::move(out));
 }
 
 void JsonSink::on_progress(const ProgressRecord& record) {
     std::string out;
     format_record_json(out, record);
-    __impl->enqueue(std::move(out));
+    __impl->writer.enqueue(std::move(out));
 }
 
 void JsonSink::flush() {
-    std::unique_lock lock(__impl->mtx);
-    while (!__impl->queue.empty()) {
-        lock.unlock();
-        __impl->cv.notify_one();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        lock.lock();
-    }
+    __impl->writer.wait_idle();
 }
 
 }  // namespace lumen

@@ -44,44 +44,40 @@ struct PySink : Sink, py::trampoline_self_life_support {
     }
 };
 
-static std::string_view py_arena_copy(std::string_view s) {
-    char* buf = this_thread_arena.allocate(s.size() + 1);
-    std::memcpy(buf, s.data(), s.size());
-    buf[s.size()] = '\0';
-    return std::string_view(buf, s.size());
-}
-
 void py_log_info(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::INFO, py_arena_copy(msg),
+    RecordBuilder(core().log_buffer(), LogLevel::INFO, msg,
                   std::source_location::current());
 }
 
 void py_log_warn(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::WARN, py_arena_copy(msg),
+    RecordBuilder(core().log_buffer(), LogLevel::WARN, msg,
                   std::source_location::current());
 }
 
 void py_log_error(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::ERROR, py_arena_copy(msg),
+    RecordBuilder(core().log_buffer(), LogLevel::ERROR, msg,
                   std::source_location::current());
 }
 
 void py_log_debug(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::DEBUG, py_arena_copy(msg),
+    RecordBuilder(core().log_buffer(), LogLevel::DEBUG, msg,
                   std::source_location::current());
 }
 
 void py_log_fatal(std::string msg) {
     {
-        RecordBuilder(core().log_buffer(), LogLevel::FATAL, py_arena_copy(msg),
+        RecordBuilder(core().log_buffer(), LogLevel::FATAL, msg,
                       std::source_location::current());
     }
-    core().flush();
+    {
+        py::gil_scoped_release release;  // Python sinks need the GIL to drain
+        core().flush();
+    }
     std::terminate();
 }
 
 void py_metric(std::string name, double value) {
-    MetricBuilder(core().metric_buffer(), py_arena_copy(name), value);
+    MetricBuilder(core().metric_buffer(), name, value);
 }
 
 struct PyProgressHandle {
@@ -100,7 +96,7 @@ class PyProgressHandleWrapper {
 public:
     PyProgressHandleWrapper(std::string label, uint64_t total)
         : __handle(std::make_unique<ProgressHandle>(
-              core().progress_buffer(), py_arena_copy(label), total)) {}
+              core().progress_buffer(), label, total)) {}
 
     PyProgressHandleWrapper(PyProgressHandleWrapper&&) noexcept = default;
     PyProgressHandleWrapper& operator=(PyProgressHandleWrapper&&) noexcept = default;
@@ -333,7 +329,7 @@ PYBIND11_MODULE(lumen_bindings, m) {
                  return nullptr;
              },
              py::arg("id"))
-        .def("flush", &Core::flush)
+        .def("flush", &Core::flush, py::call_guard<py::gil_scoped_release>())
         .def("set_process_tag", &Core::set_process_tag,
              py::arg("key"), py::arg("value"))
         .def("set_thread_tag", &Core::set_thread_tag,
@@ -376,6 +372,6 @@ PYBIND11_MODULE(lumen_bindings, m) {
           py::arg("key"), py::arg("value"));
     m.def("set_thread_tag", &set_thread_tag,
           py::arg("key"), py::arg("value"));
-    m.def("flush", []() { core().flush(); });
+    m.def("flush", []() { core().flush(); }, py::call_guard<py::gil_scoped_release>());
     m.def("now_ns", &now_ns, "Current time in nanoseconds since epoch");
 }

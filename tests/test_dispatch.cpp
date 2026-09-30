@@ -423,5 +423,101 @@ TEST(SingletonTest, CoreIsSingleton) {
     EXPECT_EQ(&c1, &c2);
 }
 
+// ── flush() semantics ────────────────────────────────────────────────────────
+
+TEST_F(DispatchTest, FlushDeliversEverythingEmittedBeforeIt) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    for (int i = 0; i < 500; ++i) {
+        LOG_INFO("record");
+        lumen::metric(std::string("metric_name_longer_than_sso_") + std::to_string(i), 1.0);
+    }
+    core().flush();  // no sleep afterwards: flush itself must block
+
+    std::lock_guard lock(raw->mtx);
+    EXPECT_EQ(raw->logs.size(), 500u);
+    ASSERT_EQ(raw->metrics.size(), 500u);
+    EXPECT_EQ(raw->metrics[499].name, "metric_name_longer_than_sso_499");
+}
+
+TEST_F(DispatchTest, FlushWaitsForSinkFlush) {
+    struct SlowFlushSink : public Sink {
+        std::atomic<bool> flushed{false};
+        void flush() override {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            flushed.store(true);
+        }
+    };
+    auto sink = std::make_unique<SlowFlushSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    core().flush();
+    EXPECT_TRUE(raw->flushed.load());
+}
+
+TEST_F(DispatchTest, FlushFromSinkCallbackDoesNotDeadlock) {
+    struct ReentrantSink : public Sink {
+        std::atomic<int> calls{0};
+        void on_log(const LogRecord&) override {
+            core().flush();
+            ++calls;
+        }
+        void flush() override {}
+    };
+    auto sink = std::make_unique<ReentrantSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_INFO("reentrant");
+    core().flush();
+    EXPECT_EQ(raw->calls.load(), 1);
+}
+
+TEST_F(DispatchTest, FlushWithConcurrentProducers) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    constexpr int kThreads = 4;
+    constexpr int kPerThread = 1000;
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([t] {
+            for (int i = 0; i < kPerThread; ++i) {
+                LOG_INFO("t{} i{}", t, i).tag("thread", int64_t{t});
+            }
+            core().flush();
+        });
+    }
+    for (auto& th : threads) th.join();
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    EXPECT_EQ(raw->logs.size(), static_cast<size_t>(kThreads * kPerThread));
+}
+
+TEST_F(DispatchTest, ProgressLabelFromTemporaryIsCopied) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        auto handle = lumen::progress(std::string(40, 'p'), 10);
+        handle.update(3);
+        handle.finish();
+    }
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->progress.size(), 2u);
+    EXPECT_EQ(raw->progress[0].label, std::string(40, 'p'));
+    EXPECT_EQ(raw->progress[0].current, 3u);
+    EXPECT_EQ(raw->progress[1].current, 10u);
+    EXPECT_EQ(raw->progress[1].tags.count(), raw->progress[0].tags.count());
+}
+
 }  // namespace
 }  // namespace lumen

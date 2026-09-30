@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cstdio>
 #include <chrono>
 #include <mutex>
 #include <set>
@@ -264,6 +265,154 @@ TEST_F(MacroTest, AllLevelsEmit) {
     EXPECT_NE(levels.find(LogLevel::INFO), levels.end());
     EXPECT_NE(levels.find(LogLevel::WARN), levels.end());
     EXPECT_NE(levels.find(LogLevel::ERROR), levels.end());
+}
+
+// ── Lifetime: records must own their strings ─────────────────────────────────
+
+TEST_F(MacroTest, RuntimeMessageOutlivesTemporary) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    for (int i = 0; i < 8; ++i) {
+        LOG_INFO(std::string(64, 'm') + std::to_string(i));
+    }
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), 8u);
+    for (size_t i = 0; i < raw->logs.size(); ++i) {
+        EXPECT_EQ(raw->logs[i].message, std::string(64, 'm') + std::to_string(i));
+    }
+}
+
+TEST_F(MacroTest, RuntimeStringTagOutlivesTemporary) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    LOG_INFO("string tag").tag(std::string("dynamic_key_long_enough_for_heap"),
+                               std::string(48, 'v'));
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), 1u);
+    EXPECT_EQ(raw->logs[0].tags.find("dynamic_key_long_enough_for_heap"), std::string(48, 'v'));
+}
+
+TEST_F(MacroTest, NumericTagsSurviveLargeBurst) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    constexpr int64_t kCount = 1000;
+    for (int64_t i = 0; i < kCount; ++i) {
+        LOG_INFO("burst").tag("i", i).tag("half", static_cast<double>(i) / 2.0);
+    }
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), static_cast<size_t>(kCount));
+    for (int64_t i = 0; i < kCount; ++i) {
+        const auto& rec = raw->logs[static_cast<size_t>(i)];
+        EXPECT_EQ(rec.tags.find("i"), std::to_string(i));
+        char expected[32];
+        std::snprintf(expected, sizeof(expected), "%.6g", static_cast<double>(i) / 2.0);
+        EXPECT_EQ(rec.tags.find("half"), std::string_view(expected));
+    }
+}
+
+TEST_F(MacroTest, RecordsFromExitedThreadKeepThreadTags) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    std::thread worker([] {
+        set_thread_tag("worker", std::string(40, 'w'));
+        LOG_INFO("from worker");
+    });
+    worker.join();
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), 1u);
+    EXPECT_EQ(raw->logs[0].tags.find("worker"), std::string(40, 'w'));
+}
+
+TEST_F(MacroTest, FormatArgumentsAreFormatted) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    const double energy = 12.3456;
+    LOG_INFO("cluster energy {:.2f} GeV in {} hits", energy, 7).tag("run", int64_t{3});
+    LOG_WARN("single argument is verbatim: {braces} stay");
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), 2u);
+    EXPECT_EQ(raw->logs[0].message, "cluster energy 12.35 GeV in 7 hits");
+    EXPECT_EQ(raw->logs[0].tags.find("run"), "3");
+    EXPECT_EQ(raw->logs[1].message, "single argument is verbatim: {braces} stay");
+}
+
+TEST_F(MacroTest, ElseBindsToCallersIf) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    bool else_taken = false;
+    const bool condition = false;
+    if (condition)
+        LOG_INFO("not logged");
+    else
+        else_taken = true;
+    core().flush();
+
+    EXPECT_TRUE(else_taken);
+    std::lock_guard lock(raw->mtx);
+    EXPECT_TRUE(raw->logs.empty());
+}
+
+TEST_F(MacroTest, ScopeValueFromTemporaryIsCopied) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    {
+        LUMEN_SCOPE("run", std::string(40, 'r'));
+        LOG_INFO("inside scope");
+    }
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), 1u);
+    EXPECT_EQ(raw->logs[0].tags.find("run"), std::string(40, 'r'));
+}
+
+TEST_F(MacroTest, ContextPriorityScopeOverThreadOverProcess) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), always());
+
+    std::thread worker([] {
+        set_process_tag("prio_key", "process");
+        set_thread_tag("prio_key", "thread");
+        LOG_INFO("thread beats process");
+        {
+            LUMEN_SCOPE("prio_key", "scope");
+            LOG_INFO("scope beats thread");
+            LOG_INFO("explicit beats scope").tag("prio_key", "explicit");
+        }
+    });
+    worker.join();
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->logs.size(), 3u);
+    EXPECT_EQ(raw->logs[0].tags.find("prio_key"), "thread");
+    EXPECT_EQ(raw->logs[1].tags.find("prio_key"), "scope");
+    EXPECT_EQ(raw->logs[2].tags.find("prio_key"), "explicit");
 }
 
 }  // namespace

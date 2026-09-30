@@ -1,6 +1,7 @@
 #ifndef LUMEN_DETAIL_RING_BUFFER_H
 #define LUMEN_DETAIL_RING_BUFFER_H
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -76,6 +77,12 @@ public:
                 continue;
             }
 
+            if (diff > 0) {
+                // Another producer claimed `pos` after we read __head; reload
+                // and retry. Only diff < 0 means the buffer is full.
+                continue;
+            }
+
             if constexpr (Policy == OverflowPolicy::DROP_NEWEST) {
                 return false;
             } else if constexpr (Policy == OverflowPolicy::DROP_OLDEST) {
@@ -130,6 +137,11 @@ public:
     bool empty() const {
         return size() == 0;
     }
+
+    // Number of slots claimed by producers so far (monotonic).
+    [[nodiscard]] uint64_t head_position() const { return __head.load(std::memory_order_acquire); }
+    // Number of slots released by the consumer so far (monotonic).
+    [[nodiscard]] uint64_t tail_position() const { return __tail.load(std::memory_order_acquire); }
 
     static constexpr uint64_t capacity() { return __capacity; }
 

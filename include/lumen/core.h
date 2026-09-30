@@ -33,6 +33,11 @@ public:
     [[nodiscard]] SinkId add_sink(std::unique_ptr<Sink> sink, Predicate predicate);
     [[nodiscard]] std::expected<std::unique_ptr<Sink>, std::error_code> remove_sink(SinkId id);
 
+    // Blocks until every record pushed before the call has been dispatched to
+    // the sinks and each sink's flush() has returned (i.e. its pending I/O is
+    // written). Records are drained on the calling thread, serialised with the
+    // dispatch thread, so sinks are never called concurrently. Calling flush()
+    // from inside a sink callback is a no-op.
     void flush();
 
     void emit(LogRecord&& record);
@@ -52,6 +57,9 @@ public:
 
 private:
     void __dispatch_loop();
+    void __drain_available();
+    void __drain_until(uint64_t log_target, uint64_t metric_target, uint64_t progress_target);
+    void __flush_sinks();
     void __dispatch_log(const LogRecord& record);
     void __dispatch_metric(const MetricRecord& record);
     void __dispatch_progress(const ProgressRecord& record);
@@ -64,6 +72,7 @@ private:
     std::mutex                    __wake_mutex;
     std::condition_variable       __wake_cv;
     std::atomic<bool>             __running{true};
+    std::mutex                    __consume_mutex;  // single-consumer guard for the ring buffers
 
     std::mutex                    __sink_mutex;
     std::vector<SinkEntry>        __sinks;

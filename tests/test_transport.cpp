@@ -7,121 +7,12 @@
 
 #include <gtest/gtest.h>
 
-#include "lumen/detail/arena.h"
 #include "lumen/detail/overflow_policy.h"
 #include "lumen/detail/ring_buffer.h"
 #include "lumen/record.h"
 
 namespace lumen {
 namespace {
-
-// ── Stderr capture helpers (POSIX) ────────────────────────────────────────────
-
-struct StderrCapture {
-    int saved = -1;
-    int read_fd = -1;
-    int write_fd = -1;
-
-    StderrCapture() {
-        int p[2];
-        pipe(p);
-        saved = dup(STDERR_FILENO);
-        dup2(p[1], STDERR_FILENO);
-        read_fd = p[0];
-        write_fd = p[1];
-    }
-
-    ~StderrCapture() {
-        if (saved >= 0) {
-            dup2(saved, STDERR_FILENO);
-            close(saved);
-        }
-        if (read_fd >= 0) close(read_fd);
-        if (write_fd >= 0) close(write_fd);
-    }
-
-    std::string str() {
-        fflush(stderr);
-        if (write_fd >= 0) {
-            close(write_fd);
-            write_fd = -1;
-        }
-        if (saved >= 0) {
-            dup2(saved, STDERR_FILENO);
-            close(saved);
-            saved = -1;
-        }
-
-        std::string result;
-        char buf[256];
-        ssize_t n;
-        while ((n = ::read(read_fd, buf, sizeof(buf) - 1)) > 0) {
-            buf[n] = '\0';
-            result += buf;
-        }
-        return result;
-    }
-};
-
-// ── Arena tests ───────────────────────────────────────────────────────────────
-
-TEST(ArenaTest, BasicAlloc) {
-    Arena arena;
-
-    char* p1 = arena.allocate(8);
-    ASSERT_NE(p1, nullptr);
-    std::memcpy(p1, "hello", 6);
-    EXPECT_STREQ(p1, "hello");
-    EXPECT_EQ(arena.remaining() + arena.used(), Arena::DEFAULT_CAPACITY);
-
-    char* p2 = arena.allocate(16);
-    ASSERT_NE(p2, nullptr);
-    std::memcpy(p2, "world", 6);
-    EXPECT_STREQ(p2, "world");
-
-    // No overlap
-    EXPECT_NE(p1, p2);
-    EXPECT_STRNE(p1, "world");
-    EXPECT_STREQ(p1, "hello");
-
-    // Verify alignment (each pointer is max_align_t-aligned)
-    EXPECT_EQ(reinterpret_cast<uintptr_t>(p1) % alignof(std::max_align_t), 0);
-    EXPECT_EQ(reinterpret_cast<uintptr_t>(p2) % alignof(std::max_align_t), 0);
-}
-
-TEST(ArenaTest, OverflowSpill) {
-    StderrCapture cap;
-
-    Arena arena;
-
-    // Allocate enough to exhaust inline buffer
-    std::vector<char*> ptrs;
-    size_t total = 0;
-    while (arena.remaining() > 0) {
-        size_t chunk = std::min<size_t>(arena.remaining(), 512);
-        char* p = arena.allocate(chunk);
-        ASSERT_NE(p, nullptr);
-        std::memset(p, 'A' + (ptrs.size() % 26), chunk - 1);
-        p[chunk - 1] = '\0';
-        ptrs.push_back(p);
-        total += chunk;
-    }
-
-    // Now request more than inline capacity — triggers spill
-    char* spilled = arena.allocate(256);
-    ASSERT_NE(spilled, nullptr);
-    std::memcpy(spilled, "spilled data", 13);
-    EXPECT_STREQ(spilled, "spilled data");
-
-    // Spilled pointer is different from any inline pointer
-    for (char* p : ptrs) {
-        EXPECT_NE(spilled, p);
-    }
-
-    // Verify warning was emitted on stderr
-    std::string captured = cap.str();
-    EXPECT_TRUE(captured.find("overflow") != std::string::npos);
-}
 
 // ── Ring buffer tests ─────────────────────────────────────────────────────────
 

@@ -3,11 +3,18 @@
   "version": "0.1.0",
   "dependencies": [
     "gtest",
-    "pybind11",
     {
       "name": "ftxui",
       "platform": "!windows"
     }
   ],
+  "features": {
+    "python": {
+      "description": "pybind11 Python bindings (LUMEN_ENABLE_PYTHON=ON)",
+      "dependencies": [
+        "pybind11"
+      ]
+    }
+  },
   "overrides": []
 }

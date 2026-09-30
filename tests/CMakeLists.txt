@@ -21,7 +21,7 @@ if(LUMEN_ENABLE_LATEX)
   target_compile_definitions(lumen_tests PRIVATE LUMEN_ENABLE_LATEX)
 endif()
 
-target_link_libraries(lumen_tests PRIVATE lumen GTest::GTest GTest::Main)
+target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_tests PRIVATE cxx_std_23)
 
 include(GoogleTest)
@@ -31,7 +31,7 @@ add_executable(lumen_bench
   bench_transport.cpp
 )
 
-target_link_libraries(lumen_bench PRIVATE lumen GTest::GTest GTest::Main)
+target_link_libraries(lumen_bench PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_bench PRIVATE cxx_std_23)
 
 include(GoogleTest)

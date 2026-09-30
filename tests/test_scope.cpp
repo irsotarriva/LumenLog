@@ -269,7 +269,6 @@ TEST_F(ScopeTest, ScopeAfterPrematureScopeExit) {
 
 TEST_F(ScopeTest, LoopWithZeroIterations) {
     auto sink = std::make_unique<ProgressCaptureSink>();
-    auto* raw = sink.get();
     register_sink(std::move(sink), always());
 
     {

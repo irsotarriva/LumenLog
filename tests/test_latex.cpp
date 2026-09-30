@@ -78,7 +78,6 @@ TEST_F(LatexTest, LatexTagAbsentByDefault) {
 
 TEST_F(LatexTest, LatexTagOnMetric) {
     auto sink = std::make_unique<LatexCaptureSink>();
-    auto* raw = sink.get();
     register_sink(std::move(sink), always());
 
     {

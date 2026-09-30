@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.28)
+
+# Must precede project(): vcpkg installs manifest dependencies while the
+# toolchain is loaded. pybind11 (and the python3 build it pulls in) is only
+# needed for the bindings.
+if(LUMEN_ENABLE_PYTHON)
+  list(APPEND VCPKG_MANIFEST_FEATURES "python")
+endif()
+
 project(lumen VERSION 0.1.0 LANGUAGES CXX)
 
 # ── C++ Standard ──────────────────────────────────────────────────────────────
@@ -9,18 +17,33 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ── Build types ───────────────────────────────────────────────────────────────
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# ── Warnings as errors ────────────────────────────────────────────────────────
+# When Lumen is built inside another project (add_subdirectory/FetchContent),
+# none of the developer-only settings below are forced on the parent build.
+option(LUMEN_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ${PROJECT_IS_TOP_LEVEL})
+option(LUMEN_ENABLE_SANITIZERS "Build with ASan/UBSan in Debug" ${PROJECT_IS_TOP_LEVEL})
+
+# ── Warnings ──────────────────────────────────────────────────────────────────
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic -Werror)
-  add_compile_options(-Wno-unknown-warning-option)
+  add_compile_options(-Wall -Wextra -Wpedantic)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wno-unknown-warning-option)
+  endif()
+  if(LUMEN_WARNINGS_AS_ERRORS)
+    add_compile_options(-Werror)
+  endif()
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-  add_compile_options(/W4 /WX)
+  add_compile_options(/W4)
+  if(LUMEN_WARNINGS_AS_ERRORS)
+    add_compile_options(/WX)
+  endif()
 endif()
 
 # ── Sanitizers (Debug) ────────────────────────────────────────────────────────
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+# Instrumenting a static library forces every consumer to link the sanitizer
+# runtime too, so this is off by default when Lumen is a subproject.
+if(LUMEN_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
   if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
@@ -65,16 +88,15 @@ target_compile_features(lumen PUBLIC cxx_std_23)
 set(LUMEN_MIN_LEVEL "DEBUG" CACHE STRING "Elides records below this level at compile time")
 target_compile_definitions(lumen PUBLIC LUMEN_MIN_LEVEL=${LUMEN_MIN_LEVEL})
 
-# Arena size
-set(LUMEN_ARENA_SIZE_KB "4" CACHE STRING "Per-thread arena size in KB")
-target_compile_definitions(lumen PRIVATE LUMEN_ARENA_SIZE_KB=${LUMEN_ARENA_SIZE_KB})
 
 # Buffer capacities
 set(LUMEN_LOG_CAPACITY "65536" CACHE STRING "LogBuffer slot count (must be power of two)")
 set(LUMEN_METRIC_CAPACITY "16384" CACHE STRING "MetricBuffer slot count")
 set(LUMEN_PROGRESS_CAPACITY "4096" CACHE STRING "ProgressBuffer slot count")
 
-target_compile_definitions(lumen PRIVATE
+# PUBLIC: the capacities set the layout of Core, which consumers see through the
+# headers. A PRIVATE define would give the library and its users different layouts.
+target_compile_definitions(lumen PUBLIC
   LUMEN_LOG_CAPACITY=${LUMEN_LOG_CAPACITY}
   LUMEN_METRIC_CAPACITY=${LUMEN_METRIC_CAPACITY}
   LUMEN_PROGRESS_CAPACITY=${LUMEN_PROGRESS_CAPACITY}
@@ -103,12 +125,19 @@ set(LUMEN_HAS_REFLECTION FALSE)
 if(LUMEN_ENABLE_REFLECTION STREQUAL "AUTO" OR LUMEN_ENABLE_REFLECTION STREQUAL "ON")
     message(STATUS "Lumen: probing C++26 static reflection support...")
 
-    file(READ "${CMAKE_SOURCE_DIR}/cmake/try_reflection.cpp" __lumen_reflection_code)
+    # CMAKE_CURRENT_SOURCE_DIR, not CMAKE_SOURCE_DIR: the latter is the parent
+    # project's root when Lumen is added with add_subdirectory/FetchContent.
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/try_reflection.cpp" __lumen_reflection_code)
 
     include(CheckCXXSourceCompiles)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
     set(CMAKE_REQUIRED_FLAGS "-std=c++26")
-    check_cxx_source_compiles("${__lumen_reflection_code}" LUMEN_HAS_REFLECTION)
-    set(CMAKE_REQUIRED_FLAGS "")
+    # The result variable must not be pre-set: check_cxx_source_compiles skips
+    # the probe entirely when the variable is already defined.
+    check_cxx_source_compiles("${__lumen_reflection_code}" LUMEN_REFLECTION_PROBE)
+    cmake_pop_check_state()
+    set(LUMEN_HAS_REFLECTION ${LUMEN_REFLECTION_PROBE})
 
     if(LUMEN_HAS_REFLECTION)
         message(STATUS "Lumen: C++26 static reflection detected — class-name harvesting enabled")
@@ -129,7 +158,7 @@ endif()
 add_library(lumen::lumen ALIAS lumen)
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
-option(LUMEN_BUILD_TESTS "Build tests" ON)
+option(LUMEN_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 if(LUMEN_BUILD_TESTS)
   enable_testing()
   find_package(GTest REQUIRED)
@@ -137,7 +166,7 @@ if(LUMEN_BUILD_TESTS)
 endif()
 
 # ── Examples ──────────────────────────────────────────────────────────────────
-option(LUMEN_BUILD_EXAMPLES "Build examples" ON)
+option(LUMEN_BUILD_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
 if(LUMEN_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()

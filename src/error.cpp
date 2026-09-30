@@ -10,8 +10,6 @@ std::string LumenErrorCategory::message(int ev) const {
     switch (static_cast<LumenError>(ev)) {
         case LumenError::none:
             return "no error";
-        case LumenError::arena_overflow:
-            return "thread-local arena overflow";
         case LumenError::buffer_full:
             return "ring buffer is full";
         case LumenError::invalid_sink_id:

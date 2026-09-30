@@ -40,7 +40,6 @@ protected:
 
 TEST_F(SinkTest, NullSinkDoesNotThrow) {
     auto sink = std::make_unique<NullSink>();
-    auto* raw = sink.get();
     register_sink(std::move(sink), always());
 
     LOG_INFO("to null");
@@ -123,13 +122,10 @@ TEST_F(SinkTest, FlushCompletesPendingWrites) {
     auto cfg = FileSink::Config{};
     cfg.path = path;
     auto sink = std::make_unique<FileSink>(cfg);
-    auto* raw = sink.get();
-    SinkId id = register_sink(std::move(sink), always());
+    register_sink(std::move(sink), always());
 
     LOG_INFO("before flush");
-    wait_flush(50);
-
-    raw->flush();
+    core().flush();  // must not return before the line is on disk
 
     std::ifstream infile(path);
     ASSERT_TRUE(infile.is_open());
@@ -234,7 +230,7 @@ TEST_F(SinkTest, TerminalSinkWithEmptyConfig) {
 
 TEST_F(SinkTest, FlushWithNoRecordsDoesNotBlock) {
     auto sink = std::make_unique<NullSink>();
-    auto id = register_sink(std::move(sink), always());
+    register_sink(std::move(sink), always());
 
     auto t0 = std::chrono::steady_clock::now();
     EXPECT_NO_THROW(wait_flush(10));

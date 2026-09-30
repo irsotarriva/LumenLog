@@ -101,7 +101,6 @@ target_link_libraries(your_target PRIVATE lumen::lumen)
 | `LUMEN_ENABLE_LATEX` | `OFF` | LaTeX math rendering in sinks |
 | `LUMEN_ENABLE_PYTHON` | `OFF` | pybind11 Python bindings |
 | `LUMEN_ENABLE_REFLECTION` | `AUTO` | C++26 class-name harvesting |
-| `LUMEN_ARENA_SIZE_KB` | `4` | Per-thread arena capacity |
 
 ---
 

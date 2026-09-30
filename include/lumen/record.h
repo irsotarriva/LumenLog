@@ -5,12 +5,16 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-
+#include <cstring>
+#include <format>
+#include <forward_list>
+#include <memory>
 #include <source_location>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
-#include "lumen/detail/arena.h"
 #include "lumen/detail/class_name.hpp"
 #include "lumen/detail/overflow_policy.h"
 #include "lumen/detail/ring_buffer.h"
@@ -27,10 +31,10 @@ enum LogLevel : uint32_t {
 };
 
 struct SourceLocation {
-    std::string_view       file;
-    std::string_view       function;
-    std::string_view       class_name;
-    uint32_t               line;
+    std::string_view       file{};
+    std::string_view       function{};
+    std::string_view       class_name{};
+    uint32_t               line{};
 };
 
 template <size_t N = 16>
@@ -46,11 +50,35 @@ public:
             __entries[__count++] = {key, value};
         }
     }
+    // Replaces the value of an existing key, or adds the pair if absent.
+    void set(std::string_view key, std::string_view value) {
+        for (size_t i = 0; i < __count; ++i) {
+            if (__entries[i].key == key) {
+                __entries[i].value = value;
+                return;
+            }
+        }
+        add(key, value);
+    }
     [[nodiscard]] std::string_view find(std::string_view key) const {
         for (size_t i = 0; i < __count; ++i) {
             if (__entries[i].key == key) return __entries[i].value;
         }
         return {};
+    }
+    [[nodiscard]] bool contains(std::string_view key) const {
+        for (size_t i = 0; i < __count; ++i) {
+            if (__entries[i].key == key) return true;
+        }
+        return false;
+    }
+    // Re-points every key and value through `f` (used to move them into owned storage).
+    template <typename F>
+    void remap(F&& f) {
+        for (size_t i = 0; i < __count; ++i) {
+            __entries[i].key = f(__entries[i].key);
+            __entries[i].value = f(__entries[i].value);
+        }
     }
     [[nodiscard]] size_t count() const { return __count; }
     [[nodiscard]] const Entry* begin() const { return __entries.data(); }
@@ -62,30 +90,47 @@ private:
 };
 
 // ── Record types ──────────────────────────────────────────────────────────────
+//
+// Records are consumed on the dispatch thread, long after the producing
+// statement has finished. Every string_view in a record that went through the
+// broker (message/name/label and all tag keys and values) therefore points
+// into `storage`: an immutable, NUL-terminated block owned by the record and
+// shared by its copies. Sinks may copy a record and keep it; the views stay
+// valid for as long as any copy is alive.
+//
+// `SourceLocation` strings are not copied: they come from
+// std::source_location and have static storage duration.
+
+namespace detail {
+using RecordStorage = std::shared_ptr<const char[]>;
+}  // namespace detail
 
 struct LogRecord {
-    LogLevel          level;
-    std::string_view  message;
-    TagSet<16>        tags;
-    uint64_t          timestamp_ns;
-    uint32_t          thread_id;
-    SourceLocation    source;
+    LogLevel          level{};
+    std::string_view  message{};
+    TagSet<16>        tags{};
+    uint64_t          timestamp_ns{};
+    uint32_t          thread_id{};
+    SourceLocation    source{};
+    detail::RecordStorage storage{};
 };
 
 struct MetricRecord {
-    std::string_view  name;
-    double            value;
-    TagSet<16>        tags;
-    uint64_t          timestamp_ns;
+    std::string_view  name{};
+    double            value{};
+    TagSet<16>        tags{};
+    uint64_t          timestamp_ns{};
+    detail::RecordStorage storage{};
 };
 
 struct ProgressRecord {
-    uint64_t          id;
-    std::string_view  label;
-    uint64_t          current;
-    uint64_t          total;
-    TagSet<16>        tags;
-    uint64_t          timestamp_ns;
+    uint64_t          id{};
+    std::string_view  label{};
+    uint64_t          current{};
+    uint64_t          total{};
+    TagSet<16>        tags{};
+    uint64_t          timestamp_ns{};
+    detail::RecordStorage storage{};
 };
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -123,14 +168,70 @@ using ProgressBuffer = RingBuffer<ProgressRecord, LUMEN_PROGRESS_CAPACITY>;
 namespace detail {
 const TagSet<8>& tls_tags();
 const TagSet<16>& proc_tags();
-void collect_scope_tags(TagSet<8>& out);
 const TagSet<8>* current_instance_tags();
-void merge_context(LogRecord&, const TagSet<16>&, const TagSet<8>&,
-                   const TagSet<8>*, const TagSet<8>*);
-void merge_context(MetricRecord&, const TagSet<16>&, const TagSet<8>&,
-                   const TagSet<8>*, const TagSet<8>*);
-void merge_context(ProgressRecord&, const TagSet<16>&, const TagSet<8>&,
-                   const TagSet<8>*, const TagSet<8>*);
+
+// Copies the record's message/name/label and all tag strings into a freshly
+// allocated `storage` block and re-points the views at it.
+void own_strings(LogRecord& record);
+void own_strings(MetricRecord& record);
+void own_strings(ProgressRecord& record);
+
+// Merges ambient context (instance > scope > thread > process; tags already on
+// the record win) and then calls own_strings(). Must run on the producing thread.
+void finalize(LogRecord& record);
+void finalize(MetricRecord& record);
+void finalize(ProgressRecord& record);
+
+// Holds copies of strings for the lifetime of a builder. Tag arguments are
+// often temporaries that die before the builder's destructor runs, so they are
+// copied here as soon as they are passed in. Short strings live inline; longer
+// ones go to list nodes, whose addresses never change.
+class StringScratch {
+public:
+    static constexpr size_t INLINE_CAPACITY = 512;
+
+    StringScratch() = default;
+    StringScratch(const StringScratch&) = delete;
+    StringScratch& operator=(const StringScratch&) = delete;
+    StringScratch(StringScratch&&) = delete;
+    StringScratch& operator=(StringScratch&&) = delete;
+
+    [[nodiscard]] std::string_view store(std::string_view s) {
+        if (s.size() <= INLINE_CAPACITY - __used) {
+            char* dst = __inline_buf.data() + __used;
+            if (!s.empty()) std::memcpy(dst, s.data(), s.size());
+            __used += s.size();
+            return {dst, s.size()};
+        }
+        __overflow.emplace_front(s);
+        return __overflow.front();
+    }
+
+    template <typename T>
+    [[nodiscard]] std::string_view store_number(const char* fmt, T value) {
+        std::array<char, 32> buf{};
+        const int n = std::snprintf(buf.data(), buf.size(), fmt, value);
+        if (n <= 0 || static_cast<size_t>(n) >= buf.size()) return {};
+        return store(std::string_view(buf.data(), static_cast<size_t>(n)));
+    }
+
+private:
+    std::array<char, INLINE_CAPACITY> __inline_buf;
+    size_t __used = 0;
+    std::forward_list<std::string> __overflow;
+};
+
+// LOG_* with a single argument logs it verbatim (no format parsing); with more
+// arguments the first is a std::format string, checked at compile time.
+[[nodiscard]] inline std::string_view format_message(std::string_view message) {
+    return message;
+}
+
+template <typename... Args>
+    requires(sizeof...(Args) > 0)
+[[nodiscard]] std::string format_message(std::format_string<Args...> fmt, Args&&... args) {
+    return std::format(fmt, std::forward<Args>(args)...);
+}
 }  // namespace detail
 
 // ── RecordBuilder ─────────────────────────────────────────────────────────────
@@ -141,7 +242,7 @@ public:
                   std::source_location loc = std::source_location::current())
         : __buffer(buffer) {
         __record.level = level;
-        __record.message = message;
+        __record.message = __scratch.store(message);
         __record.timestamp_ns = now_ns();
         __record.thread_id = this_thread_id();
         __record.source.file = loc.file_name();
@@ -151,12 +252,7 @@ public:
     }
 
     ~RecordBuilder() {
-        TagSet<8> scope_tags;
-        detail::collect_scope_tags(scope_tags);
-        const TagSet<8>* inst_tags = detail::current_instance_tags();
-        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
-                              scope_tags.count() > 0 ? &scope_tags : nullptr,
-                              inst_tags);
+        detail::finalize(__record);
         __buffer.push(std::move(__record));
     }
 
@@ -164,29 +260,24 @@ public:
     RecordBuilder& operator=(const RecordBuilder&) = delete;
 
     RecordBuilder& tag(std::string_view key, std::string_view value) {
-        __record.tags.add(key, value);
+        __record.tags.add(__scratch.store(key), __scratch.store(value));
         return *this;
     }
     RecordBuilder& tag(std::string_view key, int64_t value) {
-        char* buf = __arena_buf();
-        int n = std::snprintf(buf, 32, "%lld", static_cast<long long>(value));
-        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        const std::string_view text = __scratch.store_number("%lld", static_cast<long long>(value));
+        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
         return *this;
     }
     RecordBuilder& tag(std::string_view key, double value) {
-        char* buf = __arena_buf();
-        int n = std::snprintf(buf, 32, "%.6g", value);
-        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        const std::string_view text = __scratch.store_number("%.6g", value);
+        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
         return *this;
     }
 
 private:
-    char* __arena_buf() {
-        return this_thread_arena.allocate(32);
-    }
-
     LogBuffer& __buffer;
     LogRecord __record{};
+    detail::StringScratch __scratch;
 };
 
 // ── MetricBuilder ─────────────────────────────────────────────────────────────
@@ -195,18 +286,13 @@ class MetricBuilder {
 public:
     MetricBuilder(MetricBuffer& buffer, std::string_view name, double value)
         : __buffer(buffer) {
-        __record.name = name;
+        __record.name = __scratch.store(name);
         __record.value = value;
         __record.timestamp_ns = now_ns();
     }
 
     ~MetricBuilder() {
-        TagSet<8> scope_tags;
-        detail::collect_scope_tags(scope_tags);
-        const TagSet<8>* inst_tags = detail::current_instance_tags();
-        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
-                              scope_tags.count() > 0 ? &scope_tags : nullptr,
-                              inst_tags);
+        detail::finalize(__record);
         __buffer.push(std::move(__record));
     }
 
@@ -214,29 +300,24 @@ public:
     MetricBuilder& operator=(const MetricBuilder&) = delete;
 
     MetricBuilder& tag(std::string_view key, std::string_view value) {
-        __record.tags.add(key, value);
+        __record.tags.add(__scratch.store(key), __scratch.store(value));
         return *this;
     }
     MetricBuilder& tag(std::string_view key, int64_t value) {
-        char* buf = __arena_buf();
-        int n = std::snprintf(buf, 32, "%lld", static_cast<long long>(value));
-        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        const std::string_view text = __scratch.store_number("%lld", static_cast<long long>(value));
+        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
         return *this;
     }
     MetricBuilder& tag(std::string_view key, double value) {
-        char* buf = __arena_buf();
-        int n = std::snprintf(buf, 32, "%.6g", value);
-        if (n > 0 && n < 32) __record.tags.add(key, std::string_view(buf, static_cast<size_t>(n)));
+        const std::string_view text = __scratch.store_number("%.6g", value);
+        if (!text.empty()) __record.tags.add(__scratch.store(key), text);
         return *this;
     }
 
 private:
-    char* __arena_buf() {
-        return this_thread_arena.allocate(32);
-    }
-
     MetricBuffer& __buffer;
     MetricRecord __record{};
+    detail::StringScratch __scratch;
 };
 
 // ── ProgressHandle ────────────────────────────────────────────────────────────
@@ -244,24 +325,14 @@ private:
 class ProgressHandle {
 public:
     ProgressHandle(ProgressBuffer& buffer, std::string_view label, uint64_t total)
-        : __buffer(&buffer) {
+        : __buffer(&buffer), __label(label), __total(total), __timestamp_ns(now_ns()) {
         static std::atomic<uint64_t> __next_id{1};
-        __record.id = __next_id.fetch_add(1, std::memory_order_relaxed);
-        __record.label = label;
-        __record.current = 0;
-        __record.total = total;
-        __record.timestamp_ns = now_ns();
+        __id = __next_id.fetch_add(1, std::memory_order_relaxed);
     }
 
     ~ProgressHandle() {
         if (!__finished) {
-            TagSet<8> scope_tags;
-            detail::collect_scope_tags(scope_tags);
-            const TagSet<8>* inst_tags = detail::current_instance_tags();
-            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
-                                  scope_tags.count() > 0 ? &scope_tags : nullptr,
-                                  inst_tags);
-            __buffer->push(std::move(__record));
+            __push();
         }
     }
 
@@ -270,14 +341,25 @@ public:
 
     ProgressHandle(ProgressHandle&& other) noexcept
         : __buffer(other.__buffer)
-        , __record(other.__record)
+        , __label(std::move(other.__label))
+        , __id(other.__id)
+        , __current(other.__current)
+        , __total(other.__total)
+        , __timestamp_ns(other.__timestamp_ns)
         , __finished(other.__finished) {
         other.__finished = true;
     }
     ProgressHandle& operator=(ProgressHandle&& other) noexcept {
         if (this != &other) {
+            if (!__finished) {
+                __push();
+            }
             __buffer = other.__buffer;
-            __record = other.__record;
+            __label = std::move(other.__label);
+            __id = other.__id;
+            __current = other.__current;
+            __total = other.__total;
+            __timestamp_ns = other.__timestamp_ns;
             __finished = other.__finished;
             other.__finished = true;
         }
@@ -285,43 +367,42 @@ public:
     }
 
     void update(uint64_t current) {
-        __record.current = current;
-        __record.timestamp_ns = now_ns();
-        __push_current();
+        __current = current;
+        __timestamp_ns = now_ns();
+        __push();
     }
 
     void tick() {
-        update(__record.current + 1);
+        update(__current + 1);
     }
 
     void finish() {
-        __record.current = __record.total;
-        __record.timestamp_ns = now_ns();
+        __current = __total;
+        __timestamp_ns = now_ns();
         if (!__finished) {
-            TagSet<8> scope_tags;
-            detail::collect_scope_tags(scope_tags);
-            const TagSet<8>* inst_tags = detail::current_instance_tags();
-            detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
-                                  scope_tags.count() > 0 ? &scope_tags : nullptr,
-                                  inst_tags);
-            __buffer->push(ProgressRecord{__record});
+            __push();
             __finished = true;
         }
     }
 
 private:
-    void __push_current() {
-        TagSet<8> scope_tags;
-        detail::collect_scope_tags(scope_tags);
-        const TagSet<8>* inst_tags = detail::current_instance_tags();
-        detail::merge_context(__record, detail::proc_tags(), detail::tls_tags(),
-                              scope_tags.count() > 0 ? &scope_tags : nullptr,
-                              inst_tags);
-        __buffer->push(ProgressRecord{__record});
+    void __push() {
+        ProgressRecord record{};
+        record.id = __id;
+        record.label = __label;
+        record.current = __current;
+        record.total = __total;
+        record.timestamp_ns = __timestamp_ns;
+        detail::finalize(record);
+        __buffer->push(std::move(record));
     }
 
     ProgressBuffer* __buffer;  // non-owning
-    ProgressRecord __record{};
+    std::string __label;
+    uint64_t __id = 0;
+    uint64_t __current = 0;
+    uint64_t __total = 0;
+    uint64_t __timestamp_ns = 0;
     bool __finished = false;
 };
 
@@ -358,35 +439,33 @@ private:
 #define __has_cpp_attribute(x) 0
 #endif
 
+// Written as `if constexpr (!enabled) {} else expr` so that a user's
+// `if (c) LOG_INFO("x"); else ...` binds the `else` to their own `if`.
 #define LUMEN_IF_ENABLED(LEVEL, expr) \
-    if constexpr (LUMEN_LEVEL_##LEVEL >= LUMEN_MIN_LEVEL_INT) expr
+    if constexpr (!(LUMEN_LEVEL_##LEVEL >= LUMEN_MIN_LEVEL_INT)) {} else expr
+
+#define LUMEN_LOG_AT(LEVEL, ...) \
+    LUMEN_IF_ENABLED(LEVEL, \
+        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::LEVEL, \
+                             lumen::detail::format_message(__VA_ARGS__)))
 
 // ── Log macros ────────────────────────────────────────────────────────────────
+//
+//   LOG_INFO("plain message");                 // logged verbatim
+//   LOG_INFO("energy {:.2f} GeV", energy);     // std::format, checked at compile time
+//   LOG_INFO("done").tag("n", int64_t{42});    // chain tags
 
-#define LOG_TRACE(msg) \
-    LUMEN_IF_ENABLED(TRACE, \
-        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::TRACE, msg))
+#define LOG_TRACE(...) LUMEN_LOG_AT(TRACE, __VA_ARGS__)
+#define LOG_DEBUG(...) LUMEN_LOG_AT(DEBUG, __VA_ARGS__)
+#define LOG_INFO(...)  LUMEN_LOG_AT(INFO, __VA_ARGS__)
+#define LOG_WARN(...)  LUMEN_LOG_AT(WARN, __VA_ARGS__)
+#define LOG_ERROR(...) LUMEN_LOG_AT(ERROR, __VA_ARGS__)
 
-#define LOG_DEBUG(msg) \
-    LUMEN_IF_ENABLED(DEBUG, \
-        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::DEBUG, msg))
-
-#define LOG_INFO(msg) \
-    LUMEN_IF_ENABLED(INFO, \
-        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::INFO, msg))
-
-#define LOG_WARN(msg) \
-    LUMEN_IF_ENABLED(WARN, \
-        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::WARN, msg))
-
-#define LOG_ERROR(msg) \
-    LUMEN_IF_ENABLED(ERROR, \
-        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::ERROR, msg))
-
-#define LOG_FATAL(msg) do { \
+#define LOG_FATAL(...) do { \
     { \
         lumen::RecordBuilder LUMEN_CONCAT(__lumen_fatal_, __LINE__) \
-            (lumen::core().log_buffer(), lumen::LogLevel::FATAL, msg); \
+            (lumen::core().log_buffer(), lumen::LogLevel::FATAL, \
+             lumen::detail::format_message(__VA_ARGS__)); \
     } \
     lumen::core().flush(); \
     std::terminate(); \
