@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.28)
+
+# Must precede project(): vcpkg installs manifest dependencies while the
+# toolchain is loaded. pybind11 (and the python3 build it pulls in) is only
+# needed for the bindings.
+if(LUMEN_ENABLE_PYTHON)
+  list(APPEND VCPKG_MANIFEST_FEATURES "python")
+endif()
+
 project(lumen VERSION 0.1.0 LANGUAGES CXX)
 
 # ── C++ Standard ──────────────────────────────────────────────────────────────
