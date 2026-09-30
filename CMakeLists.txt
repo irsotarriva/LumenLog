@@ -81,10 +81,6 @@ set(LUMEN_MIN_LEVEL "DEBUG" CACHE STRING "Elides records below this level at com
 target_compile_definitions(lumen PUBLIC LUMEN_MIN_LEVEL=${LUMEN_MIN_LEVEL})
 
 
-# Arena size
-set(LUMEN_ARENA_SIZE_KB "4" CACHE STRING "Per-thread arena size in KB")
-target_compile_definitions(lumen PRIVATE LUMEN_ARENA_SIZE_KB=${LUMEN_ARENA_SIZE_KB})
-
 # Buffer capacities
 set(LUMEN_LOG_CAPACITY "65536" CACHE STRING "LogBuffer slot count (must be power of two)")
 set(LUMEN_METRIC_CAPACITY "16384" CACHE STRING "MetricBuffer slot count")

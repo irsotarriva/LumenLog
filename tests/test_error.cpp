@@ -19,8 +19,6 @@ TEST(LumenErrorTest, ErrorCategoryName) {
 
 TEST(LumenErrorTest, ErrorMessages) {
     EXPECT_EQ(lumen_error_category().message(0), "no error");
-    EXPECT_EQ(lumen_error_category().message(static_cast<int>(LumenError::arena_overflow)),
-              "thread-local arena overflow");
     EXPECT_EQ(lumen_error_category().message(static_cast<int>(LumenError::buffer_full)),
               "ring buffer is full");
     EXPECT_EQ(lumen_error_category().message(static_cast<int>(LumenError::invalid_sink_id)),
@@ -33,13 +31,12 @@ TEST(LumenErrorTest, IsErrorCodeEnum) {
 
 TEST(LumenErrorTest, CategoryEquality) {
     std::error_code ec1 = make_error_code(LumenError::none);
-    std::error_code ec2 = make_error_code(LumenError::arena_overflow);
+    std::error_code ec2 = make_error_code(LumenError::buffer_full);
     EXPECT_EQ(ec1.category(), ec2.category());
 }
 
 TEST(LumenErrorTest, ErrorCodeDistinctValues) {
-    EXPECT_NE(static_cast<int>(LumenError::none), static_cast<int>(LumenError::arena_overflow));
-    EXPECT_NE(static_cast<int>(LumenError::arena_overflow), static_cast<int>(LumenError::buffer_full));
+    EXPECT_NE(static_cast<int>(LumenError::none), static_cast<int>(LumenError::buffer_full));
     EXPECT_NE(static_cast<int>(LumenError::buffer_full), static_cast<int>(LumenError::invalid_sink_id));
 }
 

@@ -300,7 +300,7 @@ TEST_F(MacroTest, RuntimeStringTagOutlivesTemporary) {
     EXPECT_EQ(raw->logs[0].tags.find("dynamic_key_long_enough_for_heap"), std::string(48, 'v'));
 }
 
-TEST_F(MacroTest, NumericTagsSurviveBurstLargerThanArena) {
+TEST_F(MacroTest, NumericTagsSurviveLargeBurst) {
     auto sink = std::make_unique<CaptureSink>();
     auto* raw = sink.get();
     register_sink(std::move(sink), always());

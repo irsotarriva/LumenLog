@@ -8,7 +8,6 @@ namespace lumen {
 
 enum class LumenError : int {
     none = 0,
-    arena_overflow,
     buffer_full,
     invalid_sink_id,
     io_error,
