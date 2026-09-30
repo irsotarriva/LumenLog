@@ -359,5 +359,57 @@ TEST(PredicateTest, LevelCompareAllOperators) {
     EXPECT_TRUE(level_compare(CompareOp::NE, LogLevel::WARN).evaluate(tags, LogLevel::INFO));
 }
 
+// ── Records without a level (metrics, progress) ──────────────────────────────
+
+TEST(PredicateTest, LevelOnlyPredicatesPassRecordsWithoutLevel) {
+    const TagSet<16> tags;
+    EXPECT_TRUE(level_at_least(LogLevel::FATAL).evaluate(tags));
+    EXPECT_TRUE(level_equals(LogLevel::ERROR).evaluate(tags));
+    EXPECT_TRUE(level_compare(CompareOp::LT, LogLevel::TRACE).evaluate(tags));
+    EXPECT_TRUE((!level_at_least(LogLevel::WARN)).evaluate(tags));
+    EXPECT_TRUE((level_at_least(LogLevel::WARN) && level_equals(LogLevel::INFO)).evaluate(tags));
+}
+
+TEST(PredicateTest, LevelConditionIsIgnoredInsideAnd) {
+    TagSet<16> match;
+    match.add("vessel_id", "42");
+    TagSet<16> other;
+    other.add("vessel_id", "7");
+    const Predicate p = level_at_least(LogLevel::WARN) && tag_compare("vessel_id", CompareOp::EQ, 42);
+
+    EXPECT_TRUE(p.evaluate(match));
+    EXPECT_FALSE(p.evaluate(other));
+}
+
+TEST(PredicateTest, LevelConditionIsIgnoredInsideOr) {
+    // Treating the level part as "true" would pass every metric here.
+    TagSet<16> other;
+    other.add("vessel_id", "7");
+    const Predicate p = level_at_least(LogLevel::WARN) || tag_compare("vessel_id", CompareOp::EQ, 42);
+
+    EXPECT_FALSE(p.evaluate(other));
+}
+
+TEST(PredicateTest, NegatedLevelConditionIsIgnored) {
+    TagSet<16> tags;
+    tags.add("suppress", "1");
+    EXPECT_FALSE((!level_at_least(LogLevel::WARN) && !tag_exists("suppress")).evaluate(tags));
+    EXPECT_TRUE((!level_at_least(LogLevel::WARN) || tag_exists("suppress")).evaluate(tags));
+}
+
+TEST(PredicateTest, TagOnlyPredicatesBehaveTheSameWithOrWithoutLevel) {
+    TagSet<16> tags;
+    tags.add("env", "prod");
+    const Predicate p = tag_equals("env", "prod") && !tag_exists("suppress");
+    EXPECT_EQ(p.evaluate(tags), p.evaluate(tags, LogLevel::TRACE));
+    EXPECT_FALSE(never().evaluate(tags));
+}
+
+TEST(PredicateTest, LevelStillFiltersLogRecords) {
+    const TagSet<16> tags;
+    EXPECT_FALSE(level_at_least(LogLevel::WARN).evaluate(tags, LogLevel::INFO));
+    EXPECT_FALSE((!level_at_least(LogLevel::INFO)).evaluate(tags, LogLevel::WARN));
+}
+
 }  // namespace
 }  // namespace lumen

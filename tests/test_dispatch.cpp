@@ -552,5 +552,47 @@ TEST_F(DispatchTest, SinkExceptionCountForUnknownSinkIsError) {
     EXPECT_EQ(count.error(), make_error_code(LumenError::invalid_sink_id));
 }
 
+// ── Level filters and records without a level ────────────────────────────────
+
+TEST_F(DispatchTest, LevelFilteredSinkReceivesAllMetricsAndProgress) {
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), level_at_least(LogLevel::WARN));
+
+    LOG_INFO("filtered out");
+    LOG_ERROR("passes");
+    lumen::metric("altitude", 69999.97);
+    {
+        auto handle = lumen::progress("burn", 2);
+        handle.finish();
+    }
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    EXPECT_EQ(raw->logs.size(), 1u);
+    EXPECT_EQ(raw->metrics.size(), 1u);
+    EXPECT_EQ(raw->progress.size(), 1u);
+}
+
+TEST_F(DispatchTest, ParsedQueryFiltersMetricsByTagsOnly) {
+    auto parsed = parse_predicate("level >= WARN && vessel_id == 42");
+    ASSERT_TRUE(parsed.has_value());
+    auto sink = std::make_unique<CaptureSink>();
+    auto* raw = sink.get();
+    register_sink(std::move(sink), std::move(*parsed));
+
+    lumen::metric("thrust", 1.0).tag("vessel_id", 42);
+    lumen::metric("thrust", 2.0).tag("vessel_id", 7);
+    LOG_INFO("wrong level").tag("vessel_id", 42);
+    LOG_WARN("right level").tag("vessel_id", 42);
+    core().flush();
+
+    std::lock_guard lock(raw->mtx);
+    ASSERT_EQ(raw->metrics.size(), 1u);
+    EXPECT_DOUBLE_EQ(raw->metrics[0].value, 1.0);
+    ASSERT_EQ(raw->logs.size(), 1u);
+    EXPECT_EQ(raw->logs[0].message, "right level");
+}
+
 }  // namespace
 }  // namespace lumen

@@ -282,7 +282,7 @@ void Core::__dispatch_log(const LogRecord& record) {
 void Core::__dispatch_metric(const MetricRecord& record) {
     std::lock_guard lock(__sink_mutex);
     for (auto& entry : __sinks) {
-        if (entry.predicate.evaluate(record.tags, LogLevel::TRACE)) {
+        if (entry.predicate.evaluate(record.tags)) {
             call_sink(entry, "on_metric", [&] { entry.sink->on_metric(record); });
         }
     }
@@ -291,7 +291,7 @@ void Core::__dispatch_metric(const MetricRecord& record) {
 void Core::__dispatch_progress(const ProgressRecord& record) {
     std::lock_guard lock(__sink_mutex);
     for (auto& entry : __sinks) {
-        if (entry.predicate.evaluate(record.tags, LogLevel::TRACE)) {
+        if (entry.predicate.evaluate(record.tags)) {
             call_sink(entry, "on_progress", [&] { entry.sink->on_progress(record); });
         }
     }

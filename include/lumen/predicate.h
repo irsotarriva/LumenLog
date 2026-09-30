@@ -24,7 +24,13 @@ enum class CompareOp : uint8_t {
 
 class Predicate {
 public:
-    bool evaluate(const TagSet<16>& tags, LogLevel level) const;
+    // For log records.
+    [[nodiscard]] bool evaluate(const TagSet<16>& tags, LogLevel level) const;
+    // For records without a level (metrics, progress): level conditions are
+    // ignored, as if absent from the predicate, and the tag conditions decide.
+    // So `level >= WARN` passes every metric, and
+    // `level >= WARN && vessel_id == 42` passes metrics with vessel_id 42.
+    [[nodiscard]] bool evaluate(const TagSet<16>& tags) const;
 
     Predicate();
     Predicate(const Predicate& other);

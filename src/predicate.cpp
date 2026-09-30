@@ -7,9 +7,15 @@
 
 namespace lumen {
 
+// A node's result is true, false, or nullopt ("no opinion"): a level condition
+// evaluated for a record that has no level (metrics, progress). Combinators
+// treat a no-opinion operand as absent, so for such records the level parts of
+// a predicate are ignored and the rest of it decides.
+using Verdict = std::optional<bool>;
+
 struct Predicate::Node {
     virtual ~Node() = default;
-    virtual bool evaluate(const TagSet<16>& tags, LogLevel level) const = 0;
+    virtual Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel> level) const = 0;
     virtual std::unique_ptr<Node> clone() const = 0;
 };
 
@@ -40,14 +46,14 @@ std::optional<double> parse_number(std::string_view text) {
 }
 
 struct AlwaysNode : Predicate::Node {
-    bool evaluate(const TagSet<16>&, LogLevel) const override { return true; }
+    Verdict evaluate(const TagSet<16>&, std::optional<LogLevel>) const override { return true; }
     std::unique_ptr<Predicate::Node> clone() const override {
         return std::make_unique<AlwaysNode>();
     }
 };
 
 struct NeverNode : Predicate::Node {
-    bool evaluate(const TagSet<16>&, LogLevel) const override { return false; }
+    Verdict evaluate(const TagSet<16>&, std::optional<LogLevel>) const override { return false; }
     std::unique_ptr<Predicate::Node> clone() const override {
         return std::make_unique<NeverNode>();
     }
@@ -56,8 +62,9 @@ struct NeverNode : Predicate::Node {
 struct LevelAtLeastNode : Predicate::Node {
     LogLevel min_level;
     explicit LevelAtLeastNode(LogLevel l) : min_level(l) {}
-    bool evaluate(const TagSet<16>&, LogLevel level) const override {
-        return level >= min_level;
+    Verdict evaluate(const TagSet<16>&, std::optional<LogLevel> level) const override {
+        if (!level) return std::nullopt;
+        return *level >= min_level;
     }
     std::unique_ptr<Predicate::Node> clone() const override {
         return std::make_unique<LevelAtLeastNode>(min_level);
@@ -67,8 +74,9 @@ struct LevelAtLeastNode : Predicate::Node {
 struct LevelEqualsNode : Predicate::Node {
     LogLevel target;
     explicit LevelEqualsNode(LogLevel l) : target(l) {}
-    bool evaluate(const TagSet<16>&, LogLevel level) const override {
-        return level == target;
+    Verdict evaluate(const TagSet<16>&, std::optional<LogLevel> level) const override {
+        if (!level) return std::nullopt;
+        return *level == target;
     }
     std::unique_ptr<Predicate::Node> clone() const override {
         return std::make_unique<LevelEqualsNode>(target);
@@ -79,7 +87,7 @@ struct TagEqualsNode : Predicate::Node {
     std::string key;
     std::string value;
     TagEqualsNode(std::string_view k, std::string_view v) : key(k), value(v) {}
-    bool evaluate(const TagSet<16>& tags, LogLevel) const override {
+    Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel>) const override {
         return tags.find(key) == value;
     }
     std::unique_ptr<Predicate::Node> clone() const override {
@@ -90,7 +98,7 @@ struct TagEqualsNode : Predicate::Node {
 struct TagExistsNode : Predicate::Node {
     std::string key;
     explicit TagExistsNode(std::string_view k) : key(k) {}
-    bool evaluate(const TagSet<16>& tags, LogLevel) const override {
+    Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel>) const override {
         return tags.contains(key);
     }
     std::unique_ptr<Predicate::Node> clone() const override {
@@ -102,8 +110,9 @@ struct LevelCompareNode : Predicate::Node {
     CompareOp op;
     LogLevel target;
     LevelCompareNode(CompareOp o, LogLevel l) : op(o), target(l) {}
-    bool evaluate(const TagSet<16>&, LogLevel level) const override {
-        return compare(op, static_cast<uint32_t>(level), static_cast<uint32_t>(target));
+    Verdict evaluate(const TagSet<16>&, std::optional<LogLevel> level) const override {
+        if (!level) return std::nullopt;
+        return compare(op, static_cast<uint32_t>(*level), static_cast<uint32_t>(target));
     }
     std::unique_ptr<Predicate::Node> clone() const override {
         return std::make_unique<LevelCompareNode>(op, target);
@@ -115,7 +124,7 @@ struct TagCompareNode : Predicate::Node {
     CompareOp op;
     double value;
     TagCompareNode(std::string_view k, CompareOp o, double v) : key(k), op(o), value(v) {}
-    bool evaluate(const TagSet<16>& tags, LogLevel) const override {
+    Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel>) const override {
         if (!tags.contains(key)) return false;
         const std::optional<double> tag_value = parse_number(tags.find(key));
         return tag_value.has_value() && compare(op, *tag_value, value);
@@ -128,8 +137,13 @@ struct TagCompareNode : Predicate::Node {
 struct AndNode : Predicate::Node {
     std::unique_ptr<Predicate::Node> left;
     std::unique_ptr<Predicate::Node> right;
-    bool evaluate(const TagSet<16>& tags, LogLevel level) const override {
-        return left->evaluate(tags, level) && right->evaluate(tags, level);
+    Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel> level) const override {
+        const Verdict lhs = left->evaluate(tags, level);
+        if (lhs == false) return false;
+        const Verdict rhs = right->evaluate(tags, level);
+        if (!lhs) return rhs;
+        if (!rhs) return lhs;
+        return *lhs && *rhs;
     }
     std::unique_ptr<Predicate::Node> clone() const override {
         auto n = std::make_unique<AndNode>();
@@ -142,8 +156,13 @@ struct AndNode : Predicate::Node {
 struct OrNode : Predicate::Node {
     std::unique_ptr<Predicate::Node> left;
     std::unique_ptr<Predicate::Node> right;
-    bool evaluate(const TagSet<16>& tags, LogLevel level) const override {
-        return left->evaluate(tags, level) || right->evaluate(tags, level);
+    Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel> level) const override {
+        const Verdict lhs = left->evaluate(tags, level);
+        if (lhs == true) return true;
+        const Verdict rhs = right->evaluate(tags, level);
+        if (!lhs) return rhs;
+        if (!rhs) return lhs;
+        return *lhs || *rhs;
     }
     std::unique_ptr<Predicate::Node> clone() const override {
         auto n = std::make_unique<OrNode>();
@@ -155,8 +174,10 @@ struct OrNode : Predicate::Node {
 
 struct NotNode : Predicate::Node {
     std::unique_ptr<Predicate::Node> child;
-    bool evaluate(const TagSet<16>& tags, LogLevel level) const override {
-        return !child->evaluate(tags, level);
+    Verdict evaluate(const TagSet<16>& tags, std::optional<LogLevel> level) const override {
+        const Verdict inner = child->evaluate(tags, level);
+        if (!inner) return std::nullopt;
+        return !*inner;
     }
     std::unique_ptr<Predicate::Node> clone() const override {
         auto n = std::make_unique<NotNode>();
@@ -187,7 +208,14 @@ Predicate& Predicate::operator=(Predicate&&) noexcept = default;
 
 bool Predicate::evaluate(const TagSet<16>& tags, LogLevel level) const {
     if (!__node) return true;
-    return __node->evaluate(tags, level);
+    return __node->evaluate(tags, level).value_or(true);
+}
+
+bool Predicate::evaluate(const TagSet<16>& tags) const {
+    if (!__node) return true;
+    // Only level conditions can be undecided, and a predicate made only of
+    // them places no constraint on a record without a level.
+    return __node->evaluate(tags, std::nullopt).value_or(true);
 }
 
 Predicate always() {

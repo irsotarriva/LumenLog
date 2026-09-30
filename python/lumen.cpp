@@ -295,8 +295,13 @@ PYBIND11_MODULE(lumen_bindings, m) {
 
     py::class_<Predicate>(m, "Predicate")
         .def(py::init<>())
-        .def("evaluate", &Predicate::evaluate,
+        .def("evaluate",
+             py::overload_cast<const TagSet<16>&, LogLevel>(&Predicate::evaluate, py::const_),
              py::arg("tags"), py::arg("level"))
+        .def("evaluate",
+             py::overload_cast<const TagSet<16>&>(&Predicate::evaluate, py::const_),
+             py::arg("tags"),
+             "Evaluate for a record without a level (metric, progress); level conditions are ignored")
         .def("__and__", [](const Predicate& a, const Predicate& b) {
             return a && b;
         })

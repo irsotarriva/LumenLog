@@ -64,7 +64,16 @@ Any comparison against a missing tag is false. To let records without the tag th
 
 Queries nested more than 64 levels deep are rejected, so a query typed into a console cannot exhaust the stack.
 
-`level_at_least` and `level_equals` match only `LogRecord` types. They are inert for `MetricRecord` and `ProgressRecord` — those record types always pass level checks.
+Level conditions (`level_at_least`, `level_equals`, `level_compare`, `level …` in a query) apply only to `LogRecord`s. `MetricRecord` and `ProgressRecord` have no level, so for them every level condition is ignored — treated as if it were not in the predicate at all — and the tag conditions decide:
+
+| Predicate | Log record | Metric / progress record |
+|---|---|---|
+| `level >= WARN` | level ≥ WARN | always passes |
+| `level >= WARN && vessel_id == 42` | both | `vessel_id == 42` |
+| `level >= WARN \|\| vessel_id == 42` | either | `vessel_id == 42` |
+| `!(level >= WARN)` | level < WARN | always passes |
+
+Ignoring the condition, rather than treating it as true, matters under `||`: `level >= WARN || vessel_id == 42` does not flood a sink with every metric.
 
 ## Composition
 
