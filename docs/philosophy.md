@@ -63,9 +63,7 @@ An ML engineer inherits from `lumen::Tagged` in their model class. Every log fro
 
 ## Producers don't allocate
 
-The emit path touches no heap. Tags from string literals are zero-copy `string_view` into read-only memory. Formatted messages go into a thread-local 4 KB arena, recycled after the dispatch thread finishes reading. The arena is a simple bump allocator — a pointer increment and bounds check.
-
-On overflow (a record exceeding 4 KB — rare in practice), the arena spills to `std::string` and logs a warning. This is an exceptional path, not the common one.
+The emit path does the minimum needed to make a record safe to consume on another thread. While a record is being built, its message and tags are copied into a 512-byte buffer on the builder's stack (longer strings spill to the heap). When the statement ends, everything is packed into one immutable, reference-counted block owned by the record: one heap allocation per record, and no locks. Records never point into the producer's memory, so logging temporaries is safe and a record stays valid for as long as a sink keeps a copy.
 
 ## Consumers don't slow producers
 

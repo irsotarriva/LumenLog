@@ -59,7 +59,7 @@ Set a tag attached to every record from the calling thread. Call at thread creat
 void flush();
 ```
 
-Wake the dispatch thread and block until all pending records are consumed by all sinks.
+Block until every record emitted before the call has been delivered to the sinks and each sink's `flush()` has returned (for `FileSink`/`JsonSink`: the data has been written to the file). Pending records are drained on the calling thread, serialised with the dispatch thread, so sinks are never called concurrently. Calling `flush()` from inside a sink callback is a no-op.
 
 ## Record types
 
@@ -73,8 +73,11 @@ struct LogRecord {
     uint64_t         timestamp_ns;
     uint32_t         thread_id;
     SourceLocation   source;         // { file, function, class_name, line }
+    std::shared_ptr<const char[]> storage;  // owns message and tag strings
 };
 ```
+
+Every record owns its strings: when a record is emitted, the message (or metric name, or progress label) and all tag keys and values are copied into `storage`, a NUL-terminated block shared by the record's copies. It is therefore safe to log temporaries (`LOG_INFO(std::format(...))`, `.tag("k", some_string)`), and a sink may keep a copy of a record for as long as it likes. `SourceLocation` strings are static and are not copied. The same applies to `MetricRecord` and `ProgressRecord`.
 
 ### `MetricRecord`
 
@@ -84,6 +87,7 @@ struct MetricRecord {
     double           value;
     TagSet<16>       tags;
     uint64_t         timestamp_ns;
+    std::shared_ptr<const char[]> storage;
 };
 ```
 
@@ -97,6 +101,7 @@ struct ProgressRecord {
     uint64_t         total;
     TagSet<16>       tags;
     uint64_t         timestamp_ns;
+    std::shared_ptr<const char[]> storage;
 };
 ```
 
@@ -128,7 +133,7 @@ LOG_ERROR(fmt, ...)    // Severity 4
 LOG_FATAL(fmt, ...)    // Severity 5 — calls std::terminate after dispatch
 ```
 
-`fmt` uses `std::format` conventions. Each macro returns `RecordBuilder&` for `.tag()` chaining. `LOG_FATAL` flushes all sinks before terminating.
+With a single argument the message is logged verbatim (no format parsing, so runtime strings and braces are fine). With more arguments, `fmt` is a `std::format` string checked at compile time. Each macro returns `RecordBuilder&` for `.tag()` chaining. `LOG_FATAL` flushes all sinks before terminating.
 
 Below `LUMEN_MIN_LEVEL`, macros expand to `((void)0)`.
 

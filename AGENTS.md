@@ -43,9 +43,9 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 ## Architecture
 
 - **`lumen::core()`** — Meyer's singleton. Owns 3 MPSC ring buffers + dispatch thread + sink registry.
-- **Emit path:** `LOG_*` macro → `RecordBuilder` → thread-local arena (4 KB) → CAS push to MPSC ring → dispatch thread evaluates predicates → sink queues.
+- **Emit path:** `LOG_*` macro → `RecordBuilder` (copies strings) → context merge + owned string block → CAS push to MPSC ring → dispatch thread evaluates predicates → sink queues. `Core::flush()` drains on the caller's thread and flushes sinks.
 - **Context merge priority (first wins):** explicit `.tag()` > instance (`lumen::Tagged`) > scope (`LUMEN_SCOPE`) > thread (`set_thread_tag`) > process (`set_process_tag`).
-- **No heap allocation on hot path** — thread-local arena, spills to `std::string` only on overflow (rare, logged to stderr).
+- **Records own their strings** — builders copy message/tags into a stack scratch buffer, then pack them into one immutable `shared_ptr<const char[]>` block per record (one allocation, no locks). Never store a `string_view` into producer memory in a record.
 - **Sink `on_*` methods MUST be non-blocking** — called on the single dispatch thread. Offload I/O to sink-owned threads.
 - **Predicates** — compiled decision trees, immutable after registration. Composed with `&&`, `||`, `!`.
 - **Bridges** — opt-in headers (`lumen/bridges/*.h`), no core changes needed. Ships separately for torch, root, eigen, openmp.

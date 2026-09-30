@@ -21,7 +21,7 @@ If you're new, start with [Getting Started](getting-started.md). If you want to 
 ```
 LOG_INFO("msg")    ──►  5-layer context merge   ──►  lock-free ring buffer
                                                           │
-lumen::metric()    ──►  thread-local arena           dispatch thread
+lumen::metric()    ──►  record-owned strings         dispatch thread
                                                           │
 lumen::progress()  ──►  compile-time elision         predicate evaluation
                                                           │
