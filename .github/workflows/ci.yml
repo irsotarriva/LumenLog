@@ -161,7 +161,7 @@ jobs:
 
       - name: Benchmark (informational)
         if: matrix.bench
-        run: ./build/${{ matrix.preset }}/tests/lumen_bench
+        run: ./build/${{ matrix.preset }}/tests/lumen_bench_transport
 
   lint:
     name: lint (clang-format, clang-tidy)
