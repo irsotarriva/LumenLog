@@ -21,12 +21,13 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 | Entity | Convention |
 |---|---|
 | Classes / Concepts | `PascalCase` |
+| Enums | `enum class`, `PascalCase` enumerators (`LogLevel::Info`) |
 | Functions / methods | `snake_case` |
 | Private members | `snake_case_` suffix (never a leading `__`: reserved) |
 | Protected members | `_snake_case` prefix |
 | File names | `snake_case` |
 | Macros / `#define` | `ALL_CAPS` |
-| Header guards | `#ifndef` (not `#pragma once`) |
+| Header guards | `#ifndef LUMEN_<PATH>_HPP` (not `#pragma once`) |
 | Headers | `.hpp` for declaration + template; `.cpp` for implementation |
 
 **No exceptions.** All fallible operations return `std::expected<T, std::error_code>`.
@@ -43,7 +44,7 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 ## Architecture
 
 - **`lumen::core()`** — Meyer's singleton. Owns 3 MPSC ring buffers + dispatch thread + sink registry.
-- **Emit path:** `LOG_*` macro → `RecordBuilder` (copies strings) → context merge + owned string block → CAS push to MPSC ring → dispatch thread evaluates predicates → sink queues. `Core::flush()` drains on the caller's thread and flushes sinks.
+- **Emit path:** `LUMEN_LOG_*` macro (`lumen/macros.hpp`; short `LOG_*` aliases unless `LUMEN_NO_SHORT_MACROS` is defined) → `RecordBuilder` (copies strings) → context merge + owned string block → CAS push to MPSC ring → dispatch thread evaluates predicates → sink queues. `Core::flush()` drains on the caller's thread and flushes sinks.
 - **Context merge priority (first wins):** explicit `.tag()` > instance (`lumen::Tagged`) > scope (`LUMEN_SCOPE`) > thread (`set_thread_tag`) > process (`set_process_tag`).
 - **Records own their strings** — builders copy message/tags into a stack scratch buffer, then pack them into one immutable `shared_ptr<const char[]>` block per record (one allocation, no locks). Never store a `string_view` into producer memory in a record.
 - **Sink `on_*` methods MUST be non-blocking** — called on the single dispatch thread. Offload I/O to sink-owned threads.
@@ -55,7 +56,7 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 
 | Flag | Default | Description |
 |---|---|---|
-| `LUMEN_MIN_LEVEL` | `DEBUG` | Elides logs below this level at compile time |
+| `LUMEN_MIN_LEVEL` | `DEBUG` | Elides logs below this level at compile time. CMake validates the name and passes its value as `LUMEN_MIN_LEVEL_VALUE` (0 = Trace … 5 = Fatal); the header defaults to Debug |
 | `LUMEN_ENABLE_DASHBOARD` | `ON` | FTXUI terminal dashboard |
 | `LUMEN_ENABLE_LATEX` | `OFF` | MicroTeX math rendering in sinks |
 | `LUMEN_ENABLE_PYTHON` | `OFF` | pybind11 Python bindings |
