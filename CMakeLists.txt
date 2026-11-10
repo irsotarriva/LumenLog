@@ -74,6 +74,7 @@ add_library(lumen
   src/core.cpp
   src/sink.cpp
   src/predicate.cpp
+  src/predicate_lexer.cpp
   src/predicate_parser.cpp
   src/context.cpp
   src/tagged.cpp
