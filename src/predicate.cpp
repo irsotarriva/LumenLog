@@ -25,12 +25,12 @@ namespace {
 template <typename T>
 bool compare(CompareOp op, T lhs, T rhs) {
     switch (op) {
-        case CompareOp::EQ: return lhs == rhs;
-        case CompareOp::NE: return lhs != rhs;
-        case CompareOp::LT: return lhs < rhs;
-        case CompareOp::LE: return lhs <= rhs;
-        case CompareOp::GT: return lhs > rhs;
-        case CompareOp::GE: return lhs >= rhs;
+        case CompareOp::Equal: return lhs == rhs;
+        case CompareOp::NotEqual: return lhs != rhs;
+        case CompareOp::Less: return lhs < rhs;
+        case CompareOp::LessEqual: return lhs <= rhs;
+        case CompareOp::Greater: return lhs > rhs;
+        case CompareOp::GreaterEqual: return lhs >= rhs;
     }
     return false;
 }
@@ -241,19 +241,19 @@ Predicate tag_compare(std::string_view key, CompareOp op, double value) {
 }
 
 Predicate tag_less(std::string_view key, double value) {
-    return tag_compare(key, CompareOp::LT, value);
+    return tag_compare(key, CompareOp::Less, value);
 }
 
 Predicate tag_less_equal(std::string_view key, double value) {
-    return tag_compare(key, CompareOp::LE, value);
+    return tag_compare(key, CompareOp::LessEqual, value);
 }
 
 Predicate tag_greater(std::string_view key, double value) {
-    return tag_compare(key, CompareOp::GT, value);
+    return tag_compare(key, CompareOp::Greater, value);
 }
 
 Predicate tag_greater_equal(std::string_view key, double value) {
-    return tag_compare(key, CompareOp::GE, value);
+    return tag_compare(key, CompareOp::GreaterEqual, value);
 }
 
 Predicate operator&&(const Predicate& a, const Predicate& b) {

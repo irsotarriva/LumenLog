@@ -33,7 +33,7 @@ enum class TokenKind : uint8_t {
 struct Token {
     TokenKind kind = TokenKind::End;
     std::string text;  // identifier/number spelling, or unescaped string contents
-    CompareOp op = CompareOp::EQ;
+    CompareOp op = CompareOp::Equal;
     double number = 0.0;
     size_t position = 0;
 };
@@ -151,7 +151,7 @@ private:
                 error_ = make_error_(pos_, "expected '==' (single '=' is not an operator)");
                 return false;
             }
-            token_.op = CompareOp::EQ;
+            token_.op = CompareOp::Equal;
         } else if (c == '!') {
             if (!has_eq) {
                 token_.kind = TokenKind::Not;
@@ -159,11 +159,11 @@ private:
                 ++pos_;
                 return true;
             }
-            token_.op = CompareOp::NE;
+            token_.op = CompareOp::NotEqual;
         } else if (c == '<') {
-            token_.op = has_eq ? CompareOp::LE : CompareOp::LT;
+            token_.op = has_eq ? CompareOp::LessEqual : CompareOp::Less;
         } else {
-            token_.op = has_eq ? CompareOp::GE : CompareOp::GT;
+            token_.op = has_eq ? CompareOp::GreaterEqual : CompareOp::Greater;
         }
         const size_t len = has_eq ? 2 : 1;
         token_.text = std::string(query_.substr(pos_, len));
@@ -338,13 +338,13 @@ private:
             return tag_compare(key, op, value);
         }
         if (token_.kind == TokenKind::String || token_.kind == TokenKind::Identifier) {
-            if (op != CompareOp::EQ && op != CompareOp::NE) {
+            if (op != CompareOp::Equal && op != CompareOp::NotEqual) {
                 error_ = make_error_(op_position, "'<', '<=', '>' and '>=' need a number on the right");
                 return std::nullopt;
             }
             std::string value = token_.text;
             if (!advance_()) return std::nullopt;
-            if (op == CompareOp::EQ) return tag_equals(key, value);
+            if (op == CompareOp::Equal) return tag_equals(key, value);
             return tag_exists(key) && !tag_equals(key, value);
         }
         error_ = make_error_(token_.position, "expected a value after '" + key + "'");
@@ -367,7 +367,7 @@ private:
     }
 
     [[nodiscard]] static PredicateParseError make_error_(size_t position, std::string message) {
-        return PredicateParseError{make_error_code(LumenError::invalid_predicate), position,
+        return PredicateParseError{make_error_code(LumenError::InvalidPredicate), position,
                                    std::move(message)};
     }
 

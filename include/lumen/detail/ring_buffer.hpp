@@ -60,7 +60,7 @@ public:
     RingBuffer(RingBuffer&&) = delete;
     RingBuffer& operator=(RingBuffer&&) = delete;
 
-    template <OverflowPolicy Policy = OverflowPolicy::DROP_NEWEST, typename U = T>
+    template <OverflowPolicy Policy = OverflowPolicy::DropNewest, typename U = T>
     bool push(U&& item) {
         while (true) {
             uint64_t pos = head_.load(std::memory_order_relaxed);
@@ -83,9 +83,9 @@ public:
                 continue;
             }
 
-            if constexpr (Policy == OverflowPolicy::DROP_NEWEST) {
+            if constexpr (Policy == OverflowPolicy::DropNewest) {
                 return false;
-            } else if constexpr (Policy == OverflowPolicy::DROP_OLDEST) {
+            } else if constexpr (Policy == OverflowPolicy::DropOldest) {
                 if (diff < 0) {
                     uint64_t t = tail_.load(std::memory_order_relaxed);
                     if (pos - t >= capacity_) {

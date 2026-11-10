@@ -113,7 +113,7 @@ void wait_dispatch(int ms = 100) {
 }  // namespace lumen
 
 static void emit_from_free_function() {
-    lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::INFO, "from free function");
+    lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::Info, "from free function");
 }
 
 namespace lumen {
@@ -145,7 +145,7 @@ TEST_F(ReflectionMacroTest, LogFromClassPopulatesClassName) {
     {
         struct InnerScope {
             void emit() {
-                RecordBuilder(core().log_buffer(), LogLevel::INFO, "from member");
+                RecordBuilder(core().log_buffer(), LogLevel::Info, "from member");
             }
         };
         InnerScope is;

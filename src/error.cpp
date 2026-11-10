@@ -8,19 +8,19 @@ const char* LumenErrorCategory::name() const noexcept {
 
 std::string LumenErrorCategory::message(int ev) const {
     switch (static_cast<LumenError>(ev)) {
-        case LumenError::none:
+        case LumenError::None:
             return "no error";
-        case LumenError::buffer_full:
+        case LumenError::BufferFull:
             return "ring buffer is full";
-        case LumenError::invalid_sink_id:
+        case LumenError::InvalidSinkId:
             return "sink id not found";
-        case LumenError::io_error:
+        case LumenError::IoError:
             return "I/O error";
-        case LumenError::file_open_error:
+        case LumenError::FileOpenError:
             return "failed to open file";
-        case LumenError::sink_exception:
+        case LumenError::SinkException:
             return "exception caught in sink callback";
-        case LumenError::invalid_predicate:
+        case LumenError::InvalidPredicate:
             return "invalid predicate query";
     }
     return "unknown lumen error";

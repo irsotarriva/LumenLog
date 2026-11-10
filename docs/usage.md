@@ -120,26 +120,6 @@ LUMEN_LOOP("training batches", batch, num_batches) {
 
 `LUMEN_LOOP` creates a `ProgressHandle`, pushes scope tags, and ticks the progress bar at each iteration start. On scope exit, it pops the tags and finishes the progress bar.
 
-### LUMEN_FRAME_SCOPE
-
-Frame-aware scope for game loops:
-
-```cpp
-void frame_loop() {
-    uint64_t frame = 0;
-    while (running) {
-        float dt = clock.tick();
-        LUMEN_FRAME_SCOPE(frame, dt) {
-            update(dt);
-            render();
-        }
-        frame++;
-    }
-}
-```
-
-Carries `frame_number` and `delta_time_ms` on every record inside the frame.
-
 ### LUMEN_MEMBER_SCOPE
 
 Activate instance tags for the duration of a method:

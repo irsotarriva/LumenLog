@@ -6,11 +6,11 @@ namespace lumen {
 namespace {
 
 TEST(LogLevelTest, Ordering) {
-    EXPECT_LT(TRACE, DEBUG);
-    EXPECT_LT(DEBUG, INFO);
-    EXPECT_LT(INFO, WARN);
-    EXPECT_LT(WARN, ERROR);
-    EXPECT_LT(ERROR, FATAL);
+    EXPECT_LT(LogLevel::Trace, LogLevel::Debug);
+    EXPECT_LT(LogLevel::Debug, LogLevel::Info);
+    EXPECT_LT(LogLevel::Info, LogLevel::Warn);
+    EXPECT_LT(LogLevel::Warn, LogLevel::Error);
+    EXPECT_LT(LogLevel::Error, LogLevel::Fatal);
 }
 
 TEST(TagSetTest, EmptyByDefault) {

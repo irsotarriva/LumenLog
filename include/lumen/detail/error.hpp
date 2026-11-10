@@ -7,13 +7,13 @@
 namespace lumen {
 
 enum class LumenError : int {
-    none = 0,
-    buffer_full,
-    invalid_sink_id,
-    io_error,
-    file_open_error,
-    sink_exception,
-    invalid_predicate,
+    None = 0,
+    BufferFull,
+    InvalidSinkId,
+    IoError,
+    FileOpenError,
+    SinkException,
+    InvalidPredicate,
 };
 
 class LumenErrorCategory : public std::error_category {

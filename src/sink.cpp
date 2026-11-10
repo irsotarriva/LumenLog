@@ -42,24 +42,24 @@ const char* ansi_code(AnsiColor c) {
 
 const char* level_label(LogLevel level) {
     switch (level) {
-        case LogLevel::TRACE: return "TRACE";
-        case LogLevel::DEBUG: return "DEBUG";
-        case LogLevel::INFO:  return "INFO ";
-        case LogLevel::WARN:  return "WARN ";
-        case LogLevel::ERROR: return "ERROR";
-        case LogLevel::FATAL: return "FATAL";
+        case LogLevel::Trace: return "TRACE";
+        case LogLevel::Debug: return "DEBUG";
+        case LogLevel::Info:  return "INFO ";
+        case LogLevel::Warn:  return "WARN ";
+        case LogLevel::Error: return "ERROR";
+        case LogLevel::Fatal: return "FATAL";
     }
     return "?????";
 }
 
 AnsiColor default_level_color(LogLevel level) {
     switch (level) {
-        case LogLevel::TRACE: return AnsiColor::Default;
-        case LogLevel::DEBUG: return AnsiColor::Cyan;
-        case LogLevel::INFO:  return AnsiColor::Green;
-        case LogLevel::WARN:  return AnsiColor::Yellow;
-        case LogLevel::ERROR: return AnsiColor::Red;
-        case LogLevel::FATAL: return AnsiColor::Magenta;
+        case LogLevel::Trace: return AnsiColor::Default;
+        case LogLevel::Debug: return AnsiColor::Cyan;
+        case LogLevel::Info:  return AnsiColor::Green;
+        case LogLevel::Warn:  return AnsiColor::Yellow;
+        case LogLevel::Error: return AnsiColor::Red;
+        case LogLevel::Fatal: return AnsiColor::Magenta;
     }
     return AnsiColor::Default;
 }

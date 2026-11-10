@@ -171,7 +171,7 @@ std::expected<std::unique_ptr<Sink>, std::error_code> Core::remove_sink(SinkId i
             return sink;
         }
     }
-    return std::unexpected(make_error_code(LumenError::invalid_sink_id));
+    return std::unexpected(make_error_code(LumenError::InvalidSinkId));
 }
 
 void Core::flush() {
@@ -267,7 +267,7 @@ std::expected<uint64_t, std::error_code> Core::sink_exception_count(SinkId id) {
             return entry.exceptions;
         }
     }
-    return std::unexpected(make_error_code(LumenError::invalid_sink_id));
+    return std::unexpected(make_error_code(LumenError::InvalidSinkId));
 }
 
 void Core::dispatch_log_(const LogRecord& record) {

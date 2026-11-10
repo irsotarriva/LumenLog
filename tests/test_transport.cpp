@@ -87,12 +87,12 @@ TEST(RingBufferTest, OverflowDropNewest) {
 
     // Fill the buffer
     for (int i = 0; i < 4; ++i) {
-        EXPECT_TRUE((buf.push<OverflowPolicy::DROP_NEWEST>(i)));
+        EXPECT_TRUE((buf.push<OverflowPolicy::DropNewest>(i)));
     }
     EXPECT_EQ(buf.size(), 4);
 
-    // Push a 5th item with DROP_NEWEST — should be dropped
-    EXPECT_FALSE((buf.push<OverflowPolicy::DROP_NEWEST>(99)));
+    // Push a 5th item with DropNewest — should be dropped
+    EXPECT_FALSE((buf.push<OverflowPolicy::DropNewest>(99)));
 
     // All original items preserved
     for (int i = 0; i < 4; ++i) {
@@ -108,12 +108,12 @@ TEST(RingBufferTest, OverflowDropOldest) {
 
     // Fill the buffer
     for (int i = 0; i < 4; ++i) {
-        EXPECT_TRUE((buf.push<OverflowPolicy::DROP_OLDEST>(i)));
+        EXPECT_TRUE((buf.push<OverflowPolicy::DropOldest>(i)));
     }
     EXPECT_EQ(buf.size(), 4);
 
-    // Push a 5th item with DROP_OLDEST — drops item 0
-    EXPECT_TRUE((buf.push<OverflowPolicy::DROP_OLDEST>(99)));
+    // Push a 5th item with DropOldest — drops item 0
+    EXPECT_TRUE((buf.push<OverflowPolicy::DropOldest>(99)));
 
     // Item 0 was dropped; items 1, 2, 3, 99 survive
     // Consumer reads positions 1, 2, 3, 4
@@ -138,7 +138,7 @@ TEST(RingBufferTest, OverflowBlock) {
 
     // Fill the buffer (items 0, 1, 2, 3)
     for (int i = 0; i < 4; ++i) {
-        EXPECT_TRUE((buf.push<OverflowPolicy::BLOCK>(i)));
+        EXPECT_TRUE((buf.push<OverflowPolicy::Block>(i)));
     }
 
     // Start a consumer thread that pops after a short delay
@@ -149,8 +149,8 @@ TEST(RingBufferTest, OverflowBlock) {
         EXPECT_EQ(val, 0);
     });
 
-    // Push a 5th item with BLOCK — producer blocks until consumer drains one
-    EXPECT_TRUE((buf.push<OverflowPolicy::BLOCK>(99)));
+    // Push a 5th item with Block — producer blocks until consumer drains one
+    EXPECT_TRUE((buf.push<OverflowPolicy::Block>(99)));
 
     consumer.join();
 

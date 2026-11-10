@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "lumen/core.hpp"
+#include "lumen/macros.hpp"
 #include "lumen/detail/error.hpp"
 #include "lumen/predicate.hpp"
 #include "lumen/record.hpp"
@@ -95,7 +96,7 @@ TEST_F(DispatchTest, RecordRoutedToCorrectSink) {
 
     // Emit a log with tag route=1 — only sink1 should see it
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "test msg");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "test msg");
         builder.tag("route", "1");
     }
 
@@ -109,14 +110,14 @@ TEST_F(DispatchTest, RecordRoutedToCorrectSink) {
 TEST_F(DispatchTest, RecordRoutedToMultipleSinks) {
     auto sink1 = std::make_unique<CaptureSink>();
     auto* raw1 = sink1.get();
-    register_sink(std::move(sink1), level_at_least(LogLevel::INFO));
+    register_sink(std::move(sink1), level_at_least(LogLevel::Info));
 
     auto sink2 = std::make_unique<CaptureSink>();
     auto* raw2 = sink2.get();
     register_sink(std::move(sink2), always());
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "broadcast");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "broadcast");
     }
 
     wait_dispatch();
@@ -131,7 +132,7 @@ TEST_F(DispatchTest, RecordRoutedToNoSink) {
     register_sink(std::move(sink), tag_equals("env", "missing"));
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "no match");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "no match");
     }
 
     wait_dispatch();
@@ -151,7 +152,7 @@ TEST_F(DispatchTest, ContextMergePriorityExplicitOverProcess) {
     register_sink(std::move(sink), tag_equals("env", "staging"));
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "staging msg");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "staging msg");
         builder.tag("env", "staging");
     }
 
@@ -172,7 +173,7 @@ TEST_F(DispatchTest, ProcessTagsAttached) {
     register_sink(std::move(sink), tag_equals("service", "lumen-test"));
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "with proc tags");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "with proc tags");
     }
 
     wait_dispatch();
@@ -197,7 +198,7 @@ TEST_F(DispatchTest, ThreadTagsAttached) {
     register_sink(std::move(sink), tag_equals("thread_name", "test-thread"));
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "with thread tags");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "with thread tags");
     }
 
     wait_dispatch();
@@ -231,7 +232,7 @@ TEST_F(DispatchTest, DispatchOrder) {
     core().emit(MetricRecord{.name = "test_metric", .value = 42.0, .timestamp_ns = 0});
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "order test log");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "order test log");
     }
 
     wait_dispatch();
@@ -300,7 +301,7 @@ TEST_F(DispatchTest, AddAndRemoveSink) {
     SinkId id = core().add_sink(std::move(sink), always());
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "before remove");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "before remove");
     }
     wait_dispatch();
     EXPECT_EQ(raw->logs.size(), 1);
@@ -309,7 +310,7 @@ TEST_F(DispatchTest, AddAndRemoveSink) {
     EXPECT_TRUE(removed.has_value());
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "after remove");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "after remove");
     }
     wait_dispatch();
     // sink was removed — should not receive more records
@@ -326,16 +327,16 @@ TEST_F(DispatchTest, RemoveSinkReturnsNullForUnknownId) {
 TEST_F(DispatchTest, LevelFilteringSink) {
     auto sink = std::make_unique<CaptureSink>();
     auto* raw = sink.get();
-    register_sink(std::move(sink), level_at_least(LogLevel::WARN));
+    register_sink(std::move(sink), level_at_least(LogLevel::Warn));
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "should be filtered");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "should be filtered");
     }
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::WARN, "should pass");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Warn, "should pass");
     }
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::ERROR, "should also pass");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Error, "should also pass");
     }
 
     wait_dispatch();
@@ -355,7 +356,7 @@ TEST_F(DispatchTest, ThreadTagsNotSharedBetweenThreads) {
     // Emit from a different thread that has no thread tags
     std::thread other([]() {
         {
-            RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "from other thread");
+            RecordBuilder builder(core().log_buffer(), LogLevel::Info, "from other thread");
         }
     });
 
@@ -382,7 +383,7 @@ TEST_F(DispatchTest, EmptyTagSetDispatch) {
     register_sink(std::move(sink), tag_exists("nonexistent"));
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "no tags");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "no tags");
     }
 
     wait_dispatch();
@@ -396,7 +397,7 @@ TEST_F(DispatchTest, RemoveAllSinksThenEmit) {
     (void)core().remove_sink(id);
 
     {
-        RecordBuilder builder(core().log_buffer(), LogLevel::INFO, "after removal");
+        RecordBuilder builder(core().log_buffer(), LogLevel::Info, "after removal");
     }
 
     wait_dispatch();
@@ -549,7 +550,7 @@ TEST_F(DispatchTest, ThrowingSinkIsContainedAndOtherSinksStillReceive) {
 TEST_F(DispatchTest, SinkExceptionCountForUnknownSinkIsError) {
     const auto count = core().sink_exception_count(SinkId{0});
     ASSERT_FALSE(count.has_value());
-    EXPECT_EQ(count.error(), make_error_code(LumenError::invalid_sink_id));
+    EXPECT_EQ(count.error(), make_error_code(LumenError::InvalidSinkId));
 }
 
 // ── Level filters and records without a level ────────────────────────────────
@@ -557,7 +558,7 @@ TEST_F(DispatchTest, SinkExceptionCountForUnknownSinkIsError) {
 TEST_F(DispatchTest, LevelFilteredSinkReceivesAllMetricsAndProgress) {
     auto sink = std::make_unique<CaptureSink>();
     auto* raw = sink.get();
-    register_sink(std::move(sink), level_at_least(LogLevel::WARN));
+    register_sink(std::move(sink), level_at_least(LogLevel::Warn));
 
     LOG_INFO("filtered out");
     LOG_ERROR("passes");

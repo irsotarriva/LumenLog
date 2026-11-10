@@ -50,7 +50,7 @@ int64_t run_producers(int num_producers, int64_t records_per_producer) {
             }
 
             for (int64_t i = 0; i < records_per_producer; ++i) {
-                RecordBuilder builder(core().log_buffer(), LogLevel::INFO,
+                RecordBuilder builder(core().log_buffer(), LogLevel::Info,
                                       "benchmark message record");
                 builder.tag("thread", static_cast<int64_t>(
                     std::hash<std::thread::id>{}(std::this_thread::get_id()) & 0xFFFF));

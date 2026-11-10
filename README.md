@@ -175,14 +175,6 @@ void process_run(const std::string& run) {
     }
 }
 
-void frame_loop(float dt) {
-    LUMEN_FRAME_SCOPE(frame_counter, dt) {
-        update(dt);
-        render();
-        // all records carry frame_number and delta_time_ms
-    }
-}
-
 // Loop with automatic progress + tags
 LUMEN_LOOP("training batches", batch, num_batches) {
     forward_pass(batch);

@@ -45,28 +45,28 @@ struct PySink : Sink, py::trampoline_self_life_support {
 };
 
 void py_log_info(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::INFO, msg,
+    RecordBuilder(core().log_buffer(), LogLevel::Info, msg,
                   std::source_location::current());
 }
 
 void py_log_warn(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::WARN, msg,
+    RecordBuilder(core().log_buffer(), LogLevel::Warn, msg,
                   std::source_location::current());
 }
 
 void py_log_error(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::ERROR, msg,
+    RecordBuilder(core().log_buffer(), LogLevel::Error, msg,
                   std::source_location::current());
 }
 
 void py_log_debug(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::DEBUG, msg,
+    RecordBuilder(core().log_buffer(), LogLevel::Debug, msg,
                   std::source_location::current());
 }
 
 void py_log_fatal(std::string msg) {
     {
-        RecordBuilder(core().log_buffer(), LogLevel::FATAL, msg,
+        RecordBuilder(core().log_buffer(), LogLevel::Fatal, msg,
                       std::source_location::current());
     }
     {
@@ -185,12 +185,12 @@ PYBIND11_MODULE(lumen_bindings, m) {
         });
 
     py::enum_<LogLevel>(m, "LogLevel")
-        .value("TRACE", LogLevel::TRACE)
-        .value("DEBUG", LogLevel::DEBUG)
-        .value("INFO",  LogLevel::INFO)
-        .value("WARN",  LogLevel::WARN)
-        .value("ERROR", LogLevel::ERROR)
-        .value("FATAL", LogLevel::FATAL);
+        .value("TRACE", LogLevel::Trace)
+        .value("DEBUG", LogLevel::Debug)
+        .value("INFO",  LogLevel::Info)
+        .value("WARN",  LogLevel::Warn)
+        .value("ERROR", LogLevel::Error)
+        .value("FATAL", LogLevel::Fatal);
 
     py::class_<SourceLocation>(m, "SourceLocation")
         .def_readonly("file", &SourceLocation::file)

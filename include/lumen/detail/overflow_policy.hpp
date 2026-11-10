@@ -6,9 +6,9 @@
 namespace lumen {
 
 enum class OverflowPolicy {
-    DROP_OLDEST,
-    DROP_NEWEST,
-    BLOCK,
+    DropOldest,
+    DropNewest,
+    Block,
 };
 
 template <OverflowPolicy P>
@@ -16,9 +16,9 @@ struct overflow_policy_trait {
     static constexpr OverflowPolicy value = P;
 };
 
-using drop_oldest_t  = overflow_policy_trait<OverflowPolicy::DROP_OLDEST>;
-using drop_newest_t  = overflow_policy_trait<OverflowPolicy::DROP_NEWEST>;
-using block_t        = overflow_policy_trait<OverflowPolicy::BLOCK>;
+using drop_oldest_t  = overflow_policy_trait<OverflowPolicy::DropOldest>;
+using drop_newest_t  = overflow_policy_trait<OverflowPolicy::DropNewest>;
+using block_t        = overflow_policy_trait<OverflowPolicy::Block>;
 
 }  // namespace lumen
 

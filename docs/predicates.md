@@ -9,11 +9,11 @@ using namespace lumen;
 
 always()                            // Accept all records
 never()                             // Accept no records
-level_at_least(LogLevel::WARN)      // LogRecords with severity >= WARN
-level_equals(LogLevel::ERROR)       // LogRecords with severity exactly ERROR
+level_at_least(LogLevel::Warn)      // LogRecords with severity >= WARN
+level_equals(LogLevel::Error)       // LogRecords with severity exactly ERROR
 tag_equals("subsystem", "calo")     // Records where tag subsystem=calo is present
 tag_exists("event_id")              // Records where tag key "event_id" is present (any value, even empty)
-level_compare(CompareOp::LT, WARN)  // Any comparison on the level: EQ NE LT LE GT GE
+level_compare(CompareOp::Less, LogLevel::Warn)  // Any comparison on the level: Equal NotEqual Less LessEqual Greater GreaterEqual
 ```
 
 ## Numeric tag comparisons
@@ -23,10 +23,10 @@ tag_less("altitude", 70000)          // altitude <  70000
 tag_less_equal("altitude", 70000)    // altitude <= 70000
 tag_greater("dv", 0.5)               // dv > 0.5
 tag_greater_equal("stage", 2)        // stage >= 2
-tag_compare("vessel_id", CompareOp::EQ, 42)   // numeric equality: matches "42" and "42.0"
+tag_compare("vessel_id", CompareOp::Equal, 42)   // numeric equality: matches "42" and "42.0"
 ```
 
-The tag's value is parsed as a number (`42`, `-3.5`, `1e-06`, `inf`). If the tag is missing, or its value is not entirely a number (`"42abc"`, `""`), every comparison is **false**, including `NE`.
+The tag's value is parsed as a number (`42`, `-3.5`, `1e-06`, `inf`). If the tag is missing, or its value is not entirely a number (`"42abc"`, `""`), every comparison is **false**, including `NotEqual`.
 
 Numeric tags round-trip exactly: `.tag("altitude", 69999.97)` stores `"69999.97"`, and integers of any width are stored in full, so a threshold compares against the value you logged.
 
@@ -39,7 +39,7 @@ auto parsed = lumen::parse_predicate("level >= WARN && vessel_id == 42 && !exist
 if (!parsed) {
     // parsed.error().position: byte offset of the problem
     // parsed.error().message:  e.g. "expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)"
-    // parsed.error().code:     LumenError::invalid_predicate
+    // parsed.error().code:     LumenError::InvalidPredicate
     return;
 }
 core.add_sink(std::make_unique<FileSink>(cfg), std::move(*parsed));

@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include "lumen/core.hpp"
+#include "lumen/macros.hpp"
 #include "lumen/predicate.hpp"
 #include "lumen/sink.hpp"
 
@@ -63,7 +64,7 @@ TEST_F(MacroTest, MacroCallsRecordBuilder) {
 
     ASSERT_GE(raw->logs.size(), 1);
     EXPECT_EQ(raw->logs[0].message, "test message");
-    EXPECT_EQ(raw->logs[0].level, LogLevel::INFO);
+    EXPECT_EQ(raw->logs[0].level, LogLevel::Info);
 }
 
 TEST_F(MacroTest, MacroChainsTags) {
@@ -115,7 +116,7 @@ TEST_F(MacroTest, DebugMacroEmits) {
     wait_flush();
 
     ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].level, LogLevel::DEBUG);
+    EXPECT_EQ(raw->logs[0].level, LogLevel::Debug);
 }
 
 TEST_F(MacroTest, TraceMacroCompileTimeElision) {
@@ -129,8 +130,8 @@ TEST_F(MacroTest, TraceMacroCompileTimeElision) {
     wait_flush();
 
     ASSERT_GE(raw->logs.size(), 2);
-    EXPECT_EQ(raw->logs[0].level, LogLevel::DEBUG);
-    EXPECT_EQ(raw->logs[1].level, LogLevel::INFO);
+    EXPECT_EQ(raw->logs[0].level, LogLevel::Debug);
+    EXPECT_EQ(raw->logs[1].level, LogLevel::Info);
 }
 
 TEST_F(MacroTest, WarnErrorMacrosEmit) {
@@ -147,8 +148,8 @@ TEST_F(MacroTest, WarnErrorMacrosEmit) {
     bool found_warn = false;
     bool found_error = false;
     for (const auto& r : raw->logs) {
-        if (r.level == LogLevel::WARN) found_warn = true;
-        if (r.level == LogLevel::ERROR) found_error = true;
+        if (r.level == LogLevel::Warn) found_warn = true;
+        if (r.level == LogLevel::Error) found_error = true;
     }
     EXPECT_TRUE(found_warn);
     EXPECT_TRUE(found_error);
@@ -261,10 +262,10 @@ TEST_F(MacroTest, AllLevelsEmit) {
         levels.insert(r.level);
     }
 
-    EXPECT_NE(levels.find(LogLevel::DEBUG), levels.end());
-    EXPECT_NE(levels.find(LogLevel::INFO), levels.end());
-    EXPECT_NE(levels.find(LogLevel::WARN), levels.end());
-    EXPECT_NE(levels.find(LogLevel::ERROR), levels.end());
+    EXPECT_NE(levels.find(LogLevel::Debug), levels.end());
+    EXPECT_NE(levels.find(LogLevel::Info), levels.end());
+    EXPECT_NE(levels.find(LogLevel::Warn), levels.end());
+    EXPECT_NE(levels.find(LogLevel::Error), levels.end());
 }
 
 // ── Lifetime: records must own their strings ─────────────────────────────────

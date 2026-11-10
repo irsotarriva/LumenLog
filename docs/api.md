@@ -6,7 +6,8 @@
 |---|---|
 | `lumen/lumen.hpp` | Umbrella header — everything you typically need |
 | `lumen/core.hpp` | `Core` singleton, sink management, process/thread tags |
-| `lumen/record.hpp` | Record types, builders, macros, scope helpers |
+| `lumen/record.hpp` | Record types and builders |
+| `lumen/macros.hpp` | `LUMEN_LOG_*` / `LOG_*`, `LUMEN_SCOPE`, `LUMEN_LOOP`, `LUMEN_MEMBER_SCOPE`, and the `LUMEN_MIN_LEVEL_VALUE` threshold |
 | `lumen/sink.hpp` | `Sink` base class, `TerminalSink`, `FileSink`, `JsonSink`, `NullSink` |
 | `lumen/predicate.hpp` | Predicate DSL |
 | `lumen/tagged.hpp` | `Tagged` mixin for instance-level tags |
@@ -59,7 +60,7 @@ Set a tag attached to every record from the calling thread. Call at thread creat
 std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id);
 ```
 
-Number of exceptions that escaped this sink's callbacks and were contained by the core. `LumenError::invalid_sink_id` if the sink is not registered.
+Number of exceptions that escaped this sink's callbacks and were contained by the core. `LumenError::InvalidSinkId` if the sink is not registered.
 
 ### `Core::flush`
 
@@ -133,13 +134,15 @@ struct TagSet {
 ## Log macros
 
 ```cpp
-LOG_TRACE(fmt, ...)    // Severity 0
-LOG_DEBUG(fmt, ...)    // Severity 1
-LOG_INFO(fmt, ...)     // Severity 2
-LOG_WARN(fmt, ...)     // Severity 3
-LOG_ERROR(fmt, ...)    // Severity 4
-LOG_FATAL(fmt, ...)    // Severity 5 — calls std::terminate after dispatch
+LUMEN_LOG_TRACE(fmt, ...)    // Severity 0
+LUMEN_LOG_DEBUG(fmt, ...)    // Severity 1
+LUMEN_LOG_INFO(fmt, ...)     // Severity 2
+LUMEN_LOG_WARN(fmt, ...)     // Severity 3
+LUMEN_LOG_ERROR(fmt, ...)    // Severity 4
+LUMEN_LOG_FATAL(fmt, ...)    // Severity 5 — calls std::terminate after dispatch
 ```
+
+The short names `LOG_TRACE` … `LOG_FATAL` are aliases for these, defined unless `LUMEN_NO_SHORT_MACROS` is defined before including Lumen.
 
 With a single argument the message is logged verbatim (no format parsing, so runtime strings and braces are fine). With more arguments, `fmt` is a `std::format` string checked at compile time. Each macro returns `RecordBuilder&` for `.tag()` chaining. `LOG_FATAL` flushes all sinks before terminating.
 
@@ -186,7 +189,6 @@ struct ProgressHandle {
 ```cpp
 LUMEN_SCOPE(key, value, ...)           // Push tags for current scope (RAII)
 LUMEN_LOOP(label, var, total)          // Progress bar + scope tags for loop
-LUMEN_FRAME_SCOPE(frame, delta_ms)     // Frame-aware scope
 LUMEN_MEMBER_SCOPE                     // Activate instance tags for method
 ```
 
@@ -231,7 +233,7 @@ Predicate level_at_least(LogLevel min_level);
 Predicate level_equals(LogLevel level);
 Predicate tag_equals(std::string_view key, std::string_view value);
 Predicate tag_exists(std::string_view key);
-Predicate level_compare(CompareOp op, LogLevel level);      // CompareOp: EQ NE LT LE GT GE
+Predicate level_compare(CompareOp op, LogLevel level);      // CompareOp: Equal NotEqual Less LessEqual Greater GreaterEqual
 Predicate tag_compare(std::string_view key, CompareOp op, double value);
 Predicate tag_less(std::string_view key, double value);     // also tag_less_equal,
 Predicate tag_greater(std::string_view key, double value);  // tag_greater_equal

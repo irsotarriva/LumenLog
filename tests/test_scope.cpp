@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "lumen/core.hpp"
+#include "lumen/macros.hpp"
 #include "lumen/predicate.hpp"
 #include "lumen/sink.hpp"
 

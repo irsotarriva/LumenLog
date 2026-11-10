@@ -23,13 +23,13 @@
 
 namespace lumen {
 
-enum LogLevel : uint32_t {
-    TRACE  = 0,
-    DEBUG  = 1,
-    INFO   = 2,
-    WARN   = 3,
-    ERROR  = 4,
-    FATAL  = 5,
+enum class LogLevel : uint8_t {
+    Trace = 0,
+    Debug = 1,
+    Info = 2,
+    Warn = 3,
+    Error = 4,
+    Fatal = 5,
 };
 
 struct SourceLocation {
@@ -422,80 +422,5 @@ private:
 };
 
 }  // namespace lumen
-
-#include "lumen/detail/scope_stack.hpp"
-
-// ── Level integer constants for compile-time macro elision ────────────────────
-
-#define LUMEN_LEVEL_TRACE 0
-#define LUMEN_LEVEL_DEBUG 1
-#define LUMEN_LEVEL_INFO  2
-#define LUMEN_LEVEL_WARN  3
-#define LUMEN_LEVEL_ERROR 4
-#define LUMEN_LEVEL_FATAL 5
-
-#define LUMEN_LEVEL_INT_TRACE  0
-#define LUMEN_LEVEL_INT_DEBUG  1
-#define LUMEN_LEVEL_INT_INFO   2
-#define LUMEN_LEVEL_INT_WARN   3
-#define LUMEN_LEVEL_INT_ERROR  4
-#define LUMEN_LEVEL_INT_FATAL  5
-
-#define LUMEN_LEVEL_CAT_IMPL(x) LUMEN_LEVEL_INT_##x
-#define LUMEN_LEVEL_CAT(x) LUMEN_LEVEL_CAT_IMPL(x)
-#define LUMEN_MIN_LEVEL_INT LUMEN_LEVEL_CAT(LUMEN_MIN_LEVEL)
-
-#define LUMEN_CONCAT_IMPL(a, b) a##b
-#define LUMEN_CONCAT(a, b) LUMEN_CONCAT_IMPL(a, b)
-
-// ── Macro helpers ─────────────────────────────────────────────────────────────
-
-// Written as `if constexpr (!enabled) {} else expr` so that a user's
-// `if (c) LOG_INFO("x"); else ...` binds the `else` to their own `if`.
-#define LUMEN_IF_ENABLED(LEVEL, expr) \
-    if constexpr (!(LUMEN_LEVEL_##LEVEL >= LUMEN_MIN_LEVEL_INT)) {} else expr
-
-#define LUMEN_LOG_AT(LEVEL, ...) \
-    LUMEN_IF_ENABLED(LEVEL, \
-        lumen::RecordBuilder(lumen::core().log_buffer(), lumen::LogLevel::LEVEL, \
-                             lumen::detail::format_message(__VA_ARGS__)))
-
-// ── Log macros ────────────────────────────────────────────────────────────────
-//
-//   LOG_INFO("plain message");                 // logged verbatim
-//   LOG_INFO("energy {:.2f} GeV", energy);     // std::format, checked at compile time
-//   LOG_INFO("done").tag("n", int64_t{42});    // chain tags
-
-#define LOG_TRACE(...) LUMEN_LOG_AT(TRACE, __VA_ARGS__)
-#define LOG_DEBUG(...) LUMEN_LOG_AT(DEBUG, __VA_ARGS__)
-#define LOG_INFO(...)  LUMEN_LOG_AT(INFO, __VA_ARGS__)
-#define LOG_WARN(...)  LUMEN_LOG_AT(WARN, __VA_ARGS__)
-#define LOG_ERROR(...) LUMEN_LOG_AT(ERROR, __VA_ARGS__)
-
-#define LOG_FATAL(...) do { \
-    { \
-        lumen::RecordBuilder LUMEN_CONCAT(lumen_fatal_, __LINE__) \
-            (lumen::core().log_buffer(), lumen::LogLevel::FATAL, \
-             lumen::detail::format_message(__VA_ARGS__)); \
-    } \
-    lumen::core().flush(); \
-    std::terminate(); \
-} while(0)
-
-// ── Scope macros ──────────────────────────────────────────────────────────────
-
-#define LUMEN_SCOPE(key, value) \
-    lumen::detail::ScopeGuard LUMEN_CONCAT(lumen_scope_, __LINE__)(key, value)
-
-#define LUMEN_FRAME_SCOPE(key, value) \
-    lumen::detail::ScopeGuard LUMEN_CONCAT(lumen_frame_, __LINE__)(key, value)
-
-#define LUMEN_MEMBER_SCOPE \
-    auto LUMEN_CONCAT(lumen_member_, __LINE__) = lumen_scope()
-
-#define LUMEN_LOOP(label, var, total) \
-    for (lumen::detail::LoopScope LUMEN_CONCAT(lumen_loop_, __LINE__)(label, lumen::core().progress_buffer(), static_cast<uint64_t>(total)); \
-         LUMEN_CONCAT(lumen_loop_, __LINE__).advance(); ) \
-        if (uint64_t var = LUMEN_CONCAT(lumen_loop_, __LINE__).current(); true)
 
 #endif

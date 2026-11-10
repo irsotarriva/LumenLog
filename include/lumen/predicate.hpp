@@ -14,12 +14,12 @@
 namespace lumen {
 
 enum class CompareOp : uint8_t {
-    EQ,  // ==
-    NE,  // !=
-    LT,  // <
-    LE,  // <=
-    GT,  // >
-    GE,  // >=
+    Equal,         // ==
+    NotEqual,      // !=
+    Less,          // <
+    LessEqual,     // <=
+    Greater,       // >
+    GreaterEqual,  // >=
 };
 
 class Predicate {
@@ -66,12 +66,12 @@ Predicate level_equals(LogLevel level);
 Predicate tag_equals(std::string_view key, std::string_view value);
 Predicate tag_exists(std::string_view key);
 
-// `level <op> level`, e.g. level_compare(CompareOp::LT, WARN).
+// `level <op> level`, e.g. level_compare(CompareOp::Less, LogLevel::Warn).
 Predicate level_compare(CompareOp op, LogLevel level);
 
 // Numeric tag comparison: the tag's value is parsed as a number (e.g. "70000",
 // "-3.5", "1e-6") and compared with `value`. A missing tag or a value that is
-// not entirely a number makes every comparison false, including NE.
+// not entirely a number makes every comparison false, including NotEqual.
 Predicate tag_compare(std::string_view key, CompareOp op, double value);
 Predicate tag_less(std::string_view key, double value);
 Predicate tag_less_equal(std::string_view key, double value);
@@ -106,7 +106,7 @@ Predicate tag_greater_equal(std::string_view key, double value);
 // `!exists(k) || k != v` if a missing tag should pass.
 
 struct PredicateParseError {
-    std::error_code code;  // LumenError::invalid_predicate
+    std::error_code code;  // LumenError::InvalidPredicate
     size_t position = 0;   // byte offset into the query where the error was found
     std::string message;   // human-readable, e.g. "expected ')'"
 };

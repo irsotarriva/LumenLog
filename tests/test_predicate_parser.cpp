@@ -16,7 +16,7 @@ TagSet<16> tags_of(std::initializer_list<std::pair<std::string_view, std::string
 }
 
 // Parses `query` (failing the test on a parse error) and evaluates it.
-bool eval(std::string_view query, const TagSet<16>& tags, LogLevel level = INFO) {
+bool eval(std::string_view query, const TagSet<16>& tags, LogLevel level = LogLevel::Info) {
     const auto parsed = parse_predicate(query);
     EXPECT_TRUE(parsed.has_value()) << "query: " << query << "\n  error at "
                                     << (parsed ? 0 : parsed.error().position) << ": "
@@ -38,30 +38,30 @@ TEST(PredicateParserTest, HeliosExampleQuery) {
     const auto suppressed = tags_of({{"vessel_id", "42"}, {"suppress", "1"}});
     const auto other = tags_of({{"vessel_id", "7"}});
 
-    EXPECT_TRUE(eval(query, vessel, WARN));
-    EXPECT_TRUE(eval(query, vessel, FATAL));
-    EXPECT_FALSE(eval(query, vessel, INFO));
-    EXPECT_FALSE(eval(query, suppressed, ERROR));
-    EXPECT_FALSE(eval(query, other, ERROR));
+    EXPECT_TRUE(eval(query, vessel, LogLevel::Warn));
+    EXPECT_TRUE(eval(query, vessel, LogLevel::Fatal));
+    EXPECT_FALSE(eval(query, vessel, LogLevel::Info));
+    EXPECT_FALSE(eval(query, suppressed, LogLevel::Error));
+    EXPECT_FALSE(eval(query, other, LogLevel::Error));
 }
 
 // ── Level comparisons ────────────────────────────────────────────────────────
 
 TEST(PredicateParserTest, LevelOperators) {
     const TagSet<16> none;
-    EXPECT_TRUE(eval("level == INFO", none, INFO));
-    EXPECT_FALSE(eval("level != INFO", none, INFO));
-    EXPECT_TRUE(eval("level < WARN", none, INFO));
-    EXPECT_FALSE(eval("level <= DEBUG", none, INFO));
-    EXPECT_TRUE(eval("level > DEBUG", none, INFO));
-    EXPECT_TRUE(eval("level >= INFO", none, INFO));
+    EXPECT_TRUE(eval("level == INFO", none, LogLevel::Info));
+    EXPECT_FALSE(eval("level != INFO", none, LogLevel::Info));
+    EXPECT_TRUE(eval("level < WARN", none, LogLevel::Info));
+    EXPECT_FALSE(eval("level <= DEBUG", none, LogLevel::Info));
+    EXPECT_TRUE(eval("level > DEBUG", none, LogLevel::Info));
+    EXPECT_TRUE(eval("level >= INFO", none, LogLevel::Info));
 }
 
 TEST(PredicateParserTest, LevelNamesAreCaseInsensitiveAndNumericLevelsWork) {
     const TagSet<16> none;
-    EXPECT_TRUE(eval("level >= warn", none, ERROR));
-    EXPECT_TRUE(eval("LEVEL == Error", none, ERROR));
-    EXPECT_TRUE(eval("level == 4", none, ERROR));
+    EXPECT_TRUE(eval("level >= warn", none, LogLevel::Error));
+    EXPECT_TRUE(eval("LEVEL == Error", none, LogLevel::Error));
+    EXPECT_TRUE(eval("level == 4", none, LogLevel::Error));
 }
 
 // ── Tag comparisons ──────────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ TEST(PredicateParserTest, ExistsMatchesTagWithEmptyValue) {
 }
 
 TEST(PredicateParserTest, QuotedKeyReachesTagNamedLikeKeyword) {
-    EXPECT_TRUE(eval("\"level\" == 3", tags_of({{"level", "3"}}), TRACE));
+    EXPECT_TRUE(eval("\"level\" == 3", tags_of({{"level", "3"}}), LogLevel::Trace));
     EXPECT_TRUE(eval("exists(\"and\")", tags_of({{"and", "x"}})));
 }
 
@@ -134,7 +134,7 @@ TEST(PredicateParserTest, WordOperatorsAndLiterals) {
 }
 
 TEST(PredicateParserTest, WhitespaceIsInsignificant) {
-    EXPECT_TRUE(eval("  (level>=WARN)&&(x<3)  ", tags_of({{"x", "2"}}), ERROR));
+    EXPECT_TRUE(eval("  (level>=WARN)&&(x<3)  ", tags_of({{"x", "2"}}), LogLevel::Error));
 }
 
 TEST(PredicateParserTest, ParsedPredicateSurvivesCopy) {
@@ -142,14 +142,14 @@ TEST(PredicateParserTest, ParsedPredicateSurvivesCopy) {
     ASSERT_TRUE(parsed.has_value());
     const Predicate copy = *parsed;
     parsed = parse_predicate("false");
-    EXPECT_TRUE(copy.evaluate(tags_of({{"x", "2"}}), INFO));
+    EXPECT_TRUE(copy.evaluate(tags_of({{"x", "2"}}), LogLevel::Info));
 }
 
 // ── Error paths ──────────────────────────────────────────────────────────────
 
 TEST(PredicateParserTest, ErrorsCarryCodeAndPosition) {
     const PredicateParseError err = parse_error("level >= WARN && vessel_id == ");
-    EXPECT_EQ(err.code, make_error_code(LumenError::invalid_predicate));
+    EXPECT_EQ(err.code, make_error_code(LumenError::InvalidPredicate));
     EXPECT_EQ(err.position, 30u);
     EXPECT_FALSE(err.message.empty());
 }
