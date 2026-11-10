@@ -37,3 +37,4 @@ target_compile_features(lumen_bench PRIVATE cxx_std_23)
 
 include(GoogleTest)
 gtest_discover_tests(lumen_bench)
+add_subdirectory(compile_checks)
