@@ -80,7 +80,7 @@ jobs:
             preset: ci
             vcpkg: true
             experimental: true
-            cmake_args: -G "Visual Studio 17 2022" -DLUMEN_SANITIZER=none -DLUMEN_ENABLE_DASHBOARD=OFF
+            cmake_args: -DLUMEN_SANITIZER=none -DLUMEN_ENABLE_DASHBOARD=OFF
 
     env:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
