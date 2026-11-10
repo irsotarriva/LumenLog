@@ -1,68 +1,71 @@
 {
   "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
   "configurePresets": [
     {
-      "name": "debug",
-      "displayName": "Debug",
-      "binaryDir": "${sourceDir}/build/debug",
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "${sourceDir}/cmake/vcpkg_if_available.cmake",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "LUMEN_BUILD_TESTS": "ON",
         "LUMEN_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug, ASan + UBSan",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LUMEN_SANITIZER": "address"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Debug, ThreadSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LUMEN_SANITIZER": "thread"
       }
     },
     {
       "name": "release",
-      "displayName": "Release",
-      "binaryDir": "${sourceDir}/build/release",
+      "displayName": "Release, no sanitizer",
+      "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "LUMEN_BUILD_TESTS": "OFF",
-        "LUMEN_BUILD_EXAMPLES": "OFF"
+        "LUMEN_SANITIZER": "none"
       }
     },
     {
       "name": "ci",
-      "displayName": "CI",
-      "binaryDir": "${sourceDir}/build/ci",
+      "displayName": "CI: Debug, ASan + UBSan, warnings are errors",
+      "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "LUMEN_BUILD_TESTS": "ON",
-        "LUMEN_BUILD_EXAMPLES": "ON"
+        "LUMEN_SANITIZER": "address",
+        "LUMEN_WARNINGS_AS_ERRORS": "ON"
       }
     }
   ],
   "buildPresets": [
-    {
-      "name": "debug",
-      "configurePreset": "debug"
-    },
-    {
-      "name": "release",
-      "configurePreset": "release"
-    },
-    {
-      "name": "ci",
-      "configurePreset": "ci"
-    }
+    { "name": "debug", "configurePreset": "debug", "configuration": "Debug" },
+    { "name": "tsan", "configurePreset": "tsan", "configuration": "Debug" },
+    { "name": "release", "configurePreset": "release", "configuration": "Release" },
+    { "name": "ci", "configurePreset": "ci", "configuration": "Debug" }
   ],
   "testPresets": [
     {
-      "name": "debug",
-      "configurePreset": "debug",
-      "output": {
-        "outputOnFailure": true
-      }
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
     },
-    {
-      "name": "ci",
-      "configurePreset": "ci",
-      "output": {
-        "outputOnFailure": true
-      }
-    }
+    { "name": "debug", "inherits": "base", "configurePreset": "debug", "configuration": "Debug" },
+    { "name": "tsan", "inherits": "base", "configurePreset": "tsan", "configuration": "Debug" },
+    { "name": "release", "inherits": "base", "configurePreset": "release", "configuration": "Release" },
+    { "name": "ci", "inherits": "base", "configurePreset": "ci", "configuration": "Debug" }
   ]
 }

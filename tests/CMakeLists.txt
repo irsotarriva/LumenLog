@@ -18,10 +18,6 @@ if(LUMEN_ENABLE_DASHBOARD)
   target_compile_definitions(lumen_tests PRIVATE LUMEN_ENABLE_DASHBOARD)
 endif()
 
-if(LUMEN_ENABLE_LATEX)
-  target_compile_definitions(lumen_tests PRIVATE LUMEN_ENABLE_LATEX)
-endif()
-
 target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_tests PRIVATE cxx_std_23)
 
@@ -34,7 +30,8 @@ add_executable(lumen_bench
 
 target_link_libraries(lumen_bench PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_bench PRIVATE cxx_std_23)
+# Not registered with ctest: its timings are not pass/fail checks. Run it by hand.
 
-include(GoogleTest)
-gtest_discover_tests(lumen_bench)
 add_subdirectory(compile_checks)
+
+include(consumer/consumer_test.cmake)
