@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <thread>
@@ -509,21 +510,29 @@ TEST(PredicateTest, ChainOf100000NegationsEvaluates) {
     EXPECT_FALSE(chain.evaluate(TagSet<16>{}, LogLevel::Info));
 }
 
-TEST(PredicateTest, CopiesOfADeepChainCanBeDestroyedOnTwoThreads) {
-    auto chain = std::make_unique<Predicate>(always());
-    for (int32_t i = 0; i < deep_terms; ++i) *chain = *chain && tag_exists("k");
+TEST(PredicateTest, DeepChainsSharingNodesCanBeDestroyedOnTwoThreadsAtOnce) {
+    Predicate shared = always();
+    for (int32_t i = 0; i < deep_terms; ++i) shared = shared && tag_exists("k");
+    TagSet<16> with_k;
+    with_k.add("k", "1");
 
-    // Each thread drops one owner of the shared tree; the last one destroys it.
-    auto copy = std::make_unique<Predicate>(*chain);
-    std::thread other([owned = std::move(copy)]() mutable { owned.reset(); });
-    chain.reset();
-    other.join();
+    // Each thread grows its own chain on top of the shared one, evaluates it
+    // and destroys its own nodes while the other thread may be doing the same.
+    const auto grow_evaluate_drop = [&shared, &with_k](bool& result) {
+        Predicate own = shared;
+        for (int32_t i = 0; i < deep_terms; ++i) own = own && tag_exists("k");
+        result = own.evaluate(with_k, LogLevel::Info);
+    };
+    bool first = false;
+    bool second = false;
+    std::thread a(grow_evaluate_drop, std::ref(first));
+    std::thread b(grow_evaluate_drop, std::ref(second));
+    a.join();
+    b.join();
 
-    // Destroying another chain on this thread shows that the first
-    // destruction left no state behind.
-    Predicate again = always();
-    for (int32_t i = 0; i < deep_terms; ++i) again = again && always();
-    EXPECT_TRUE(again.evaluate(TagSet<16>{}, LogLevel::Info));
+    EXPECT_TRUE(first);
+    EXPECT_TRUE(second);
+    EXPECT_TRUE(shared.evaluate(with_k, LogLevel::Info));
 }
 
 // ── Records without a level (metrics, progress) ──────────────────────────────
