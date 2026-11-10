@@ -7,36 +7,184 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # Only the Windows entry sets `experimental`: MSVC is not a supported
+    # toolchain yet, so its result is reported but does not fail the workflow.
+    continue-on-error: ${{ matrix.experimental == true }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The only job that compiles the FTXUI dashboard with sanitizers.
+          - name: linux-gcc-debug-asan
+            os: ubuntu-24.04
+            preset: ci
+            vcpkg: true
+
+          - name: linux-gcc-tsan
+            os: ubuntu-24.04
+            preset: tsan
+            vcpkg: true
+
+          - name: linux-gcc-release
+            os: ubuntu-24.04
+            preset: release
+            vcpkg: true
+            bench: true
+
+          # Also the job that proves the build works without vcpkg.
+          - name: linux-gcc-release-no-dashboard
+            os: ubuntu-24.04
+            preset: release
+            vcpkg: false
+            apt: libgtest-dev
+            cmake_args: -DLUMEN_ENABLE_DASHBOARD=OFF
+
+          - name: linux-clang-libcxx-debug-asan
+            os: ubuntu-24.04
+            preset: ci
+            vcpkg: true
+            triplet: x64-linux-libcxx
+            cc: clang-18
+            cxx: clang++-18
+            apt: libc++-18-dev libc++abi-18-dev
+            cmake_args: >-
+              -DCMAKE_CXX_FLAGS=-stdlib=libc++
+              -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
+              -DVCPKG_TARGET_TRIPLET=x64-linux-libcxx
+
+          - name: macos-appleclang-debug-asan
+            os: macos-latest
+            preset: ci
+            vcpkg: true
+
+          - name: python-bindings
+            os: ubuntu-24.04
+            preset: ci
+            vcpkg: false
+            python: true
+            apt: libgtest-dev
+            cmake_args: -DLUMEN_ENABLE_DASHBOARD=OFF -DLUMEN_ENABLE_PYTHON=ON
+
+          - name: windows-msvc-debug
+            os: windows-latest
+            preset: ci
+            vcpkg: true
+            experimental: true
+            cmake_args: -G "Visual Studio 17 2022" -DLUMEN_SANITIZER=none -DLUMEN_ENABLE_DASHBOARD=OFF
 
     env:
-      # The runner image ships vcpkg but does not set VCPKG_ROOT, which the
-      # presets use to locate the toolchain file.
-      VCPKG_ROOT: /usr/local/share/vcpkg
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/cmake/triplets
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
 
+      # Recent Ubuntu runner kernels randomise mmap addresses with more bits
+      # than the sanitizer runtimes of GCC 13 accept ("unexpected memory
+      # mapping"); 28 bits is what they were built for.
+      - name: Limit address-space randomisation for sanitizers
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Install system packages
+        if: matrix.apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+
+      - name: Select compiler
+        if: matrix.cxx
+        run: |
+          echo "CC=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        if: matrix.python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pybind11
+        if: matrix.python
+        run: |
+          python -m pip install 'pybind11>=3.0,<4'
+          echo "PYBIND11_ARGS=-Dpybind11_DIR=$(python -m pybind11 --cmakedir) -DPython_EXECUTABLE=$(command -v python)" >> "$GITHUB_ENV"
+
+      # The presets load vcpkg only when VCPKG_ROOT is set (see
+      # cmake/vcpkg_if_available.cmake), so the no-vcpkg jobs leave it unset.
+      - name: Locate vcpkg
+        if: matrix.vcpkg
+        run: |
+          root="${VCPKG_INSTALLATION_ROOT:-}"
+          if [ -z "$root" ] || [ ! -f "$root/scripts/buildsystems/vcpkg.cmake" ]; then
+            root="$RUNNER_TEMP/vcpkg"
+            git clone --depth 1 https://github.com/microsoft/vcpkg "$root"
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              "$root/bootstrap-vcpkg.bat" -disableMetrics
+            else
+              "$root/bootstrap-vcpkg.sh" -disableMetrics
+            fi
+          fi
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
       - name: Restore vcpkg binary cache
+        if: matrix.vcpkg
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: vcpkg-${{ runner.os }}-
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('vcpkg.json', 'cmake/triplets/**') }}
+          restore-keys: vcpkg-${{ matrix.name }}-
 
-      - name: Prepare vcpkg
-        run: |
-          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-
-      - name: Configure CMake
-        run: cmake --preset ci
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DLUMEN_WARNINGS_AS_ERRORS=ON ${{ matrix.cmake_args }} $PYBIND11_ARGS
 
       - name: Build
-        run: cmake --build build/ci --parallel
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
 
-      - name: Run tests
-        run: ctest --preset ci
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }} --parallel 4
+
+      - name: Benchmark (informational)
+        if: matrix.bench
+        run: ./build/${{ matrix.preset }}/tests/lumen_bench
+
+  lint:
+    name: lint (clang-format, clang-tidy)
+    runs-on: ubuntu-24.04
+    # TODO(coordinator): remove continue-on-error once the formatting commit and the clang-tidy fixes have landed.
+    continue-on-error: true
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang tools and GTest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18 clang-tidy-18 libgtest-dev
+
+      # The dashboard needs FTXUI from vcpkg; it is left out here to keep the
+      # job fast, so the code under LUMEN_ENABLE_DASHBOARD is not linted.
+      - name: Configure
+        run: cmake --preset release -DLUMEN_ENABLE_DASHBOARD=OFF
+
+      - name: clang-format
+        run: cmake --build --preset release --target format-check
+
+      - name: clang-tidy
+        run: cmake --build --preset release --target lint
