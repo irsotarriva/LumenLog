@@ -28,13 +28,14 @@ target_compile_features(lumen_tests PRIVATE cxx_std_23)
 include(GoogleTest)
 gtest_discover_tests(lumen_tests)
 
-add_executable(lumen_bench
+# Ring buffer throughput. Built with the tests so that it keeps compiling, but
+# not registered with ctest: it prints measurements and has nothing to pass or
+# fail. Run it from a Release build (see the comment at the top of the file).
+add_executable(lumen_bench_transport
   bench_transport.cpp
 )
 
-target_link_libraries(lumen_bench PRIVATE lumen GTest::gtest GTest::gtest_main)
-target_compile_features(lumen_bench PRIVATE cxx_std_23)
+target_link_libraries(lumen_bench_transport PRIVATE lumen)
+target_compile_features(lumen_bench_transport PRIVATE cxx_std_23)
 
-include(GoogleTest)
-gtest_discover_tests(lumen_bench)
 add_subdirectory(compile_checks)

@@ -1,112 +1,160 @@
+// Throughput of the ring buffer that carries records from producers to the
+// dispatch thread. Measures the transport alone: no record building, no
+// dispatch, no sinks. Each run starts P producer threads that offer K elements
+// each while one consumer thread pops, and reports separately how many
+// elements were accepted, rejected (buffer full) and delivered.
+//
+// This is a measurement, not a test, and is not registered with ctest. Build
+// and run it in Release:
+//   cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DLUMEN_ENABLE_DASHBOARD=OFF
+//   cmake --build build/release --target lumen_bench_transport
+//   build/release/tests/lumen_bench_transport
+// The exit status is non-zero only if delivered != accepted, which would be a
+// transport defect.
+
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
-#include <mutex>
-#include <string>
+#include <format>
+#include <iostream>
+#include <string_view>
 #include <thread>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include "lumen/detail/ring_buffer.hpp"
+#include "lumen/record.hpp"
 
-#include "lumen/core.hpp"
-#include "lumen/predicate.hpp"
-#include "lumen/sink.hpp"
-
-namespace lumen {
 namespace {
 
-struct NullSink : public Sink {
-    void on_log(const LogRecord&) override {}
-    void on_metric(const MetricRecord&) override {}
-    void on_progress(const ProgressRecord&) override {}
-    void flush() override {}
+// As large as a LogRecord, so that copying it costs what moving a record costs.
+struct Payload {
+    uint64_t value = 0;
+    std::array<std::byte, sizeof(lumen::LogRecord) - sizeof(uint64_t)> padding{};
 };
 
-class BenchTransport : public ::testing::Test {
-protected:
-    SinkId sink_id_ = 0;
+using Buffer = lumen::RingBuffer<Payload, LUMEN_LOG_CAPACITY>;
+using Clock = std::chrono::steady_clock;
 
-    void SetUp() override {
-        sink_id_ = core().add_sink(std::make_unique<NullSink>(), always());
-    }
+enum class PushMode {
+    TryPush,       // drop when full, as the logging front end does
+    PushBlocking,  // wait for room
+};
 
-    void TearDown() override {
-        if (sink_id_ != 0) {
-            (void)core().remove_sink(sink_id_);
-            sink_id_ = 0;
+struct RunResult {
+    uint64_t offered = 0;
+    uint64_t accepted = 0;
+    uint64_t rejected = 0;
+    uint64_t delivered = 0;
+    double producer_seconds = 0;  // until the last producer returned
+    double total_seconds = 0;     // until the consumer had popped everything
+};
+
+[[nodiscard]] uint64_t produce(Buffer& buffer, PushMode mode, uint64_t count) {
+    uint64_t accepted = 0;
+    for (uint64_t i = 0; i < count; ++i) {
+        Payload item{.value = i};
+        if (mode == PushMode::PushBlocking) {
+            buffer.push_blocking(std::move(item));
+            ++accepted;
+        } else if (buffer.try_push(std::move(item))) {
+            ++accepted;
         }
     }
-};
+    return accepted;
+}
 
-int64_t run_producers(int num_producers, int64_t records_per_producer) {
+// Pops until `producers` have finished and the buffer is empty.
+[[nodiscard]] uint64_t consume(Buffer& buffer, const std::atomic<uint32_t>& finished,
+                               uint32_t producers) {
+    uint64_t delivered = 0;
+    Payload out;
+    while (true) {
+        const bool done = finished.load(std::memory_order_acquire) == producers;
+        if (buffer.try_pop(out)) {
+            ++delivered;
+        } else if (done) {
+            return delivered;
+        } else {
+            std::this_thread::yield();
+        }
+    }
+}
+
+[[nodiscard]] RunResult run(PushMode mode, uint32_t producers, uint64_t per_producer) {
+    // A new buffer per run, so that every run first-touches its slots.
+    Buffer buffer;
     std::atomic<bool> start{false};
-    std::atomic<int64_t> total{0};
+    std::atomic<uint32_t> finished{0};
+    std::atomic<uint64_t> accepted{0};
+    Clock::time_point producers_end;  // written by the last producer, read after join
 
-    std::vector<std::thread> producers;
-    for (int p = 0; p < num_producers; ++p) {
-        producers.emplace_back([&, records_per_producer]() {
+    std::vector<std::thread> threads;
+    for (uint32_t p = 0; p < producers; ++p) {
+        threads.emplace_back([&] {
             while (!start.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }
-
-            for (int64_t i = 0; i < records_per_producer; ++i) {
-                RecordBuilder builder(core().log_buffer(), LogLevel::Info,
-                                      "benchmark message record");
-                builder.tag("thread", static_cast<int64_t>(
-                    std::hash<std::thread::id>{}(std::this_thread::get_id()) & 0xFFFF));
+            accepted.fetch_add(produce(buffer, mode, per_producer), std::memory_order_relaxed);
+            const Clock::time_point now = Clock::now();
+            if (finished.fetch_add(1, std::memory_order_release) + 1 == producers) {
+                producers_end = now;
             }
-
-            total.fetch_add(records_per_producer, std::memory_order_relaxed);
         });
     }
+    uint64_t delivered = 0;
+    std::thread consumer([&] { delivered = consume(buffer, finished, producers); });
 
+    const Clock::time_point begin = Clock::now();
     start.store(true, std::memory_order_release);
-    auto t0 = std::chrono::high_resolution_clock::now();
-
-    for (auto& t : producers) {
-        if (t.joinable()) {
-            t.join();
-        }
+    for (std::thread& t : threads) {
+        t.join();
     }
+    consumer.join();
+    const Clock::time_point end = Clock::now();
 
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-
-    int64_t total_records = num_producers * records_per_producer;
-    int64_t records_per_sec = elapsed_ns > 0
-        ? (total_records * 1'000'000'000LL) / elapsed_ns
-        : 0;
-
-    std::printf(
-        "  producers=%d  records=%lld  elapsed=%lld ms  throughput=%lld rec/s\n",
-        num_producers,
-        static_cast<long long>(total_records),
-        static_cast<long long>(elapsed_ms),
-        static_cast<long long>(records_per_sec));
-
-    return records_per_sec;
+    return RunResult{
+        .offered = producers * per_producer,
+        .accepted = accepted.load(),
+        .rejected = buffer.rejected_count(),
+        .delivered = delivered,
+        .producer_seconds = std::chrono::duration<double>(producers_end - begin).count(),
+        .total_seconds = std::chrono::duration<double>(end - begin).count(),
+    };
 }
 
-TEST_F(BenchTransport, RecordsPerSec1Producer) {
-    int64_t rate = run_producers(1, 100'000);
-    EXPECT_GT(rate, 0) << "Expected positive throughput";
-}
-
-TEST_F(BenchTransport, RecordsPerSec2Producers) {
-    int64_t rate = run_producers(2, 50'000);
-    EXPECT_GT(rate, 0) << "Expected positive throughput";
-}
-
-TEST_F(BenchTransport, RecordsPerSec4Producers) {
-    int64_t rate = run_producers(4, 25'000);
-    EXPECT_GT(rate, 0) << "Expected positive throughput";
-}
-
-TEST_F(BenchTransport, RecordsPerSec8Producers) {
-    int64_t rate = run_producers(8, 12'500);
-    EXPECT_GT(rate, 0) << "Expected positive throughput";
+[[nodiscard]] std::string_view name(PushMode mode) {
+    return mode == PushMode::TryPush ? "try_push" : "push_blocking";
 }
 
 }  // namespace
-}  // namespace lumen
+
+int main() {
+#ifndef NDEBUG
+    std::cout << "warning: assertions are enabled; numbers from a Debug build are not meaningful\n";
+#endif
+    constexpr uint64_t total_per_run = 2'000'000;
+    std::cout << std::format("element size {} B, capacity {}, {} elements offered per run\n",
+                             sizeof(Payload), Buffer::capacity(), total_per_run);
+    std::cout << std::format("{:<14}{:>4}{:>11}{:>11}{:>11}{:>16}{:>16}\n", "mode", "P",
+                             "accepted", "rejected", "delivered", "accepted/s", "delivered/s");
+
+    bool consistent = true;
+    for (const PushMode mode : {PushMode::TryPush, PushMode::PushBlocking}) {
+        for (const uint32_t producers : {1u, 2u, 4u, 8u}) {
+            const RunResult r = run(mode, producers, total_per_run / producers);
+            consistent = consistent && r.delivered == r.accepted &&
+                         r.accepted + r.rejected == r.offered;
+            std::cout << std::format("{:<14}{:>4}{:>11}{:>11}{:>11}{:>16.0f}{:>16.0f}\n",
+                                     name(mode), producers, r.accepted, r.rejected, r.delivered,
+                                     static_cast<double>(r.accepted) / r.producer_seconds,
+                                     static_cast<double>(r.delivered) / r.total_seconds);
+        }
+    }
+    if (!consistent) {
+        std::cout << "error: delivered != accepted or accepted + rejected != offered\n";
+        return 1;
+    }
+    return 0;
+}

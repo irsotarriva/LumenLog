@@ -1,57 +1,89 @@
 #ifndef LUMEN_DETAIL_RING_BUFFER_HPP
 #define LUMEN_DETAIL_RING_BUFFER_HPP
 
-#include <array>
+#include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <new>
+#include <memory>
+#include <optional>
 #include <thread>
 #include <type_traits>
 #include <utility>
 
-#include "lumen/detail/overflow_policy.hpp"
-
 namespace lumen {
 
-template <typename T, size_t N>
+// An element must be movable without throwing: a producer that has claimed a
+// slot must always publish it, or the consumer would wait on that slot forever.
+template <typename T>
+concept RingBufferElement = std::is_nothrow_move_constructible_v<T> &&
+                            std::is_nothrow_move_assignable_v<T> &&
+                            std::is_nothrow_destructible_v<T>;
+
+// Bounded multi-producer, single-consumer FIFO queue (D. Vyukov's bounded
+// queue, with the consumer side specialised to one thread).
+//
+// Threads. try_push() and push_blocking() may be called from any number of
+// threads at once. try_pop() must be called by one thread at a time; successive
+// consumers must be ordered by happens-before (Core uses a mutex). The
+// observers (size, empty, head_position, tail_position, rejected_count) may be
+// called from any thread and return a snapshot. The destructor must not run
+// concurrently with any other call.
+//
+// Positions. Every accepted element gets a position p from the monotonic
+// 64-bit counter head_ (it does not wrap in practice: 2^63 pushes at 10^9/s
+// take 292 years) and lives in slot p % N. tail_ is the position of the next
+// element the consumer will take. sequence_[p % N] encodes the slot's state:
+//   2p      the slot is free for the producer that claims position p;
+//   2p + 1  the element of position p is stored and may be popped.
+// After popping position p the consumer stores 2(p + N), freeing the slot for
+// the next lap. The factor two keeps "stored p" and "free for p + 1" distinct
+// when N == 1.
+//
+// Push. A producer reads head_ = p and the slot's sequence s. If s == 2p it
+// claims p by a CAS on head_, constructs the element in the slot and stores
+// 2p + 1. If s < 2p the slot still holds position p - N, so N positions are
+// claimed and not yet popped: the buffer is full. If s > 2p another producer
+// has claimed p already, and the producer reloads head_.
+//
+// Memory order. Element data is handed over only through sequence_: the
+// publishing store (release) pairs with the consumer's load (acquire), and the
+// consumer's freeing store (release) pairs with the next producer's load
+// (acquire), so a construction never overlaps the destruction of the previous
+// element in that slot. head_ only arbitrates which producer owns a position
+// and can be relaxed. tail_ is written by the consumer alone and is stored
+// with release for observers.
+//
+// Ordering. Elements are popped in position order. try_pop() returns false
+// while the oldest claimed element is still being written, even if later
+// elements are ready.
+//
+// Storage. Slots are raw storage on the heap: an element exists only between
+// its push and its pop, and the constructor does not write to it, so pages
+// that are never used are never made resident. Slots are not padded to cache
+// lines: for elements of several hundred bytes, two producers share at most
+// the one line at a slot boundary, and padding would add up to 63 bytes per
+// slot.
+//
+// Allocation failure in the constructor is not recoverable and terminates
+// the program (std::bad_alloc escapes the noexcept constructor).
+template <RingBufferElement T, std::size_t N>
+    requires(std::has_single_bit(N))
 class RingBuffer {
-    static_assert(N > 0 && (N & (N - 1)) == 0, "RingBuffer capacity must be a power of two");
-
-    static constexpr size_t capacity_ = N;
-    static constexpr size_t mask_ = N - 1;
-
-    struct Slot {
-        alignas(64) std::atomic<uint64_t> sequence;
-        T data;
-    };
-
 public:
-    RingBuffer() {
-        for (size_t i = 0; i < capacity_; ++i) {
-            slots_[i].sequence.store(i, std::memory_order_relaxed);
-        }
-        // Initialize elements that are not trivially default-constructible
-        if constexpr (!std::is_trivially_default_constructible_v<T>) {
-            for (size_t i = 0; i < capacity_; ++i) {
-                new (&slots_[i].data) T();
-            }
+    RingBuffer() noexcept
+        : cells_(std::make_unique_for_overwrite<Cell[]>(N)),
+          sequence_(std::make_unique<std::atomic<uint64_t>[]>(N)) {
+        for (uint64_t pos = 0; pos < N; ++pos) {
+            sequence_[pos].store(free_for(pos), std::memory_order_relaxed);
         }
     }
 
     ~RingBuffer() {
-        // Destroy any unconsumed elements
-        if constexpr (!std::is_trivially_destructible_v<T>) {
-            uint64_t t = tail_.load(std::memory_order_relaxed);
-            uint64_t h = head_.load(std::memory_order_relaxed);
-            while (t < h) {
-                size_t idx = t & mask_;
-                uint64_t seq = slots_[idx].sequence.load(std::memory_order_relaxed);
-                if (seq == t + 1) {
-                    slots_[idx].data.~T();
-                }
-                ++t;
-            }
+        const uint64_t head = head_.load(std::memory_order_relaxed);
+        for (uint64_t pos = tail_.load(std::memory_order_relaxed); pos != head; ++pos) {
+            std::destroy_at(&cells_[index_of(pos)].value);
         }
     }
 
@@ -60,95 +92,129 @@ public:
     RingBuffer(RingBuffer&&) = delete;
     RingBuffer& operator=(RingBuffer&&) = delete;
 
-    template <OverflowPolicy Policy = OverflowPolicy::DropNewest, typename U = T>
-    bool push(U&& item) {
-        while (true) {
-            uint64_t pos = head_.load(std::memory_order_relaxed);
-            size_t idx = pos & mask_;
-            uint64_t seq = slots_[idx].sequence.load(std::memory_order_acquire);
-            int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos);
-
-            if (diff == 0) {
-                if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_acq_rel)) {
-                    slots_[idx].data = std::forward<U>(item);
-                    slots_[idx].sequence.store(pos + 1, std::memory_order_release);
-                    return true;
-                }
-                continue;
-            }
-
-            if (diff > 0) {
-                // Another producer claimed `pos` after we read head_; reload
-                // and retry. Only diff < 0 means the buffer is full.
-                continue;
-            }
-
-            if constexpr (Policy == OverflowPolicy::DropNewest) {
-                return false;
-            } else if constexpr (Policy == OverflowPolicy::DropOldest) {
-                if (diff < 0) {
-                    uint64_t t = tail_.load(std::memory_order_relaxed);
-                    if (pos - t >= capacity_) {
-                        if (tail_.compare_exchange_weak(t, t + 1, std::memory_order_acq_rel)) {
-                            size_t tail_idx = t & mask_;
-                            slots_[tail_idx].sequence.store(t + capacity_, std::memory_order_release);
-                        }
-                    }
-                }
-                continue;
-            } else {
-                while (slots_[idx].sequence.load(std::memory_order_acquire) != pos) {
-                    std::this_thread::yield();
-                }
-                continue;
-            }
-        }
-    }
-
-    bool pop(T& item) {
-        while (true) {
-            uint64_t t = tail_.load(std::memory_order_relaxed);
-            size_t idx = t & mask_;
-            uint64_t seq = slots_[idx].sequence.load(std::memory_order_acquire);
-            int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(t + 1);
-
-            if (diff == 0) {
-                item = std::move(slots_[idx].data);
-                slots_[idx].sequence.store(t + capacity_, std::memory_order_release);
-                tail_.store(t + 1, std::memory_order_release);
-                return true;
-            }
-
-            if (diff > 0) {
-                tail_.store(t + 1, std::memory_order_release);
-                continue;
-            }
-
+    // Moves `item` into the buffer and returns true, or returns false if the
+    // buffer is full. On false, `item` is untouched and rejected_count() grows
+    // by one.
+    [[nodiscard]] bool try_push(T&& item) noexcept {
+        const std::optional<uint64_t> pos = try_claim_();
+        if (!pos) {
+            rejected_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
+        publish_(*pos, std::move(item));
+        return true;
     }
 
-    uint64_t size() const {
-        uint64_t h = head_.load(std::memory_order_acquire);
-        uint64_t t = tail_.load(std::memory_order_acquire);
-        return h - t;
+    // Moves `item` into the buffer, yielding while the buffer is full. Never
+    // rejects. Waits forever if no other thread is popping, so it must not be
+    // called from the consumer's thread.
+    void push_blocking(T&& item) noexcept {
+        std::optional<uint64_t> pos = try_claim_();
+        while (!pos) {
+            std::this_thread::yield();
+            pos = try_claim_();
+        }
+        publish_(*pos, std::move(item));
     }
 
-    bool empty() const {
-        return size() == 0;
+    // Moves the oldest element into `out` and returns true, or returns false
+    // (leaving `out` untouched) if the buffer is empty or the oldest element is
+    // still being written. Single consumer: see the class comment.
+    [[nodiscard]] bool try_pop(T& out) noexcept {
+        const uint64_t pos = tail_.load(std::memory_order_relaxed);
+        std::atomic<uint64_t>& sequence = sequence_[index_of(pos)];
+        if (sequence.load(std::memory_order_acquire) != stored(pos)) {
+            return false;
+        }
+        T& value = cells_[index_of(pos)].value;
+        out = std::move(value);
+        std::destroy_at(&value);
+        sequence.store(free_for(pos + N), std::memory_order_release);
+        tail_.store(pos + 1, std::memory_order_release);
+        return true;
     }
 
-    // Number of slots claimed by producers so far (monotonic).
-    [[nodiscard]] uint64_t head_position() const { return head_.load(std::memory_order_acquire); }
-    // Number of slots released by the consumer so far (monotonic).
-    [[nodiscard]] uint64_t tail_position() const { return tail_.load(std::memory_order_acquire); }
+    // Positions claimed and not yet popped, in [0, capacity()]. Exact only
+    // while no other thread pushes or pops.
+    [[nodiscard]] uint64_t size() const noexcept {
+        // tail_ first: it never passes head_, so head - tail cannot underflow.
+        const uint64_t tail = tail_.load(std::memory_order_acquire);
+        const uint64_t head = head_.load(std::memory_order_acquire);
+        return std::min<uint64_t>(head - tail, N);
+    }
 
-    static constexpr uint64_t capacity() { return capacity_; }
+    [[nodiscard]] bool empty() const noexcept { return size() == 0; }
+
+    // Number of positions claimed by producers so far (monotonic). A claimed
+    // element may still be being written.
+    [[nodiscard]] uint64_t head_position() const noexcept {
+        return head_.load(std::memory_order_acquire);
+    }
+
+    // Number of elements popped so far (monotonic).
+    [[nodiscard]] uint64_t tail_position() const noexcept {
+        return tail_.load(std::memory_order_acquire);
+    }
+
+    // Number of try_push() calls that found the buffer full (monotonic).
+    [[nodiscard]] uint64_t rejected_count() const noexcept {
+        return rejected_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] static constexpr uint64_t capacity() noexcept { return N; }
 
 private:
-    std::array<Slot, capacity_> slots_;
-    alignas(64) std::atomic<uint64_t> head_{0};
-    alignas(64) std::atomic<uint64_t> tail_{0};
+    // Storage for one element whose lifetime is managed by hand: the empty
+    // constructor and destructor neither create nor destroy `value`.
+    union Cell {
+        Cell() noexcept {}
+        ~Cell() {}
+        Cell(const Cell&) = delete;
+        Cell& operator=(const Cell&) = delete;
+        Cell(Cell&&) = delete;
+        Cell& operator=(Cell&&) = delete;
+        T value;
+    };
+
+    // Producers and the consumer write different counters; keeping them on
+    // separate cache lines avoids false sharing between the two sides.
+    static constexpr std::size_t cache_line_size = 64;
+
+    [[nodiscard]] static constexpr std::size_t index_of(uint64_t pos) noexcept {
+        return static_cast<std::size_t>(pos & (N - 1));
+    }
+    [[nodiscard]] static constexpr uint64_t free_for(uint64_t pos) noexcept { return 2 * pos; }
+    [[nodiscard]] static constexpr uint64_t stored(uint64_t pos) noexcept { return 2 * pos + 1; }
+
+    // Claims the next position, or returns nullopt if the buffer is full.
+    [[nodiscard]] std::optional<uint64_t> try_claim_() noexcept {
+        uint64_t pos = head_.load(std::memory_order_relaxed);
+        while (true) {
+            const uint64_t sequence = sequence_[index_of(pos)].load(std::memory_order_acquire);
+            if (sequence == free_for(pos)) {
+                // On failure the CAS reloads `pos` and we look at the new slot.
+                if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
+                    return pos;
+                }
+            } else if (sequence < free_for(pos)) {
+                return std::nullopt;
+            } else {
+                pos = head_.load(std::memory_order_relaxed);
+            }
+        }
+    }
+
+    // Stores `item` at a position this thread has claimed and hands it to the consumer.
+    void publish_(uint64_t pos, T&& item) noexcept {
+        std::construct_at(&cells_[index_of(pos)].value, std::move(item));
+        sequence_[index_of(pos)].store(stored(pos), std::memory_order_release);
+    }
+
+    std::unique_ptr<Cell[]> cells_;
+    std::unique_ptr<std::atomic<uint64_t>[]> sequence_;
+    alignas(cache_line_size) std::atomic<uint64_t> head_{0};
+    alignas(cache_line_size) std::atomic<uint64_t> tail_{0};
+    alignas(cache_line_size) std::atomic<uint64_t> rejected_{0};
 };
 
 }  // namespace lumen
