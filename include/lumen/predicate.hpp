@@ -147,7 +147,8 @@ private:
 // matches "42" and "42.0"); a string or bare word compares text, as
 // tag_equals / tag_not_equals, and only == and != are allowed with it. The
 // rules above apply: a comparison against a missing tag is false, and the
-// first of duplicate keys decides. Parentheses and `!` may nest 64 deep.
+// first of duplicate keys decides. Parentheses and `!` together may nest at
+// most 63 deep; deeper queries are a parse error.
 
 struct PredicateParseError {
     std::error_code code;  // LumenError::InvalidPredicate
