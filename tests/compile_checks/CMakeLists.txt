@@ -25,8 +25,10 @@ target_link_libraries(lumen_check_macros_alone PRIVATE lumen)
 add_test(NAME CompileCheck.MacrosAlone COMMAND lumen_check_macros_alone)
 
 # Every public header compiles as the only include of a translation unit.
+# The bridges are checked separately below.
 file(GLOB_RECURSE lumen_public_headers CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/include/lumen/*.hpp")
+list(FILTER lumen_public_headers EXCLUDE REGEX "/include/lumen/bridges/")
 set(lumen_header_tus "")
 foreach(header IN LISTS lumen_public_headers)
   file(RELATIVE_PATH rel "${PROJECT_SOURCE_DIR}/include" "${header}")
@@ -41,12 +43,12 @@ add_test(NAME CompileCheck.EveryHeaderAlone COMMAND lumen_check_headers_alone)
 
 # Every bridge compiles when its framework is absent: the __has_include (or
 # _OPENMP) guard must reduce it to an empty translation unit.
-file(GLOB lumen_bridge_headers CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/bridges/*.hpp")
+file(GLOB lumen_bridge_headers CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/include/lumen/bridges/*.hpp")
 set(lumen_bridge_tus "")
 foreach(header IN LISTS lumen_bridge_headers)
   get_filename_component(name "${header}" NAME_WE)
   set(tu "${CMAKE_CURRENT_BINARY_DIR}/bridges/bridge_${name}.cpp")
-  file(CONFIGURE OUTPUT "${tu}" CONTENT "#include \"${header}\"\n")
+  file(CONFIGURE OUTPUT "${tu}" CONTENT "#include \"lumen/bridges/${name}.hpp\"\n")
   list(APPEND lumen_bridge_tus "${tu}")
 endforeach()
 add_executable(lumen_check_bridges_without_frameworks check_main.cpp ${lumen_bridge_tus})
@@ -57,7 +59,6 @@ add_test(NAME CompileCheck.BridgesWithoutFrameworks COMMAND lumen_check_bridges_
 find_package(OpenMP COMPONENTS CXX)
 if(OpenMP_CXX_FOUND)
   add_executable(lumen_check_bridge_openmp bridge_openmp.cpp)
-  target_include_directories(lumen_check_bridge_openmp PRIVATE "${PROJECT_SOURCE_DIR}/bridges")
   target_link_libraries(lumen_check_bridge_openmp PRIVATE lumen OpenMP::OpenMP_CXX)
   add_test(NAME CompileCheck.BridgeOpenMP COMMAND lumen_check_bridge_openmp)
 else()
