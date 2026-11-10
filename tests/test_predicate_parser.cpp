@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "lumen/detail/error.hpp"
+#include "lumen/error.hpp"
 #include "lumen/predicate.hpp"
 
 namespace lumen {
@@ -13,7 +13,7 @@ namespace {
 
 TagSet<16> tags_of(std::initializer_list<std::pair<std::string_view, std::string_view>> kv) {
     TagSet<16> tags;
-    for (const auto& [k, v] : kv) tags.add(k, v);
+    for (const auto& [k, v] : kv) EXPECT_TRUE(tags.add(k, v));
     return tags;
 }
 

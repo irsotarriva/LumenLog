@@ -25,9 +25,9 @@ if(NOT lumen_min_level_value EQUAL lumen_min_level_value_default)
   target_compile_definitions(lumen PUBLIC LUMEN_MIN_LEVEL_VALUE=${lumen_min_level_value})
 endif()
 
-# Ring buffer slot counts. They set the layout of Core, which consumers see
-# through the headers, so a PRIVATE definition would give the library and its
-# users different layouts. Header defaults: lumen/record.hpp.
+# Ring buffer slot counts. Consumers see them through lumen/limits.hpp, so
+# they are PUBLIC to keep the library and its users in agreement. Header
+# defaults: lumen/limits.hpp.
 set(LUMEN_LOG_CAPACITY "65536" CACHE STRING "LogBuffer slot count (power of two)")
 set(LUMEN_METRIC_CAPACITY "16384" CACHE STRING "MetricBuffer slot count (power of two)")
 set(LUMEN_PROGRESS_CAPACITY "4096" CACHE STRING "ProgressBuffer slot count (power of two)")

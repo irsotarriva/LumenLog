@@ -1,45 +1,34 @@
 #ifndef LUMEN_DETAIL_SCOPE_STACK_HPP
 #define LUMEN_DETAIL_SCOPE_STACK_HPP
 
+#include <array>
+#include <charconv>
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <string>
 #include <string_view>
+#include <system_error>
 
-#include "lumen/record.hpp"
+#include "lumen/core.hpp"
+#include "lumen/detail/context.hpp"
+#include "lumen/progress.hpp"
 
-namespace lumen {
-namespace detail {
+// The guards behind LUMEN_SCOPE and LUMEN_LOOP (lumen/macros.hpp documents
+// what they do for the user).
 
-struct ScopeFrame {
-    TagSet<8> tags;
-    ScopeFrame* next{nullptr};  // non-owning; frames live on the stack
-};
+namespace lumen::detail {
 
-inline thread_local ScopeFrame* tls_scope_head = nullptr;  // non-owning; head of stack-linked list
-
-inline void collect_scope_tags(TagSet<8>& out) {
-    for (const ScopeFrame* f = tls_scope_head; f; f = f->next) {
-        for (const auto& e : f->tags) {
-            out.add(e.key, e.value);
-        }
-    }
-}
-
-// Owns copies of its key and value, so a temporary such as
-// LUMEN_SCOPE("run", std::to_string(n)) is safe.
+// Adds key=value to the calling thread's context while it lives. Owns copies
+// of both strings, so LUMEN_SCOPE("run", std::to_string(n)) is safe.
 class ScopeGuard {
 public:
-    ScopeGuard(std::string_view key, std::string_view value)
-        : key_(key), value_(value) {
-        frame_.tags.add(key_, value_);
-        frame_.next = tls_scope_head;
-        tls_scope_head = &frame_;
+    ScopeGuard(std::string_view key, std::string_view value) : key_(key), value_(value) {
+        frame_.key = key_;
+        frame_.value = value_;
+        push_scope(frame_);
     }
-
-    ~ScopeGuard() {
-        tls_scope_head = frame_.next;
-    }
+    ~ScopeGuard() { pop_scope(frame_); }
 
     ScopeGuard(const ScopeGuard&) = delete;
     ScopeGuard& operator=(const ScopeGuard&) = delete;
@@ -52,66 +41,60 @@ private:
     ScopeFrame frame_;
 };
 
+// The state of one LUMEN_LOOP: a progress bar and the scope tag
+// label=<index of the iteration running>.
+template <std::integral T>
+    requires(!std::same_as<T, bool>)
 class LoopScope {
 public:
-    LoopScope(std::string_view label, ProgressBuffer& pb, uint64_t total)
-        : label_(label), total_(total), current_(0),
-          ph_(pb, label, total) {
-        frame_.tags.add("loop_label", label_);
-        frame_.next = tls_scope_head;
-        tls_scope_head = &frame_;
+    LoopScope(Core& core, std::string_view label, T total)
+        : total_(total > T{0} ? static_cast<uint64_t>(total) : 0)
+        , label_(label)
+        , progress_(core, label, total_) {
+        frame_.key = label_;
+        push_scope(frame_);
     }
-
-    ~LoopScope() {
-        tls_scope_head = frame_.next;
-        if (!ph_done_) {
-            ph_.finish();
-        }
-    }
+    ~LoopScope() { pop_scope(frame_); }
 
     LoopScope(const LoopScope&) = delete;
     LoopScope& operator=(const LoopScope&) = delete;
     LoopScope(LoopScope&&) = delete;
     LoopScope& operator=(LoopScope&&) = delete;
 
+    // Called before every iteration, including the first: the previous body
+    // (if any) has completed, so it is counted. Returns false, after sending
+    // total/total, when no iteration is left.
     [[nodiscard]] bool advance() {
-        if (current_ >= total_) {
+        if (started_) {
+            ++completed_;
+        }
+        started_ = true;
+        if (completed_ >= total_) {
+            progress_.finish();
             return false;
         }
-        frame_.tags.set("iteration",
-            std::string_view{iter_buf_, static_cast<size_t>(
-                snprintf(iter_buf_, 24, "%llu",
-                    static_cast<unsigned long long>(current_)))});
-        frame_.tags.set("total",
-            std::string_view{total_buf_, static_cast<size_t>(
-                snprintf(total_buf_, 24, "%llu",
-                    static_cast<unsigned long long>(total_)))});
-        ph_.update(current_);
-        ++current_;
-        if (current_ >= total_) {
-            ph_.finish();
-            ph_done_ = true;
-        }
+        progress_.update(completed_);
+        const auto [end, ec] =
+            std::to_chars(index_.data(), index_.data() + index_.size(), completed_);
+        // 24 characters hold every uint64_t, so to_chars cannot fail.
+        frame_.value =
+            ec == std::errc{} ? std::string_view(index_.data(), end) : std::string_view{};
         return true;
     }
 
-    [[nodiscard]] uint64_t current() const {
-        if (current_ == 0) return 0;
-        return current_ - 1;
-    }
+    // The index of the iteration running, in the type of the loop's total.
+    [[nodiscard]] T index() const noexcept { return static_cast<T>(completed_); }
 
 private:
-    ScopeFrame frame_;
-    std::string label_;
     uint64_t total_;
-    uint64_t current_;
-    ProgressHandle ph_;
-    bool ph_done_{false};
-    char iter_buf_[24]{};
-    char total_buf_[24]{};
+    uint64_t completed_ = 0;
+    bool started_ = false;
+    std::string label_;
+    std::array<char, 24> index_{};
+    ProgressHandle progress_;
+    ScopeFrame frame_;
 };
 
-}  // namespace detail
-}  // namespace lumen
+}  // namespace lumen::detail
 
 #endif

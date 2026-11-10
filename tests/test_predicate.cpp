@@ -15,8 +15,8 @@ namespace {
 
 TagSet<16> make_tags() {
     TagSet<16> tags;
-    tags.add("env", "prod");
-    tags.add("app", "myapp");
+    EXPECT_TRUE(tags.add("env", "prod"));
+    EXPECT_TRUE(tags.add("app", "myapp"));
     return tags;
 }
 
@@ -133,7 +133,7 @@ TEST(PredicateTest, TagNotEqualsComparesPresentValue) {
 
 TEST(PredicateTest, TagEqualsEmptyStringMatchesPresentEmptyValue) {
     TagSet<16> tags;
-    tags.add("k", "");
+    EXPECT_TRUE(tags.add("k", ""));
     EXPECT_TRUE(tag_equals("k", "").evaluate(tags, LogLevel::Info));
     EXPECT_FALSE(tag_not_equals("k", "").evaluate(tags, LogLevel::Info));
     EXPECT_TRUE(tag_not_equals("k", "x").evaluate(tags, LogLevel::Info));
@@ -157,7 +157,7 @@ TEST(PredicateTest, TagExistsMiss) {
 
 TEST(PredicateTest, TagExistsMatchesEmptyValue) {
     TagSet<16> tags;
-    tags.add("flag", "");
+    EXPECT_TRUE(tags.add("flag", ""));
     EXPECT_TRUE(tag_exists("flag").evaluate(tags, LogLevel::Info));
 }
 
@@ -165,7 +165,7 @@ TEST(PredicateTest, TagExistsMatchesEmptyValue) {
 
 TEST(PredicateTest, TagLessAndGreater) {
     TagSet<16> tags;
-    tags.add("pressure", "69999.97");
+    EXPECT_TRUE(tags.add("pressure", "69999.97"));
 
     EXPECT_TRUE(tag_less("pressure", 70000).evaluate(tags, LogLevel::Info));
     EXPECT_FALSE(tag_greater("pressure", 70000).evaluate(tags, LogLevel::Info));
@@ -176,9 +176,9 @@ TEST(PredicateTest, TagLessAndGreater) {
 
 TEST(PredicateTest, TagCompareParsesIntegersNegativesAndExponents) {
     TagSet<16> tags;
-    tags.add("count", "42");
-    tags.add("temp", "-12.5");
-    tags.add("eps", "1e-06");
+    EXPECT_TRUE(tags.add("count", "42"));
+    EXPECT_TRUE(tags.add("temp", "-12.5"));
+    EXPECT_TRUE(tags.add("eps", "1e-06"));
 
     EXPECT_TRUE(tag_compare("count", CompareOp::Equal, 42.0).evaluate(tags, LogLevel::Info));
     EXPECT_TRUE(tag_compare("count", CompareOp::NotEqual, 41.0).evaluate(tags, LogLevel::Info));
@@ -188,7 +188,7 @@ TEST(PredicateTest, TagCompareParsesIntegersNegativesAndExponents) {
 
 TEST(PredicateTest, TagCompareComposesWithLevel) {
     TagSet<16> tags;
-    tags.add("pressure", "500");
+    EXPECT_TRUE(tags.add("pressure", "500"));
     const Predicate p = level_at_least(LogLevel::Warn) && tag_less("pressure", 1000);
 
     EXPECT_TRUE(p.evaluate(tags, LogLevel::Error));
@@ -209,11 +209,11 @@ TEST(PredicateTest, TextComparisonsAgainstMissingTagAreFalse) {
 
 TEST(PredicateTest, NumericComparisonsAgainstMissingOrNonNumericTagAreFalse) {
     TagSet<16> tags;
-    tags.add("name", "pump");
-    tags.add("partial", "42abc");
-    tags.add("empty", "");
-    tags.add("signed", "+1");
-    tags.add("spaced", " 1");
+    EXPECT_TRUE(tags.add("name", "pump"));
+    EXPECT_TRUE(tags.add("partial", "42abc"));
+    EXPECT_TRUE(tags.add("empty", ""));
+    EXPECT_TRUE(tags.add("signed", "+1"));
+    EXPECT_TRUE(tags.add("spaced", " 1"));
 
     for (const std::string_view key : {"name", "partial", "empty", "signed", "spaced", "missing"}) {
         for (const CompareOp op : all_ops) {
@@ -239,8 +239,8 @@ TEST(PredicateTest, NegatedComparisonOfMissingTagIsTrue) {
 
 TEST(PredicateTest, FirstOfDuplicateKeysDecidesTextComparisons) {
     TagSet<16> tags;
-    tags.add("k", "a");
-    tags.add("k", "b");
+    EXPECT_TRUE(tags.add("k", "a"));
+    EXPECT_TRUE(tags.add("k", "b"));
     ASSERT_EQ(tags.count(), 2u);
 
     EXPECT_TRUE(tag_exists("k").evaluate(tags, LogLevel::Info));
@@ -252,10 +252,10 @@ TEST(PredicateTest, FirstOfDuplicateKeysDecidesTextComparisons) {
 
 TEST(PredicateTest, FirstOfDuplicateKeysDecidesNumericComparisons) {
     TagSet<16> tags;
-    tags.add("n", "1");
-    tags.add("n", "5");
-    tags.add("m", "abc");
-    tags.add("m", "5");
+    EXPECT_TRUE(tags.add("n", "1"));
+    EXPECT_TRUE(tags.add("n", "5"));
+    EXPECT_TRUE(tags.add("m", "abc"));
+    EXPECT_TRUE(tags.add("m", "5"));
     ASSERT_EQ(tags.count(), 4u);
 
     EXPECT_TRUE(tag_compare("n", CompareOp::Equal, 1.0).evaluate(tags, LogLevel::Info));
@@ -484,7 +484,7 @@ TEST(PredicateTest, LeftDeepAndChainOf100000TermsEvaluates) {
     for (int32_t i = 0; i < deep_terms; ++i) chain = chain && tag_exists("k");
 
     TagSet<16> with_k;
-    with_k.add("k", "1");
+    EXPECT_TRUE(with_k.add("k", "1"));
     EXPECT_TRUE(chain.evaluate(with_k, LogLevel::Info));
     EXPECT_TRUE(chain.evaluate(with_k));
     EXPECT_FALSE(chain.evaluate(make_tags(), LogLevel::Info));
@@ -496,7 +496,7 @@ TEST(PredicateTest, RightDeepOrChainOf100000TermsEvaluates) {
     for (int32_t i = 0; i < deep_terms; ++i) chain = tag_exists("k") || chain;
 
     TagSet<16> with_k;
-    with_k.add("k", "1");
+    EXPECT_TRUE(with_k.add("k", "1"));
     EXPECT_TRUE(chain.evaluate(with_k, LogLevel::Info));
     // Without `k` every one of the terms is looked at, down to the bottom.
     EXPECT_FALSE(chain.evaluate(make_tags(), LogLevel::Info));
@@ -514,7 +514,7 @@ TEST(PredicateTest, DeepChainsSharingNodesCanBeDestroyedOnTwoThreadsAtOnce) {
     Predicate shared = always();
     for (int32_t i = 0; i < deep_terms; ++i) shared = shared && tag_exists("k");
     TagSet<16> with_k;
-    with_k.add("k", "1");
+    EXPECT_TRUE(with_k.add("k", "1"));
 
     // Each thread grows its own chain on top of the shared one, evaluates it
     // and destroys its own nodes while the other thread may be doing the same.
@@ -548,9 +548,9 @@ TEST(PredicateTest, LevelOnlyPredicatesPassRecordsWithoutLevel) {
 
 TEST(PredicateTest, LevelConditionIsIgnoredInsideAnd) {
     TagSet<16> match;
-    match.add("run_id", "42");
+    EXPECT_TRUE(match.add("run_id", "42"));
     TagSet<16> other;
-    other.add("run_id", "7");
+    EXPECT_TRUE(other.add("run_id", "7"));
     const Predicate p = level_at_least(LogLevel::Warn) && tag_compare("run_id", CompareOp::Equal, 42);
 
     EXPECT_TRUE(p.evaluate(match));
@@ -560,7 +560,7 @@ TEST(PredicateTest, LevelConditionIsIgnoredInsideAnd) {
 TEST(PredicateTest, LevelConditionIsIgnoredInsideOr) {
     // Treating the level part as "true" would pass every metric here.
     TagSet<16> other;
-    other.add("run_id", "7");
+    EXPECT_TRUE(other.add("run_id", "7"));
     const Predicate p = level_at_least(LogLevel::Warn) || tag_compare("run_id", CompareOp::Equal, 42);
 
     EXPECT_FALSE(p.evaluate(other));
@@ -569,7 +569,7 @@ TEST(PredicateTest, LevelConditionIsIgnoredInsideOr) {
 TEST(PredicateTest, NegatedLevelConditionIsIgnoredForRecordWithoutLevel) {
     const Predicate negated = !level_at_least(LogLevel::Warn);
     TagSet<16> with_x;
-    with_x.add("x", "1");
+    EXPECT_TRUE(with_x.add("x", "1"));
     const TagSet<16> without_x;
 
     // Fails if the negated level is taken as false: the tag alone must decide.
@@ -583,7 +583,7 @@ TEST(PredicateTest, NegatedLevelConditionIsIgnoredForRecordWithoutLevel) {
 
 TEST(PredicateTest, TagOnlyPredicatesBehaveTheSameWithOrWithoutLevel) {
     TagSet<16> tags;
-    tags.add("env", "prod");
+    EXPECT_TRUE(tags.add("env", "prod"));
     const Predicate p = tag_equals("env", "prod") && !tag_exists("suppress");
     EXPECT_EQ(p.evaluate(tags), p.evaluate(tags, LogLevel::Trace));
     EXPECT_FALSE(never().evaluate(tags));

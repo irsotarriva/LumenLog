@@ -11,16 +11,16 @@
 #include <cstdint>
 
 #include "lumen/macros.hpp"
-#include "lumen/record.hpp"
+#include "lumen/limits.hpp"
 
 static_assert(static_cast<int32_t>(lumen::compiled_min_level) == LUMEN_CHECK_MIN_LEVEL_VALUE,
               "LUMEN_MIN_LEVEL_VALUE fallback in macros.hpp differs from the CMake default");
-static_assert(lumen::LogBuffer::capacity() == LUMEN_CHECK_LOG_CAPACITY,
-              "LUMEN_LOG_CAPACITY fallback in record.hpp differs from the CMake default");
-static_assert(lumen::MetricBuffer::capacity() == LUMEN_CHECK_METRIC_CAPACITY,
-              "LUMEN_METRIC_CAPACITY fallback in record.hpp differs from the CMake default");
-static_assert(lumen::ProgressBuffer::capacity() == LUMEN_CHECK_PROGRESS_CAPACITY,
-              "LUMEN_PROGRESS_CAPACITY fallback in record.hpp differs from the CMake default");
+static_assert(lumen::log_queue_capacity == LUMEN_CHECK_LOG_CAPACITY,
+              "LUMEN_LOG_CAPACITY fallback in limits.hpp differs from the CMake default");
+static_assert(lumen::metric_queue_capacity == LUMEN_CHECK_METRIC_CAPACITY,
+              "LUMEN_METRIC_CAPACITY fallback in limits.hpp differs from the CMake default");
+static_assert(lumen::progress_queue_capacity == LUMEN_CHECK_PROGRESS_CAPACITY,
+              "LUMEN_PROGRESS_CAPACITY fallback in limits.hpp differs from the CMake default");
 
 int main() {
     return 0;

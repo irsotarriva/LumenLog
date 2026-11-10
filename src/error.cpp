@@ -1,4 +1,4 @@
-#include "lumen/detail/error.hpp"
+#include "lumen/error.hpp"
 
 namespace lumen {
 
@@ -8,30 +8,14 @@ const char* LumenErrorCategory::name() const noexcept {
 
 std::string LumenErrorCategory::message(int ev) const {
     switch (static_cast<LumenError>(ev)) {
-        case LumenError::None:
-            return "no error";
-        case LumenError::BufferFull:
-            return "ring buffer is full";
-        case LumenError::InvalidSinkId:
-            return "sink id not found";
-        case LumenError::IoError:
-            return "I/O error";
-        case LumenError::FileOpenError:
-            return "failed to open file";
-        case LumenError::SinkException:
-            return "exception caught in sink callback";
-        case LumenError::InvalidPredicate:
-            return "invalid predicate query";
+        case LumenError::None:             return "no error";
+        case LumenError::InvalidSinkId:    return "sink id not found";
+        case LumenError::NullSink:         return "sink is null";
+        case LumenError::SinkBusy:         return "sink cannot be removed from its own callback";
+        case LumenError::TagTableFull:     return "tag table is full";
+        case LumenError::InvalidPredicate: return "invalid predicate query";
     }
     return "unknown lumen error";
-}
-
-bool LumenErrorCategory::equivalent(const std::error_code& code,
-                                    int condition) const noexcept {
-    if (code.category() == *this) {
-        return code.value() == condition;
-    }
-    return false;
 }
 
 const LumenErrorCategory& lumen_error_category() {

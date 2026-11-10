@@ -44,7 +44,7 @@ protected:
     }
 
     SinkId register_sink(std::unique_ptr<Sink> sink, Predicate pred) {
-        SinkId id = core().add_sink(std::move(sink), std::move(pred));
+        SinkId id = core().add_sink(std::move(sink), std::move(pred)).value();
         ids_.push_back(id);
         return id;
     }
@@ -82,7 +82,7 @@ TEST_F(LatexTest, LatexTagOnMetric) {
     register_sink(std::move(sink), always());
 
     {
-        MetricBuilder builder(core().metric_buffer(), "math_metric", 3.14159);
+        MetricBuilder builder(core(), "math_metric", 3.14159);
         builder.tag("latex", "true");
     }
 

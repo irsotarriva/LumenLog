@@ -1,324 +1,600 @@
 #include "lumen/core.hpp"
 
-#include <array>
-#include <cstddef>
-#include <cstdio>
+#include <algorithm>
+#include <atomic>
+#include <concepts>
+#include <condition_variable>
+#include <cstdint>
+#include <cstring>
 #include <exception>
+#include <format>
+#include <iostream>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
+#include "immortal.hpp"
 #include "lumen/detail/context.hpp"
-#include "lumen/detail/error.hpp"
+#include "lumen/detail/ring_buffer.hpp"
+#include "lumen/error.hpp"
+#include "lumen/limits.hpp"
+#include "lumen/thread_clock.hpp"
 
 namespace lumen {
 
 namespace {
 
-struct OwnedTag {
-    std::string key;
-    std::string value;
+using LogQueue = RingBuffer<LogRecord, log_queue_capacity>;
+using MetricQueue = RingBuffer<MetricRecord, metric_queue_capacity>;
+using ProgressQueue = RingBuffer<ProgressRecord, progress_queue_capacity>;
+
+template <typename R>
+concept AnyRecord =
+    std::same_as<R, LogRecord> || std::same_as<R, MetricRecord> || std::same_as<R, ProgressRecord>;
+
+// One registered sink. Entries are shared between the registry and the
+// snapshots the delivering thread holds, so an entry outlives its removal
+// until no snapshot refers to it.
+//
+// Removal handshake (busy/removed, both sequentially consistent): the
+// delivering thread sets busy and then reads removed before each callback;
+// remove_sink sets removed and then waits while busy. Either the deliverer
+// sees removed and skips the sink, or remove_sink sees busy and waits for the
+// callback to end. After that, nothing reads `sink` again, and `owner` can be
+// handed back.
+struct SinkEntry {
+    SinkEntry(SinkId id_in, std::unique_ptr<Sink> owner_in, Predicate predicate_in)
+        : id(id_in)
+        , owner(std::move(owner_in))
+        , sink(owner.get())
+        , predicate(std::move(predicate_in)) {}
+
+    const SinkId id;
+    std::unique_ptr<Sink> owner;  // moved out by remove_sink once no callback can run
+    Sink* const sink;             // non-owning: owner.get() at registration
+    const Predicate predicate;
+    std::atomic<bool> busy{false};     // written only by the delivering thread
+    std::atomic<bool> removed{false};  // written only by remove_sink
+    std::atomic<uint64_t> exceptions{0};
 };
 
-// Process tags: the authoritative copy lives under a mutex. Each thread keeps
-// its own snapshot and refreshes it when the version changes, so emitting a
-// record never reads strings another thread may be rewriting.
-std::mutex proc_tag_mutex_;
-std::array<OwnedTag, 16> proc_tags_;
-size_t proc_tag_count_ = 0;
-std::atomic<uint64_t> proc_tag_version_{1};
+using Registry = std::vector<std::shared_ptr<SinkEntry>>;
 
-struct ProcTagSnapshot {
-    uint64_t version = 0;
-    std::array<OwnedTag, 16> tags;
-    TagSet<16> tagset;
+// What the calling thread is delivering, if anything: the Core whose records
+// it delivers (it holds that Core's consume mutex) and the sink whose
+// callback is running. Lets flush, remove_sink and fatal records recognise a
+// call from inside a callback.
+struct Delivery {
+    const void* core = nullptr;  // non-owning: the Core::Impl
+    SinkEntry* entry = nullptr;  // non-owning
 };
-thread_local ProcTagSnapshot proc_snapshot_;
 
-thread_local std::array<OwnedTag, 8> tls_tags_;
-thread_local size_t tls_tag_count_ = 0;
-thread_local TagSet<8> tls_tagset_;
+thread_local Delivery tls_delivery;
 
-// True while this thread is invoking sink callbacks.
-thread_local bool in_dispatch_ = false;
+class DeliveryScope {
+public:
+    explicit DeliveryScope(const void* core) noexcept
+        : previous_(std::exchange(tls_delivery, Delivery{core, nullptr})) {}
+    ~DeliveryScope() { tls_delivery = previous_; }
+    DeliveryScope(const DeliveryScope&) = delete;
+    DeliveryScope& operator=(const DeliveryScope&) = delete;
+    DeliveryScope(DeliveryScope&&) = delete;
+    DeliveryScope& operator=(DeliveryScope&&) = delete;
 
-void rebuild_tls_tagset() {
-    tls_tagset_ = TagSet<8>{};
-    for (size_t i = 0; i < tls_tag_count_; ++i) {
-        tls_tagset_.add(tls_tags_[i].key, tls_tags_[i].value);
-    }
-}
-
-// Runs one sink callback; an escaping exception is counted and reported once
-// per sink instead of terminating the dispatch thread or reaching the caller.
-void report_sink_exception(SinkEntry& entry, const char* callback, const char* what) {
-    if (entry.exceptions++ == 0) {
-        std::fprintf(stderr,
-                     "lumen: sink %llu threw from %s: %s "
-                     "(further exceptions from this sink are only counted)\n",
-                     static_cast<unsigned long long>(entry.id), callback, what);
-    }
-}
-
-// Runs one sink callback; an escaping exception is counted and reported once
-// per sink instead of terminating the dispatch thread or reaching the caller.
-// Reporting happens inside the handler: e.what() dies with the exception.
-template <typename F>
-void call_sink(SinkEntry& entry, const char* callback, F&& fn) noexcept {
-    try {
-        fn();
-    } catch (const std::exception& e) {
-        report_sink_exception(entry, callback, e.what());
-    } catch (...) {
-        report_sink_exception(entry, callback, "unknown exception");
-    }
-}
-
-struct DispatchScope {
-    DispatchScope() { in_dispatch_ = true; }
-    ~DispatchScope() { in_dispatch_ = false; }
-    DispatchScope(const DispatchScope&) = delete;
-    DispatchScope& operator=(const DispatchScope&) = delete;
+private:
+    Delivery previous_;
 };
+
+[[nodiscard]] std::string_view& text_of(LogRecord& r) {
+    return r.message;
+}
+[[nodiscard]] std::string_view& text_of(MetricRecord& r) {
+    return r.name;
+}
+[[nodiscard]] std::string_view& text_of(ProgressRecord& r) {
+    return r.label;
+}
+
+[[nodiscard]] bool matches(const Predicate& p, const LogRecord& r) {
+    return p.evaluate(r.tags, r.level);
+}
+[[nodiscard]] bool matches(const Predicate& p, const MetricRecord& r) {
+    return p.evaluate(r.tags);
+}
+[[nodiscard]] bool matches(const Predicate& p, const ProgressRecord& r) {
+    return p.evaluate(r.tags);
+}
+
+void deliver_to(Sink& s, const LogRecord& r) {
+    s.on_log(r);
+}
+void deliver_to(Sink& s, const MetricRecord& r) {
+    s.on_metric(r);
+}
+void deliver_to(Sink& s, const ProgressRecord& r) {
+    s.on_progress(r);
+}
+
+template <AnyRecord R>
+constexpr std::string_view callback_name = "on_log";
+template <>
+constexpr std::string_view callback_name<MetricRecord> = "on_metric";
+template <>
+constexpr std::string_view callback_name<ProgressRecord> = "on_progress";
+
+// Copies the record's text and every tag string into one NUL-terminated
+// block and re-points the views at it.
+template <AnyRecord R>
+void own_strings(R& record) {
+    std::string_view& text = text_of(record);
+    std::size_t total = text.size() + 1;
+    for (const auto& e : record.tags) {
+        total += e.key.size() + 1 + e.value.size() + 1;
+    }
+    auto block = std::make_shared_for_overwrite<char[]>(total);
+    char* out = block.get();
+    auto copy = [&out](std::string_view s) {
+        if (!s.empty()) std::memcpy(out, s.data(), s.size());
+        out[s.size()] = '\0';
+        const std::string_view owned(out, s.size());
+        out += s.size() + 1;
+        return owned;
+    };
+    text = copy(text);
+    record.tags.remap(copy);
+    record.storage = std::move(block);
+}
 
 }  // namespace
 
-namespace detail {
-
-const TagSet<8>& tls_tags() {
-    return tls_tagset_;
+DiagnosticHandler stderr_diagnostics() {
+    return [](std::string_view line) { std::cerr << line << '\n' << std::flush; };
 }
 
-const TagSet<16>& proc_tags() {
-    const uint64_t version = proc_tag_version_.load(std::memory_order_acquire);
-    if (proc_snapshot_.version != version) {
-        std::lock_guard lock(proc_tag_mutex_);
-        proc_snapshot_.tagset = TagSet<16>{};
-        for (size_t i = 0; i < proc_tag_count_; ++i) {
-            proc_snapshot_.tags[i] = proc_tags_[i];
-            proc_snapshot_.tagset.add(proc_snapshot_.tags[i].key, proc_snapshot_.tags[i].value);
-        }
-        proc_snapshot_.version = proc_tag_version_.load(std::memory_order_relaxed);
+struct Core::Impl {
+    explicit Impl(DiagnosticHandler handler) : diagnostics(std::move(handler)) {
+        // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
+        dispatcher = std::thread([this] { run_dispatcher(); });
     }
-    return proc_snapshot_.tagset;
-}
+    ~Impl() { shut_down(); }
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
+    Impl(Impl&&) = delete;
+    Impl& operator=(Impl&&) = delete;
 
-}  // namespace detail
-
-Core::Core() {
-    dispatch_thread_ = std::thread(&Core::dispatch_loop_, this);
-}
-
-Core::~Core() {
-    running_.store(false, std::memory_order_relaxed);
-    wake_cv_.notify_one();
-    if (dispatch_thread_.joinable()) {
-        dispatch_thread_.join();
+    template <AnyRecord R>
+    [[nodiscard]] auto& queue() {
+        if constexpr (std::same_as<R, LogRecord>)
+            return logs;
+        else if constexpr (std::same_as<R, MetricRecord>)
+            return metrics;
+        else
+            return progress;
     }
-    // Deliver whatever was still queued when the dispatcher stopped.
-    std::lock_guard consume(consume_mutex_);
-    drain_available_();
-    flush_sinks_();
-}
 
-void Core::set_process_tag(std::string_view key, std::string_view value) {
-    std::lock_guard lock(proc_tag_mutex_);
-    for (size_t i = 0; i < proc_tag_count_; ++i) {
-        if (proc_tags_[i].key == key) {
-            proc_tags_[i].value = value;
-            proc_tag_version_.fetch_add(1, std::memory_order_release);
+    template <AnyRecord R>
+    [[nodiscard]] std::atomic<uint64_t>& after_shutdown() {
+        if constexpr (std::same_as<R, LogRecord>)
+            return logs_after_shutdown;
+        else if constexpr (std::same_as<R, MetricRecord>)
+            return metrics_after_shutdown;
+        else
+            return progress_after_shutdown;
+    }
+
+    template <AnyRecord R>
+    void finalize(R& record, uint32_t tags_dropped_explicit) {
+        record.timestamp_ns = now_ns();
+        record.thread_id = this_thread_id();
+        const uint32_t dropped = tags_dropped_explicit + detail::merge_context(record.tags);
+        if (dropped != 0) tags_dropped.fetch_add(dropped, std::memory_order_relaxed);
+        own_strings(record);
+    }
+
+    template <AnyRecord R>
+    void submit(R&& record, uint32_t tags_dropped_explicit) {
+        if (!accepting.load(std::memory_order_acquire)) {
+            after_shutdown<R>().fetch_add(1, std::memory_order_relaxed);
             return;
         }
+        finalize(record, tags_dropped_explicit);
+        // A refused record is counted by the queue (rejected_count) and
+        // reported once by the dispatcher.
+        static_cast<void>(queue<R>().try_push(std::move(record)));
+        wake_if_sleeping();
     }
-    if (proc_tag_count_ < proc_tags_.size()) {
-        proc_tags_[proc_tag_count_].key = key;
-        proc_tags_[proc_tag_count_].value = value;
-        ++proc_tag_count_;
-        proc_tag_version_.fetch_add(1, std::memory_order_release);
-    }
-}
 
-void Core::set_thread_tag(std::string_view key, std::string_view value) {
-    for (size_t i = 0; i < tls_tag_count_; ++i) {
-        if (tls_tags_[i].key == key) {
-            tls_tags_[i].value = value;
-            rebuild_tls_tagset();
-            return;
+    // Wake-up protocol. The dispatcher sets `sleeping`, issues a full fence
+    // and checks the queues once more before it blocks; a producer issues a
+    // full fence after publishing its record and only then reads `sleeping`.
+    // With both fences, either the dispatcher sees the record or the producer
+    // sees `sleeping` (the Dekker pattern), so no record is left waiting for
+    // a dispatcher that sleeps. Cost on every emit: one fence (an mfence on
+    // x86-64, a few tens of cycles) and one relaxed load. The mutex and the
+    // condition-variable notify (a system call) are only paid by a producer
+    // that finds the dispatcher asleep.
+    void wake_if_sleeping() noexcept {
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (!sleeping.load(std::memory_order_relaxed)) return;
+        {
+            const std::scoped_lock lock(wake_mutex);
+            sleeping.store(false, std::memory_order_relaxed);
+        }
+        wake_cv.notify_one();
+    }
+
+    [[nodiscard]] bool has_pending() const noexcept {
+        return logs.head_position() != logs.tail_position() ||
+               metrics.head_position() != metrics.tail_position() ||
+               progress.head_position() != progress.tail_position();
+    }
+
+    // Returns false when the Core is stopping.
+    [[nodiscard]] bool wait_for_work() {
+        if (stopping.load(std::memory_order_acquire)) return false;
+        if (has_pending()) return true;
+        sleeping.store(true, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (has_pending()) {
+            sleeping.store(false, std::memory_order_relaxed);
+            return true;
+        }
+        std::unique_lock lock(wake_mutex);
+        wake_cv.wait(lock, [this] {
+            return !sleeping.load(std::memory_order_relaxed) ||
+                   stopping.load(std::memory_order_relaxed);
+        });
+        sleeping.store(false, std::memory_order_relaxed);
+        return !stopping.load(std::memory_order_relaxed);
+    }
+
+    void run_dispatcher() {
+        while (wait_for_work()) {
+            uint64_t delivered = 0;
+            {
+                const std::scoped_lock consume(consume_mutex);
+                const DeliveryScope scope(this);
+                delivered = deliver_up_to(logs.head_position(), metrics.head_position(),
+                                          progress.head_position());
+            }
+            report_first_losses();
+            // A claimed record that is not yet published cannot be popped;
+            // let its producer run instead of spinning on it.
+            if (delivered == 0) std::this_thread::yield();
         }
     }
-    if (tls_tag_count_ < tls_tags_.size()) {
-        tls_tags_[tls_tag_count_].key = key;
-        tls_tags_[tls_tag_count_].value = value;
-        ++tls_tag_count_;
-        rebuild_tls_tagset();
-    }
-}
 
-SinkId Core::add_sink(std::unique_ptr<Sink> sink, Predicate predicate) {
-    SinkId id = next_sink_id_.fetch_add(1, std::memory_order_relaxed);
-    {
-        std::lock_guard lock(sink_mutex_);
-        sinks_.push_back(SinkEntry{id, std::move(sink), std::move(predicate)});
+    // Caller holds consume_mutex. Delivers records until each queue's tail
+    // reaches its target or the next record is not yet published. Returns
+    // how many were delivered.
+    [[nodiscard]] uint64_t deliver_up_to(uint64_t log_target, uint64_t metric_target,
+                                         uint64_t progress_target) {
+        return deliver_queue(progress, progress_target) + deliver_queue(metrics, metric_target) +
+               deliver_queue(logs, log_target);
     }
-    return id;
+
+    template <AnyRecord R, std::size_t N>
+    [[nodiscard]] uint64_t deliver_queue(RingBuffer<R, N>& q, uint64_t target) {
+        uint64_t delivered = 0;
+        R record;
+        while (q.tail_position() < target && q.try_pop(record)) {
+            dispatch(record);
+            ++delivered;
+        }
+        return delivered;
+    }
+
+    // Caller holds consume_mutex. Waits for producers that claimed a slot
+    // before the targets were read to publish it.
+    void deliver_all_up_to(uint64_t log_target, uint64_t metric_target, uint64_t progress_target) {
+        while (true) {
+            static_cast<void>(deliver_up_to(log_target, metric_target, progress_target));
+            if (logs.tail_position() >= log_target && metrics.tail_position() >= metric_target &&
+                progress.tail_position() >= progress_target) {
+                return;
+            }
+            std::this_thread::yield();
+        }
+    }
+
+    void deliver_everything_queued() {
+        deliver_all_up_to(logs.head_position(), metrics.head_position(), progress.head_position());
+    }
+
+    // The registry as the delivering thread sees it. Copying the pointer per
+    // record keeps the snapshot alive for the whole loop over its sinks.
+    [[nodiscard]] std::shared_ptr<const Registry> current_registry() {
+        const std::scoped_lock lock(registry_mutex);
+        return registry;
+    }
+
+    template <AnyRecord R>
+    void dispatch(const R& record) {
+        const std::shared_ptr<const Registry> sinks = current_registry();
+        for (const std::shared_ptr<SinkEntry>& entry : *sinks) {
+            if (!matches(entry->predicate, record)) continue;
+            call_sink(*entry, callback_name<R>, [&] { deliver_to(*entry->sink, record); });
+        }
+    }
+
+    void flush_sinks() {
+        const std::shared_ptr<const Registry> sinks = current_registry();
+        for (const std::shared_ptr<SinkEntry>& entry : *sinks) {
+            call_sink(*entry, "flush", [&] { entry->sink->flush(); });
+        }
+    }
+
+    // Runs one callback. A sink that is already busy is in a callback further
+    // up this thread's stack (only a fatal record re-enters delivery), so it
+    // is skipped. Exceptions are contained here; e.what() is read inside the
+    // handler because it dies with the exception.
+    template <std::invocable F>
+    void call_sink(SinkEntry& entry, std::string_view callback, F&& fn) noexcept {
+        if (entry.busy.exchange(true, std::memory_order_seq_cst)) return;
+        if (entry.removed.load(std::memory_order_seq_cst)) {
+            entry.busy.store(false, std::memory_order_release);
+            return;
+        }
+        SinkEntry* const outer = std::exchange(tls_delivery.entry, &entry);
+        try {
+            std::forward<F>(fn)();
+        } catch (const std::exception& e) {
+            note_exception(entry, callback, e.what());
+        } catch (...) {
+            note_exception(entry, callback, "unknown exception");
+        }
+        tls_delivery.entry = outer;
+        entry.busy.store(false, std::memory_order_release);
+    }
+
+    void note_exception(SinkEntry& entry, std::string_view callback, std::string_view what) {
+        if (entry.exceptions.fetch_add(1, std::memory_order_relaxed) == 0) {
+            report(
+                std::format("lumen: sink {} threw from {}: {} (further exceptions from this "
+                            "sink are only counted)",
+                            entry.id, callback, what));
+        }
+    }
+
+    void report(std::string_view line) {
+        DiagnosticHandler handler;
+        {
+            const std::scoped_lock lock(diagnostics_mutex);
+            handler = diagnostics;
+        }
+        // Called without the lock, so a handler may replace itself.
+        if (handler) handler(line);
+    }
+
+    void report_first_losses() {
+        const uint64_t refused =
+            logs.rejected_count() + metrics.rejected_count() + progress.rejected_count();
+        if (refused != 0 && !reported_queue_full.exchange(true, std::memory_order_relaxed)) {
+            report(
+                "lumen: a record was dropped because its queue was full; further drops are "
+                "only counted (Core::statistics())");
+        }
+        if (tags_dropped.load(std::memory_order_relaxed) != 0 &&
+            !reported_tags_dropped.exchange(true, std::memory_order_relaxed)) {
+            report(
+                "lumen: a tag was dropped because its record already had the maximum number "
+                "of tags; further drops are only counted (Core::statistics())");
+        }
+    }
+
+    [[nodiscard]] bool delivering_here() const noexcept { return tls_delivery.core == this; }
+
+    void flush() {
+        if (delivering_here() || !accepting.load(std::memory_order_acquire)) return;
+        const uint64_t log_target = logs.head_position();
+        const uint64_t metric_target = metrics.head_position();
+        const uint64_t progress_target = progress.head_position();
+        {
+            const std::scoped_lock consume(consume_mutex);
+            const DeliveryScope scope(this);
+            deliver_all_up_to(log_target, metric_target, progress_target);
+            flush_sinks();
+        }
+        report_first_losses();
+    }
+
+    void deliver_fatal(const LogRecord& record) {
+        deliver_everything_queued();
+        dispatch(record);
+        flush_sinks();
+    }
+
+    void submit_fatal(LogRecord&& record, uint32_t tags_dropped_explicit) {
+        if (!accepting.load(std::memory_order_acquire)) {
+            logs_after_shutdown.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        finalize(record, tags_dropped_explicit);
+        if (delivering_here()) {
+            // Inside a callback: this thread already holds consume_mutex.
+            deliver_fatal(record);
+            return;
+        }
+        const std::scoped_lock consume(consume_mutex);
+        const DeliveryScope scope(this);
+        deliver_fatal(record);
+    }
+
+    void shut_down() noexcept {
+        if (!accepting.exchange(false, std::memory_order_acq_rel)) return;
+        {
+            const std::scoped_lock lock(wake_mutex);
+            stopping.store(true, std::memory_order_release);
+        }
+        wake_cv.notify_one();
+        if (dispatcher.joinable()) dispatcher.join();
+        {
+            const std::scoped_lock consume(consume_mutex);
+            const DeliveryScope scope(this);
+            deliver_everything_queued();
+            flush_sinks();
+        }
+        report_first_losses();
+        // Destroys the sinks (no snapshot refers to them any more).
+        const std::scoped_lock lock(registry_mutex);
+        registry = std::make_shared<const Registry>();
+    }
+
+    [[nodiscard]] std::expected<SinkId, std::error_code> add_sink(std::unique_ptr<Sink> sink,
+                                                                  Predicate predicate) {
+        if (!sink) return std::unexpected(make_error_code(LumenError::NullSink));
+        const SinkId id = next_sink_id.fetch_add(1, std::memory_order_relaxed);
+        auto entry = std::make_shared<SinkEntry>(id, std::move(sink), std::move(predicate));
+        const std::scoped_lock lock(registry_mutex);
+        auto next = std::make_shared<Registry>(*registry);
+        next->push_back(std::move(entry));
+        registry = std::move(next);
+        return id;
+    }
+
+    [[nodiscard]] std::expected<std::unique_ptr<Sink>, std::error_code> remove_sink(SinkId id) {
+        std::shared_ptr<SinkEntry> entry;
+        {
+            const std::scoped_lock lock(registry_mutex);
+            const auto it = std::ranges::find_if(
+                *registry, [id](const std::shared_ptr<SinkEntry>& e) { return e->id == id; });
+            if (it == registry->end()) {
+                return std::unexpected(make_error_code(LumenError::InvalidSinkId));
+            }
+            if (delivering_here() && tls_delivery.entry == it->get()) {
+                return std::unexpected(make_error_code(LumenError::SinkBusy));
+            }
+            entry = *it;
+            entry->removed.store(true, std::memory_order_seq_cst);
+            auto next = std::make_shared<Registry>(*registry);
+            std::erase(*next, entry);
+            registry = std::move(next);
+        }
+        // Only a callback on another thread can be running; wait for it.
+        while (entry->busy.load(std::memory_order_seq_cst))
+            std::this_thread::yield();
+        return std::move(entry->owner);
+    }
+
+    [[nodiscard]] std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id) const {
+        const std::scoped_lock lock(registry_mutex);
+        for (const std::shared_ptr<SinkEntry>& entry : *registry) {
+            if (entry->id == id) return entry->exceptions.load(std::memory_order_relaxed);
+        }
+        return std::unexpected(make_error_code(LumenError::InvalidSinkId));
+    }
+
+    [[nodiscard]] CoreStatistics statistics() const noexcept {
+        auto of = [](const auto& q, const std::atomic<uint64_t>& after) {
+            return QueueStatistics{q.head_position(), q.rejected_count(),
+                                   after.load(std::memory_order_relaxed)};
+        };
+        return CoreStatistics{of(logs, logs_after_shutdown), of(metrics, metrics_after_shutdown),
+                              of(progress, progress_after_shutdown),
+                              tags_dropped.load(std::memory_order_relaxed)};
+    }
+
+    void set_diagnostic_handler(DiagnosticHandler handler) {
+        const std::scoped_lock lock(diagnostics_mutex);
+        diagnostics = std::move(handler);
+    }
+
+    LogQueue logs;
+    MetricQueue metrics;
+    ProgressQueue progress;
+
+    std::atomic<bool> accepting{true};  // false once shut_down() began
+    std::atomic<uint64_t> logs_after_shutdown{0};
+    std::atomic<uint64_t> metrics_after_shutdown{0};
+    std::atomic<uint64_t> progress_after_shutdown{0};
+    std::atomic<uint64_t> tags_dropped{0};
+
+    std::mutex wake_mutex;
+    std::condition_variable wake_cv;    // waits on wake_mutex
+    std::atomic<bool> sleeping{false};  // set by the dispatcher; cleared under wake_mutex
+    std::atomic<bool> stopping{false};  // set under wake_mutex
+
+    // Held by whichever thread delivers records (the dispatcher, flush(), a
+    // fatal record, shutdown): the queues have a single consumer, and sinks
+    // are never called concurrently.
+    std::mutex consume_mutex;
+
+    // Held only to read or replace `registry`, never during a callback.
+    mutable std::mutex registry_mutex;
+    std::shared_ptr<const Registry> registry =
+        std::make_shared<const Registry>();  // guarded by registry_mutex
+    std::atomic<SinkId> next_sink_id{1};
+
+    std::mutex diagnostics_mutex;
+    DiagnosticHandler diagnostics;  // guarded by diagnostics_mutex
+    std::atomic<bool> reported_queue_full{false};
+    std::atomic<bool> reported_tags_dropped{false};
+
+    std::thread dispatcher;  // last: it starts in the constructor and uses everything above
+};
+
+Core::Core(DiagnosticHandler diagnostics) : impl_(std::make_unique<Impl>(std::move(diagnostics))) {}
+
+Core::~Core() = default;
+
+std::expected<SinkId, std::error_code> Core::add_sink(std::unique_ptr<Sink> sink,
+                                                      Predicate predicate) {
+    return impl_->add_sink(std::move(sink), std::move(predicate));
 }
 
 std::expected<std::unique_ptr<Sink>, std::error_code> Core::remove_sink(SinkId id) {
-    std::lock_guard lock(sink_mutex_);
-    for (auto it = sinks_.begin(); it != sinks_.end(); ++it) {
-        if (it->id == id) {
-            auto sink = std::move(it->sink);
-            sinks_.erase(it);
-            return sink;
-        }
-    }
-    return std::unexpected(make_error_code(LumenError::InvalidSinkId));
+    return impl_->remove_sink(id);
+}
+
+std::expected<uint64_t, std::error_code> Core::sink_exception_count(SinkId id) const {
+    return impl_->sink_exception_count(id);
 }
 
 void Core::flush() {
-    if (in_dispatch_) {
-        return;  // called from a sink callback; the records are already being drained
-    }
-    // Everything claimed before this point must be delivered before we return.
-    const uint64_t log_target = log_buffer_.head_position();
-    const uint64_t metric_target = metric_buffer_.head_position();
-    const uint64_t progress_target = progress_buffer_.head_position();
-
-    std::lock_guard consume(consume_mutex_);
-    drain_until_(log_target, metric_target, progress_target);
-    flush_sinks_();
+    impl_->flush();
 }
 
-void Core::emit(LogRecord&& record) {
-    detail::own_strings(record);
-    // When full, the record is dropped and counted in rejected_count().
-    static_cast<void>(log_buffer_.try_push(std::move(record)));
-    wake_cv_.notify_one();
+CoreStatistics Core::statistics() const noexcept {
+    return impl_->statistics();
 }
 
-void Core::emit(MetricRecord&& record) {
-    detail::own_strings(record);
-    // When full, the record is dropped and counted in rejected_count().
-    static_cast<void>(metric_buffer_.try_push(std::move(record)));
-    wake_cv_.notify_one();
+void Core::set_diagnostic_handler(DiagnosticHandler handler) {
+    impl_->set_diagnostic_handler(std::move(handler));
 }
 
-void Core::emit(ProgressRecord&& record) {
-    detail::own_strings(record);
-    // When full, the record is dropped and counted in rejected_count().
-    static_cast<void>(progress_buffer_.try_push(std::move(record)));
-    wake_cv_.notify_one();
+void Core::submit_(LogRecord&& record, uint32_t tags_dropped) noexcept {
+    impl_->submit(std::move(record), tags_dropped);
 }
 
-void Core::dispatch_loop_() {
-    while (running_.load(std::memory_order_relaxed)) {
-        {
-            std::unique_lock lock(wake_mutex_);
-            wake_cv_.wait_for(lock, std::chrono::milliseconds(10));
-        }
-        std::lock_guard consume(consume_mutex_);
-        drain_available_();
-    }
+void Core::submit_(MetricRecord&& record, uint32_t tags_dropped) noexcept {
+    impl_->submit(std::move(record), tags_dropped);
 }
 
-// Caller holds consume_mutex_.
-void Core::drain_available_() {
-    const DispatchScope in_dispatch;
-
-    ProgressRecord pr;
-    while (progress_buffer_.try_pop(pr)) {
-        dispatch_progress_(pr);
-    }
-
-    MetricRecord mr;
-    while (metric_buffer_.try_pop(mr)) {
-        dispatch_metric_(mr);
-    }
-
-    LogRecord lr;
-    while (log_buffer_.try_pop(lr)) {
-        dispatch_log_(lr);
-    }
+void Core::submit_(ProgressRecord&& record, uint32_t tags_dropped) noexcept {
+    impl_->submit(std::move(record), tags_dropped);
 }
 
-// Caller holds consume_mutex_. A producer may have claimed a slot but not yet
-// published it; in that case pop() fails and we wait for the publish.
-void Core::drain_until_(uint64_t log_target, uint64_t metric_target,
-                         uint64_t progress_target) {
-    while (true) {
-        drain_available_();
-        if (progress_buffer_.tail_position() >= progress_target &&
-            metric_buffer_.tail_position() >= metric_target &&
-            log_buffer_.tail_position() >= log_target) {
-            return;
-        }
-        std::this_thread::yield();
-    }
+void Core::submit_fatal_(LogRecord&& record, uint32_t tags_dropped) noexcept {
+    impl_->submit_fatal(std::move(record), tags_dropped);
+    std::terminate();
 }
 
-void Core::flush_sinks_() {
-    const DispatchScope in_dispatch;
-    std::lock_guard lock(sink_mutex_);
-    for (auto& entry : sinks_) {
-        call_sink(entry, "flush", [&] { entry.sink->flush(); });
-    }
-}
-
-std::expected<uint64_t, std::error_code> Core::sink_exception_count(SinkId id) {
-    std::lock_guard lock(sink_mutex_);
-    for (const auto& entry : sinks_) {
-        if (entry.id == id) {
-            return entry.exceptions;
-        }
-    }
-    return std::unexpected(make_error_code(LumenError::InvalidSinkId));
-}
-
-void Core::dispatch_log_(const LogRecord& record) {
-    std::lock_guard lock(sink_mutex_);
-    for (auto& entry : sinks_) {
-        if (entry.predicate.evaluate(record.tags, record.level)) {
-            call_sink(entry, "on_log", [&] { entry.sink->on_log(record); });
-        }
-    }
-}
-
-void Core::dispatch_metric_(const MetricRecord& record) {
-    std::lock_guard lock(sink_mutex_);
-    for (auto& entry : sinks_) {
-        if (entry.predicate.evaluate(record.tags)) {
-            call_sink(entry, "on_metric", [&] { entry.sink->on_metric(record); });
-        }
-    }
-}
-
-void Core::dispatch_progress_(const ProgressRecord& record) {
-    std::lock_guard lock(sink_mutex_);
-    for (auto& entry : sinks_) {
-        if (entry.predicate.evaluate(record.tags)) {
-            call_sink(entry, "on_progress", [&] { entry.sink->on_progress(record); });
-        }
-    }
-}
+struct Core::ShutdownAtExit {
+    Core& core;
+    ~ShutdownAtExit() { core.impl_->shut_down(); }
+};
 
 Core& core() {
-    static Core instance;
-    return instance;
-}
-
-void set_process_tag(std::string_view key, std::string_view value) {
-    core().set_process_tag(key, value);
-}
-
-void set_thread_tag(std::string_view key, std::string_view value) {
-    core().set_thread_tag(key, value);
-}
-
-MetricBuilder metric(std::string_view name, double value) {
-    return MetricBuilder(core().metric_buffer(), name, value);
-}
-
-ProgressHandle progress(std::string_view label, uint64_t total) {
-    return ProgressHandle(core().progress_buffer(), label, total);
+    // Never destroyed, so it is still a valid object when code runs during
+    // static destruction; `shutdown` is destroyed where a plain function-local
+    // static Core would have been, and shuts it down at that point.
+    static detail::Immortal<Core> instance;
+    static const Core::ShutdownAtExit shutdown{instance.get()};
+    return instance.get();
 }
 
 }  // namespace lumen

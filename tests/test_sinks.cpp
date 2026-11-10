@@ -33,7 +33,7 @@ protected:
     }
 
     SinkId register_sink(std::unique_ptr<Sink> sink, Predicate pred) {
-        SinkId id = core().add_sink(std::move(sink), std::move(pred));
+        SinkId id = core().add_sink(std::move(sink), std::move(pred)).value();
         ids_.push_back(id);
         return id;
     }

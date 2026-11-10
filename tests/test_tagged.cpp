@@ -1,206 +1,179 @@
-#include <chrono>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <vector>
-
+// lumen::Tagged: instance tags, their limit, copy and move, and member scopes.
 #include <gtest/gtest.h>
 
-#include "lumen/core.hpp"
+#include <optional>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include "lumen/error.hpp"
+#include "lumen/limits.hpp"
 #include "lumen/macros.hpp"
-#include "lumen/predicate.hpp"
-#include "lumen/sink.hpp"
 #include "lumen/tagged.hpp"
+#include "test_support.hpp"
 
 namespace lumen {
 namespace {
 
-struct CaptureSink : public Sink {
-    std::vector<LogRecord> logs;
-    std::mutex mtx;
+using test::LocalCoreTest;
+using test::log_to;
+using test::tag_of;
+using test::tags_of;
 
-    void on_log(const LogRecord& r) override {
-        std::lock_guard lock(mtx);
-        logs.push_back(r);
-    }
-    void on_metric(const MetricRecord&) override {}
-    void on_progress(const ProgressRecord&) override {}
-    void flush() override {}
-};
+using Pairs = std::vector<std::pair<std::string, std::string>>;
 
-void wait_flush(int ms = 100) {
-    core().flush();
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-}
-
-class TaggedTest : public ::testing::Test {
-protected:
-    std::vector<SinkId> ids_;
-
-    void TearDown() override {
-        for (auto id : ids_) {
-            (void)core().remove_sink(id);
-        }
-        ids_.clear();
-    }
-
-    SinkId register_sink(std::unique_ptr<Sink> sink, Predicate pred) {
-        SinkId id = core().add_sink(std::move(sink), std::move(pred));
-        ids_.push_back(id);
-        return id;
-    }
-};
-
-class MyComponent : public Tagged {
+class Detector : public Tagged {
 public:
-    MyComponent() {
-        lumen_tag("component", "test_comp");
-        lumen_tag("version", "1.0");
-    }
+    Detector() = default;
+    explicit Detector(const std::string& name) { EXPECT_TRUE(lumen_tag("detector", name)); }
 
-    void do_work() {
+    void emit(Core& core, std::string_view message) const {
         LUMEN_MEMBER_SCOPE;
-        LOG_INFO("work from component");
-    }
-
-    void do_work_without_scope() {
-        LOG_INFO("work without member scope");
+        log_to(core, message);
     }
 };
 
-TEST_F(TaggedTest, InstanceTagsOnMethod) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    MyComponent comp;
-    comp.do_work();
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].message, "work from component");
-    EXPECT_EQ(raw->logs[0].tags.find("component"), "test_comp");
-    EXPECT_EQ(raw->logs[0].tags.find("version"), "1.0");
+[[nodiscard]] Pairs pairs_of(const Tagged& object) {
+    Pairs out;
+    for (const auto& tag : object.lumen_tags())
+        out.emplace_back(tag.key, tag.value);
+    return out;
 }
 
-TEST_F(TaggedTest, InstanceTagsAbsentWithout) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
+static_assert(sizeof(Tagged) == sizeof(void*), "Tagged is one pointer");
+static_assert(!std::is_polymorphic_v<Tagged>, "Tagged has no virtual functions");
+static_assert(!std::is_constructible_v<Tagged>, "Tagged is only a base class");
 
-    MyComponent comp;
-    comp.do_work_without_scope();
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].message, "work without member scope");
-    EXPECT_TRUE(raw->logs[0].tags.find("component").empty())
-        << "Instance tags should be absent without LUMEN_MEMBER_SCOPE";
-}
-
-TEST_F(TaggedTest, ExplicitTagOverridesInstanceTag) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    MyComponent comp;
-    {
-        auto scope = comp.lumen_scope();
-        LOG_INFO("overridden").tag("component", "override");
+class TaggedTest : public LocalCoreTest {
+protected:
+    [[nodiscard]] std::vector<LogRecord> logs() {
+        core_.flush();
+        return captured_->logs();
     }
+};
 
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].message, "overridden");
-    EXPECT_EQ(raw->logs[0].tags.find("component"), "override");
+TEST_F(TaggedTest, RecordsInsideAMemberScopeCarryTheObjectsTags) {
+    const Detector d("tracker");
+    d.emit(core_, "inside");
+    log_to(core_, "outside");
+    const auto records = logs();
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_EQ(tag_of(records[0].tags, "detector"), "tracker");
+    EXPECT_EQ(tag_of(records[1].tags, "detector"), std::nullopt);
 }
 
-// ── Error-path tests ──────────────────────────────────────────────────────────
-
-TEST_F(TaggedTest, EmptyTaggedInstance) {
-    class EmptyTagged : public Tagged {
-    public:
-        void do_work() {
-            LUMEN_MEMBER_SCOPE;
-            LOG_INFO("from empty tagged");
-        }
-    };
-
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    EmptyTagged obj;
-    obj.do_work();
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].message, "from empty tagged");
+TEST_F(TaggedTest, TwoInstancesWithDifferentTagsTagTheirOwnRecords) {
+    const Detector a("tracker");
+    const Detector b("calorimeter");
+    a.emit(core_, "a");
+    b.emit(core_, "b");
+    const auto records = logs();
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_EQ(tag_of(records[0].tags, "detector"), "tracker");
+    EXPECT_EQ(tag_of(records[1].tags, "detector"), "calorimeter");
 }
 
-TEST_F(TaggedTest, MultipleTaggedInstances) {
-    MyComponent comp1;
-    MyComponent comp2;
-
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    comp1.do_work();
-    comp2.do_work();
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 2);
+TEST_F(TaggedTest, UntaggedObjectAddsNoTags) {
+    const Detector d;
+    d.emit(core_, "plain");
+    const auto records = logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(records[0].tags.count(), 0U);
 }
 
-TEST_F(TaggedTest, TaggedLifetimeScope) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
+TEST_F(TaggedTest, TaggingAKeyAgainReplacesItsValue) {
+    Detector d("old");
+    ASSERT_TRUE(d.lumen_tag("detector", "new"));
+    EXPECT_EQ(pairs_of(d), (Pairs{{"detector", "new"}}));
+}
 
-    {
-        MyComponent comp;
-        comp.do_work();
+TEST_F(TaggedTest, TagPastTheInstanceLimitFailsWithTagTableFullAndChangesNothing) {
+    Detector d;
+    for (std::size_t i = 0; i < max_instance_tags; ++i) {
+        ASSERT_TRUE(d.lumen_tag("k" + std::to_string(i), "v"));
     }
-
-    LOG_INFO("after component destroyed");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 2);
-    EXPECT_TRUE(raw->logs[1].tags.find("component").empty());
+    const auto refused = d.lumen_tag("one_too_many", "v");
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error(), LumenError::TagTableFull);
+    EXPECT_EQ(d.lumen_tags().size(), max_instance_tags);
+    EXPECT_TRUE(d.lumen_tag("k0", "replacing still works"));
 }
 
-TEST_F(TaggedTest, TagsCapacityLimit) {
-    class FullTagged : public Tagged {
-    public:
-        FullTagged() {
-            for (int i = 0; i < 16; ++i) {
-                lumen_tag("tag_" + std::to_string(i), "val_" + std::to_string(i));
-            }
-        }
-        void do_work() {
-            LUMEN_MEMBER_SCOPE;
-            LOG_INFO("full tags");
-        }
-    };
+TEST_F(TaggedTest, UntagRemovesAKeyAndReportsWhetherItWasThere) {
+    Detector d("x");
+    EXPECT_TRUE(d.lumen_untag("detector"));
+    EXPECT_FALSE(d.lumen_untag("detector"));
+    EXPECT_TRUE(d.lumen_tags().empty());
+}
 
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
+TEST_F(TaggedTest, ExplicitTagWinsOverTheInstanceTag) {
+    const Detector d("instance");
+    {
+        const auto scope = d.lumen_scope();
+        log_to(core_, "explicit").tag("detector", "explicit");
+    }
+    const auto records = logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(tag_of(records[0].tags, "detector"), "explicit");
+}
 
-    FullTagged obj;
-    obj.do_work();
+TEST_F(TaggedTest, InnerMemberScopeWinsAndOuterObjectsOtherTagsRemain) {
+    Detector outer("outer");
+    ASSERT_TRUE(outer.lumen_tag("run", "7"));
+    const Detector inner("inner");
+    {
+        const auto outer_scope = outer.lumen_scope();
+        inner.emit(core_, "nested");
+    }
+    const auto records = logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(tags_of(records[0].tags), (Pairs{{"detector", "inner"}, {"run", "7"}}));
+}
 
-    wait_flush();
+TEST_F(TaggedTest, TagSetInsideAMemberScopeAppliesToLaterRecords) {
+    Detector d;
+    {
+        const auto scope = d.lumen_scope();
+        log_to(core_, "before");
+        ASSERT_TRUE(d.lumen_tag("stage", "2"));
+        log_to(core_, "after");
+    }
+    const auto records = logs();
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_EQ(tag_of(records[0].tags, "stage"), std::nullopt);
+    EXPECT_EQ(tag_of(records[1].tags, "stage"), "2");
+}
 
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_GE(raw->logs[0].tags.count(), 8);
+TEST_F(TaggedTest, CopyHasItsOwnTagsIndependentOfTheOriginal) {
+    Detector original("a");
+    Detector copy(original);
+    ASSERT_TRUE(copy.lumen_tag("detector", "b"));
+    EXPECT_EQ(pairs_of(original), (Pairs{{"detector", "a"}}));
+    EXPECT_EQ(pairs_of(copy), (Pairs{{"detector", "b"}}));
+
+    Detector assigned;
+    assigned = original;
+    ASSERT_TRUE(original.lumen_tag("detector", "c"));
+    EXPECT_EQ(pairs_of(assigned), (Pairs{{"detector", "a"}}));
+}
+
+TEST_F(TaggedTest, MoveTransfersTheTagsAndLeavesTheSourceUntagged) {
+    Detector source("moved");
+    Detector target(std::move(source));
+    EXPECT_EQ(pairs_of(target), (Pairs{{"detector", "moved"}}));
+    // NOLINTNEXTLINE(bugprone-use-after-move): the moved-from state is specified
+    EXPECT_TRUE(source.lumen_tags().empty());
+
+    Detector assigned("previous");
+    assigned = std::move(target);
+    EXPECT_EQ(pairs_of(assigned), (Pairs{{"detector", "moved"}}));
+}
+
+TEST_F(TaggedTest, CopyOfAnUntaggedObjectIsUntagged) {
+    const Detector empty;
+    const Detector copy(empty);  // NOLINT(performance-unnecessary-copy-initialization)
+    EXPECT_TRUE(copy.lumen_tags().empty());
 }
 
 }  // namespace
