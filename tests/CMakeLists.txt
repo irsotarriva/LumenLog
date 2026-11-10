@@ -18,10 +18,6 @@ if(LUMEN_ENABLE_DASHBOARD)
   target_compile_definitions(lumen_tests PRIVATE LUMEN_ENABLE_DASHBOARD)
 endif()
 
-if(LUMEN_ENABLE_LATEX)
-  target_compile_definitions(lumen_tests PRIVATE LUMEN_ENABLE_LATEX)
-endif()
-
 target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_tests PRIVATE cxx_std_23)
 
@@ -39,3 +35,5 @@ target_link_libraries(lumen_bench_transport PRIVATE lumen)
 target_compile_features(lumen_bench_transport PRIVATE cxx_std_23)
 
 add_subdirectory(compile_checks)
+
+include(consumer/consumer_test.cmake)

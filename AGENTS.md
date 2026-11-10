@@ -8,13 +8,25 @@
 
 ## Build & Test
 
+Presets: `debug` (ASan + UBSan), `tsan` (ThreadSanitizer), `release`, `ci` (Debug, ASan + UBSan, `-Werror`).
+They use vcpkg when `VCPKG_ROOT` is set (`cmake/vcpkg_if_available.cmake`) and system packages otherwise.
+
 ```sh
-cmake --preset debug
-cmake --build build/debug
+cmake --preset debug                 # add -DLUMEN_ENABLE_DASHBOARD=OFF without FTXUI
+cmake --build --preset debug
 ctest --preset debug
 # Single test:
 ctest --test-dir build/debug -R TestName --output-on-failure
+# Formatting and static analysis (clang-format / clang-tidy 18):
+cmake --build --preset debug --target format-check   # or `format` to rewrite
+cmake --build --preset debug --target lint
+# Python bindings (pybind11 >= 3.0); adds the ctest test Python.Bindings:
+cmake --preset debug -DLUMEN_ENABLE_PYTHON=ON -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)
 ```
+
+The ctest test `Consumer.FindPackageAndAddSubdirectory` installs Lumen into a
+temporary prefix and builds `tests/consumer/` against it with `find_package(lumen)`
+and with `add_subdirectory`. `lumen_bench` is built but not run by ctest.
 
 ## Style (enforced by .clang-format + .clang-tidy)
 
@@ -56,11 +68,16 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 
 | Flag | Default | Description |
 |---|---|---|
-| `LUMEN_MIN_LEVEL` | `DEBUG` | Elides logs below this level at compile time. CMake validates the name and passes its value as `LUMEN_MIN_LEVEL_VALUE` (0 = Trace … 5 = Fatal); the header defaults to Debug |
-| `LUMEN_ENABLE_DASHBOARD` | `ON` | FTXUI terminal dashboard |
-| `LUMEN_ENABLE_LATEX` | `OFF` | MicroTeX math rendering in sinks |
-| `LUMEN_ENABLE_PYTHON` | `OFF` | pybind11 Python bindings |
-| `LUMEN_ENABLE_REFLECTION` | `AUTO` | C++26 class-name harvesting |
+| `LUMEN_MIN_LEVEL` | `DEBUG` | Elides logs below this level at compile time. CMake validates the name and, when it is not `DEBUG`, passes its value as `LUMEN_MIN_LEVEL_VALUE` (0 = Trace … 5 = Fatal); the header defaults to Debug |
+| `LUMEN_LOG_CAPACITY`, `LUMEN_METRIC_CAPACITY`, `LUMEN_PROGRESS_CAPACITY` | `65536`, `16384`, `4096` | Ring buffer slots (powers of two); passed to consumers only when not the default |
+| `LUMEN_SANITIZER` | `address` for a top-level Debug build, else `none` | `none`, `address` (ASan + UBSan) or `thread` (TSan) |
+| `LUMEN_ENABLE_DASHBOARD` | `ON` (`OFF` on Windows) | FTXUI terminal dashboard |
+| `LUMEN_ENABLE_PYTHON` | `OFF` | pybind11 Python module (the core library does not depend on pybind11) |
+| `LUMEN_BUILD_TESTS`, `LUMEN_BUILD_EXAMPLES` | `ON` when top level | Tests (needs GTest) and examples |
+| `LUMEN_INSTALL` | `ON` when top level | Install rules and the `lumen` CMake package (`lumen::lumen`) |
+| `LUMEN_WARNINGS_AS_ERRORS` | `ON` when top level | `-Werror` / `/WX` |
+
+vcpkg manifest features: `tests` (gtest), `dashboard` (ftxui), `python` (pybind11), selected from these flags.
 
 ## Implementation Plan
 

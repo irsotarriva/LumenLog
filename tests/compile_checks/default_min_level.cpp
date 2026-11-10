@@ -1,5 +1,6 @@
-// The lumen target defines LUMEN_MIN_LEVEL_VALUE for its consumers; remove it
-// to see what a build without the CMake define gets.
+// The lumen target defines LUMEN_MIN_LEVEL_VALUE for its consumers when
+// LUMEN_MIN_LEVEL is not the default; remove it to see what a build without
+// the CMake define gets.
 #undef LUMEN_MIN_LEVEL_VALUE
 
 #include "lumen/macros.hpp"

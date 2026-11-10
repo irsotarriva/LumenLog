@@ -1,47 +1,148 @@
+# clang-tidy 18 configuration. Enforces the naming and style rules of AGENTS.md.
+#
+# Run it with the `lint` target, which passes the flags below:
+#   cmake --build build/debug --target lint
+# or by hand on a build directory with compile_commands.json:
+#   run-clang-tidy -p build/debug -quiet \
+#     -extra-arg=-D__cpp_concepts=202002L -extra-arg=-Wno-builtin-macro-redefined \
+#     -extra-arg=-Wno-unknown-warning-option '/(src|examples|tests)/'
+# The __cpp_concepts definition is needed only against GNU libstdc++ 13, whose
+# <expected> Clang 18 otherwise rejects; drop it with libc++.
+#
+# Every check family is enabled and each exclusion below states why.
 Checks: >
   -*,
   bugprone-*,
+  cert-*,
+  concurrency-*,
   cppcoreguidelines-*,
   google-explicit-constructor,
-  google-readability-casting,
+  misc-*,
   modernize-*,
   performance-*,
   readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cert-dcl21-cpp,
+  -cert-err58-cpp,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -modernize-return-braced-init-list,
   -modernize-use-trailing-return-type,
   -readability-identifier-length,
-  -readability-magic-numbers,
-  -cppcoreguidelines-avoid-magic-numbers,
-  -cppcoreguidelines-pro-bounds-constant-array-index,
-  -cppcoreguidelines-pro-type-vararg,
-  -cppcoreguidelines-owning-memory,
-  -readability-function-cognitive-complexity,
-  -modernize-return-braced-init-list,
-  -bugprone-easily-swappable-parameters,
-  -bugprone-unchecked-optional-access,
-  -modernize-use-nodiscard
+  -readability-magic-numbers
+
+# Reasons for the exclusions above, in the same order:
+#   bugprone-easily-swappable-parameters      every (key, value) string_view pair in the tag API
+#                                             is reported; the API is inherently key/value.
+#   cert-dcl21-cpp                            asks for const postfix ++ results, which defeats
+#                                             move semantics; removed upstream in clang-tidy 19.
+#   cert-err58-cpp                            reports every GTest TEST() registration object.
+#   cppcoreguidelines-avoid-const-or-ref-data-members
+#                                             builders hold a reference to their ring buffer on
+#                                             purpose: non-owning, never reseated, non-copyable.
+#   cppcoreguidelines-avoid-do-while          do { } while (0) is the only way to give a
+#                                             statement macro statement semantics.
+#   cppcoreguidelines-avoid-magic-numbers     alias of readability-magic-numbers, below.
+#   cppcoreguidelines-owning-memory           requires gsl::owner<>; the project uses no GSL and
+#                                             forbids raw owning pointers outright.
+#   cppcoreguidelines-pro-bounds-constant-array-index
+#                                             requires gsl::at(); std::array indexed by a
+#                                             bounded loop variable is the idiom here.
+#   misc-include-cleaner                      without IWYU pragmas it reports libstdc++ internal
+#                                             headers and the umbrella header lumen/lumen.hpp.
+#   misc-no-recursion                         predicate evaluation walks a tree recursively by
+#                                             design; depth is bounded by the expression.
+#   modernize-return-braced-init-list         `return {a, b};` hides the type being returned.
+#   modernize-use-trailing-return-type        the project uses leading return types.
+#   readability-identifier-length             i, e, os, ts are clearer than longer names in short
+#                                             scopes.
+#   readability-magic-numbers                 reports every literal width, sample value and
+#                                             test input; named constants are left to review.
+
+HeaderFilterRegex: '.*/(include/lumen|src)/.*'
+FormatStyle: file
 
 CheckOptions:
+  # Short functions: AGENTS.md asks for single-purpose functions.
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 15
+  # Each GTest EXPECT_* expands to branches that are not the test's own logic.
+  - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: true
+  # Plain aggregates (records, configs) may have public data.
+  - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: true
+  - key: cppcoreguidelines-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: true
+  # Function-like macros are allowed only for the logging front end, which
+  # needs std::source_location and statement semantics.
+  - key: cppcoreguidelines-macro-usage.AllowedRegexp
+    value: '^(LUMEN_|LOG_)'
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+
+  # Types and concepts: PascalCase.
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
   - key: readability-identifier-naming.ClassCase
     value: CamelCase
   - key: readability-identifier-naming.StructCase
     value: CamelCase
+  - key: readability-identifier-naming.UnionCase
+    value: CamelCase
   - key: readability-identifier-naming.EnumCase
     value: CamelCase
+  - key: readability-identifier-naming.ConceptCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypedefCase
+    value: CamelCase
+  - key: readability-identifier-naming.TemplateParameterCase
+    value: CamelCase
+  # Scoped enums with PascalCase enumerators.
+  - key: readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+
+  # Functions, variables, parameters: snake_case.
   - key: readability-identifier-naming.FunctionCase
-    value: camelBack
+    value: lower_case
   - key: readability-identifier-naming.MethodCase
-    value: camelBack
+    value: lower_case
   - key: readability-identifier-naming.VariableCase
-    value: camelBack
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: lower_case
+
+  # Members: public snake_case, private snake_case_, protected _snake_case.
   - key: readability-identifier-naming.MemberCase
-    value: camelBack
-  - key: readability-identifier-naming.PublicMemberCase
-    value: camelBack
-  - key: readability-identifier-naming.ProtectedMemberPrefix
-    value: _
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberCase
+    value: lower_case
   - key: readability-identifier-naming.PrivateMemberSuffix
     value: _
-  - key: readability-identifier-naming.ConstantCase
-    value: UPPER_CASE
+  - key: readability-identifier-naming.ProtectedMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.ProtectedMemberPrefix
+    value: _
+  - key: readability-identifier-naming.PrivateMethodCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMethodSuffix
+    value: _
+  - key: readability-identifier-naming.ProtectedMethodCase
+    value: lower_case
+  - key: readability-identifier-naming.ProtectedMethodPrefix
+    value: _
+
+  # Macros: UPPER_CASE.
   - key: readability-identifier-naming.MacroDefinitionCase
     value: UPPER_CASE
