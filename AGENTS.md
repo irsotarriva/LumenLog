@@ -63,7 +63,7 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 
 ## Implementation Plan
 
-See **`MILESTONES.md`** for the phased implementation plan (5 milestones, branch-per-milestone strategy). Start at M1 if you're beginning fresh; check off completed items as you go.
+`MILESTONES.md` is a local planning scaffold for agents. It is git-ignored and is not part of the repository; do not commit it. Audit reports live in the git-ignored `audits/` directory.
 
 ## Testing
 

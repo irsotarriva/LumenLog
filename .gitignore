@@ -14,3 +14,6 @@ __pycache__/
 *.pyc
 .DS_Store
 context/
+# Local audit reports and agent scaffolding (not part of the library)
+audits/
+MILESTONES.md
