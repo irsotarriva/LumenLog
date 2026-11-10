@@ -88,13 +88,13 @@ target_compile_features(lumen PUBLIC cxx_std_23)
 # Compile-time level threshold. The header receives the level's numeric value,
 # not its name: a name would be macro-expanded in every consumer that defines
 # DEBUG or ERROR itself.
-set(LUMEN_LEVEL_NAMES TRACE DEBUG INFO WARN ERROR FATAL)
+set(lumen_level_names TRACE DEBUG INFO WARN ERROR FATAL)
 set(LUMEN_MIN_LEVEL "DEBUG" CACHE STRING "Elides records below this level at compile time (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)")
-set_property(CACHE LUMEN_MIN_LEVEL PROPERTY STRINGS ${LUMEN_LEVEL_NAMES})
+set_property(CACHE LUMEN_MIN_LEVEL PROPERTY STRINGS ${lumen_level_names})
 string(TOUPPER "${LUMEN_MIN_LEVEL}" lumen_min_level_upper)
-list(FIND LUMEN_LEVEL_NAMES "${lumen_min_level_upper}" LUMEN_MIN_LEVEL_VALUE)
+list(FIND lumen_level_names "${lumen_min_level_upper}" LUMEN_MIN_LEVEL_VALUE)
 if(LUMEN_MIN_LEVEL_VALUE EQUAL -1)
-  string(JOIN ", " lumen_level_list ${LUMEN_LEVEL_NAMES})
+  string(JOIN ", " lumen_level_list ${lumen_level_names})
   message(FATAL_ERROR "LUMEN_MIN_LEVEL='${LUMEN_MIN_LEVEL}' is not a level name."
                       " Use one of: ${lumen_level_list}")
 endif()
