@@ -19,7 +19,6 @@
 #include <utility>
 
 #include "lumen/detail/class_name.hpp"
-#include "lumen/detail/overflow_policy.hpp"
 #include "lumen/detail/ring_buffer.hpp"
 
 namespace lumen {
@@ -259,7 +258,8 @@ public:
 
     ~RecordBuilder() {
         detail::finalize(record_);
-        buffer_.push(std::move(record_));
+        // When full, the record is dropped and counted in rejected_count().
+        static_cast<void>(buffer_.try_push(std::move(record_)));
     }
 
     RecordBuilder(const RecordBuilder&) = delete;
@@ -304,7 +304,8 @@ public:
 
     ~MetricBuilder() {
         detail::finalize(record_);
-        buffer_.push(std::move(record_));
+        // When full, the record is dropped and counted in rejected_count().
+        static_cast<void>(buffer_.try_push(std::move(record_)));
     }
 
     MetricBuilder(const MetricBuilder&) = delete;
@@ -410,7 +411,8 @@ private:
         record.total = total_;
         record.timestamp_ns = timestamp_ns_;
         detail::finalize(record);
-        buffer_->push(std::move(record));
+        // When full, the record is dropped and counted in rejected_count().
+        static_cast<void>(buffer_->try_push(std::move(record)));
     }
 
     ProgressBuffer* buffer_;  // non-owning

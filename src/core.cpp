@@ -190,19 +190,22 @@ void Core::flush() {
 
 void Core::emit(LogRecord&& record) {
     detail::own_strings(record);
-    log_buffer_.push(std::move(record));
+    // When full, the record is dropped and counted in rejected_count().
+    static_cast<void>(log_buffer_.try_push(std::move(record)));
     wake_cv_.notify_one();
 }
 
 void Core::emit(MetricRecord&& record) {
     detail::own_strings(record);
-    metric_buffer_.push(std::move(record));
+    // When full, the record is dropped and counted in rejected_count().
+    static_cast<void>(metric_buffer_.try_push(std::move(record)));
     wake_cv_.notify_one();
 }
 
 void Core::emit(ProgressRecord&& record) {
     detail::own_strings(record);
-    progress_buffer_.push(std::move(record));
+    // When full, the record is dropped and counted in rejected_count().
+    static_cast<void>(progress_buffer_.try_push(std::move(record)));
     wake_cv_.notify_one();
 }
 
@@ -222,17 +225,17 @@ void Core::drain_available_() {
     const DispatchScope in_dispatch;
 
     ProgressRecord pr;
-    while (progress_buffer_.pop(pr)) {
+    while (progress_buffer_.try_pop(pr)) {
         dispatch_progress_(pr);
     }
 
     MetricRecord mr;
-    while (metric_buffer_.pop(mr)) {
+    while (metric_buffer_.try_pop(mr)) {
         dispatch_metric_(mr);
     }
 
     LogRecord lr;
-    while (log_buffer_.pop(lr)) {
+    while (log_buffer_.try_pop(lr)) {
         dispatch_log_(lr);
     }
 }
