@@ -1,6 +1,6 @@
-#if has_include_(<experimental/meta>)
+#if __has_include(<experimental/meta>)
 #include <experimental/meta>
-#elif has_include_(<meta>)
+#elif __has_include(<meta>)
 #include <meta>
 #else
 #error C++26 static reflection header not found

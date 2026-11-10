@@ -1,7 +1,7 @@
 #ifndef LUMEN_BRIDGES_EIGEN_H
 #define LUMEN_BRIDGES_EIGEN_H
 
-#if has_include_(<Eigen/Core>)
+#if __has_include(<Eigen/Core>)
 
 #include <Eigen/Core>
 #include <chrono>

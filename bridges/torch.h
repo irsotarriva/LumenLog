@@ -1,7 +1,7 @@
 #ifndef LUMEN_BRIDGES_TORCH_H
 #define LUMEN_BRIDGES_TORCH_H
 
-#if has_include_(<torch/torch.h>)
+#if __has_include(<torch/torch.h>)
 
 #include <torch/torch.h>
 #include <string>

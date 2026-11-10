@@ -1,7 +1,7 @@
 #ifndef LUMEN_BRIDGES_ROOT_H
 #define LUMEN_BRIDGES_ROOT_H
 
-#if has_include_(<TTree.h>)
+#if __has_include(<TTree.h>)
 
 #include <TTree.h>
 #include <cstdint>

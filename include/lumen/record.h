@@ -450,10 +450,6 @@ private:
 
 // ── Macro helpers ─────────────────────────────────────────────────────────────
 
-#ifndef has_cpp_attribute_
-#define has_cpp_attribute_(x) 0
-#endif
-
 // Written as `if constexpr (!enabled) {} else expr` so that a user's
 // `if (c) LOG_INFO("x"); else ...` binds the `else` to their own `if`.
 #define LUMEN_IF_ENABLED(LEVEL, expr) \

@@ -9,7 +9,7 @@
 //    Use class_name_of<T>() to obtain the name of a known type at compile time.
 #ifdef LUMEN_HAS_REFLECTION
 
-#if has_include_(<experimental/meta>)
+#if __has_include(<experimental/meta>)
 #include <experimental/meta>
 #else
 #include <meta>
