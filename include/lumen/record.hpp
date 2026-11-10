@@ -2,6 +2,7 @@
 #define LUMEN_RECORD_HPP
 
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <concepts>

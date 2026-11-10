@@ -1,6 +1,7 @@
 #ifndef LUMEN_SINK_HPP
 #define LUMEN_SINK_HPP
 
+#include <array>
 #include <memory>
 #include <string_view>
 #include <vector>

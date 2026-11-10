@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <expected>
 #include <memory>
 #include <mutex>
