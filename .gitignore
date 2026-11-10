@@ -17,3 +17,6 @@ context/
 # Local audit reports and agent scaffolding (not part of the library)
 audits/
 MILESTONES.md
+
+# Agent worktrees (local only)
+.claude/worktrees/
