@@ -11,16 +11,14 @@
 #include <string>
 #endif
 
+#include "ascii.hpp"
+
 namespace lumen::detail {
 
-// Parses `text` as a double; the whole string must be a number ("42abc" and ""
-// are not). Independent of the global locale.
-[[nodiscard]] inline std::optional<double> parse_double(std::string_view text) {
-    // from_chars rejects leading whitespace and '+'; the fallback must too.
-    if (text.empty() || text.front() == '+' || text.front() == ' ' || text.front() == '\t' ||
-        text.front() == '\n') {
-        return std::nullopt;
-    }
+// Converts all of `text` with the platform's number parser. Accepts what
+// std::from_chars accepts, except that the stream fallback also skips leading
+// whitespace and a leading '+': parse_double rules those out first.
+[[nodiscard]] inline std::optional<double> parse_whole_double(std::string_view text) {
     double value = 0.0;
 #if defined(__cpp_lib_to_chars)
     const char* const end = text.data() + text.size();
@@ -39,6 +37,15 @@ namespace lumen::detail {
     }
 #endif
     return value;
+}
+
+// Parses `text` as a double; the whole string must be a number ("42abc", "",
+// " 1" and "+1" are not). Independent of the global locale.
+[[nodiscard]] inline std::optional<double> parse_double(std::string_view text) {
+    if (text.empty() || text.front() == '+' || ascii::is_space(text.front())) {
+        return std::nullopt;
+    }
+    return parse_whole_double(text);
 }
 
 }  // namespace lumen::detail
