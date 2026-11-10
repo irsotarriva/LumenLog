@@ -1,11 +1,11 @@
-#ifndef LUMEN_SINK_H
-#define LUMEN_SINK_H
+#ifndef LUMEN_SINK_HPP
+#define LUMEN_SINK_HPP
 
 #include <memory>
 #include <string_view>
 #include <vector>
 
-#include "lumen/record.h"
+#include "lumen/record.hpp"
 
 namespace lumen {
 

@@ -1,5 +1,5 @@
-#ifndef LUMEN_SRC_NUMBER_PARSE_H
-#define LUMEN_SRC_NUMBER_PARSE_H
+#ifndef LUMEN_SRC_NUMBER_PARSE_HPP
+#define LUMEN_SRC_NUMBER_PARSE_HPP
 
 #include <charconv>
 #include <optional>

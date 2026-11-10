@@ -3,8 +3,8 @@
 
 #include <gtest/gtest.h>
 
-#include "lumen/detail/error.h"
-#include "lumen/predicate.h"
+#include "lumen/detail/error.hpp"
+#include "lumen/predicate.hpp"
 
 namespace lumen {
 namespace {

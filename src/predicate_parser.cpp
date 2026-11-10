@@ -5,9 +5,9 @@
 #include <string>
 #include <string_view>
 
-#include "lumen/detail/error.h"
-#include "lumen/predicate.h"
-#include "number_parse.h"
+#include "lumen/detail/error.hpp"
+#include "lumen/predicate.hpp"
+#include "number_parse.hpp"
 
 namespace lumen {
 

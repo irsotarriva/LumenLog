@@ -1,5 +1,5 @@
-#ifndef LUMEN_BRIDGES_ROOT_H
-#define LUMEN_BRIDGES_ROOT_H
+#ifndef LUMEN_BRIDGES_ROOT_HPP
+#define LUMEN_BRIDGES_ROOT_HPP
 
 #if __has_include(<TTree.h>)
 
@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 namespace lumen::bridges {
 

@@ -1,5 +1,5 @@
-#ifndef LUMEN_DETAIL_RING_BUFFER_H
-#define LUMEN_DETAIL_RING_BUFFER_H
+#ifndef LUMEN_DETAIL_RING_BUFFER_HPP
+#define LUMEN_DETAIL_RING_BUFFER_HPP
 
 #include <array>
 #include <atomic>
@@ -10,7 +10,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "lumen/detail/overflow_policy.h"
+#include "lumen/detail/overflow_policy.hpp"
 
 namespace lumen {
 

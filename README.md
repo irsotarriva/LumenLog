@@ -109,7 +109,7 @@ target_link_libraries(your_target PRIVATE lumen::lumen)
 ### Quick start
 
 ```cpp
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 int main() {
     auto& core = lumen::core();
@@ -238,8 +238,8 @@ public:
 ### Bridges (zero-instrumentation for frameworks)
 
 ```cpp
-#include "lumen/lumen.h"
-#include "lumen/bridges/torch.h"   // auto-logs forward/backward, loss, lr
+#include "lumen/lumen.hpp"
+#include "lumen/bridges/torch.hpp"   // auto-logs forward/backward, loss, lr
 
 // From here, torch::nn::Module subclasses automatically emit metrics.
 // No changes to training code required.

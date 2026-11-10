@@ -8,11 +8,11 @@
 
 #include <gtest/gtest.h>
 
-#include "lumen/core.h"
-#include "lumen/detail/error.h"
-#include "lumen/predicate.h"
-#include "lumen/record.h"
-#include "lumen/sink.h"
+#include "lumen/core.hpp"
+#include "lumen/detail/error.hpp"
+#include "lumen/predicate.hpp"
+#include "lumen/record.hpp"
+#include "lumen/sink.hpp"
 
 namespace lumen {
 namespace {

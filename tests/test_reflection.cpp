@@ -6,9 +6,9 @@
 #include <thread>
 #include <vector>
 
-#include "lumen/core.h"
-#include "lumen/record.h"
-#include "lumen/sink.h"
+#include "lumen/core.hpp"
+#include "lumen/record.hpp"
+#include "lumen/sink.hpp"
 
 namespace lumen {
 namespace {

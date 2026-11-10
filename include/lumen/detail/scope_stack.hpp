@@ -1,12 +1,12 @@
-#ifndef LUMEN_DETAIL_SCOPE_STACK_H
-#define LUMEN_DETAIL_SCOPE_STACK_H
+#ifndef LUMEN_DETAIL_SCOPE_STACK_HPP
+#define LUMEN_DETAIL_SCOPE_STACK_HPP
 
 #include <cstdint>
 #include <cstdio>
 #include <string>
 #include <string_view>
 
-#include "lumen/record.h"
+#include "lumen/record.hpp"
 
 namespace lumen {
 namespace detail {

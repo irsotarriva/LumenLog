@@ -8,9 +8,9 @@
 
 #include <gtest/gtest.h>
 
-#include "lumen/core.h"
-#include "lumen/predicate.h"
-#include "lumen/sink.h"
+#include "lumen/core.hpp"
+#include "lumen/predicate.hpp"
+#include "lumen/sink.hpp"
 
 namespace lumen {
 namespace {

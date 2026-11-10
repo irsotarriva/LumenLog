@@ -8,9 +8,9 @@
 
 #include <gtest/gtest.h>
 
-#include "lumen/detail/overflow_policy.h"
-#include "lumen/detail/ring_buffer.h"
-#include "lumen/record.h"
+#include "lumen/detail/overflow_policy.hpp"
+#include "lumen/detail/ring_buffer.hpp"
+#include "lumen/record.hpp"
 
 namespace lumen {
 namespace {

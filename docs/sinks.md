@@ -26,7 +26,7 @@ The dispatch thread calls these methods sequentially for matching records. Imple
 Colorized output to stderr with an optional FTXUI dashboard.
 
 ```cpp
-#include "lumen/sink.h"
+#include "lumen/sink.hpp"
 
 lumen::TerminalSink::Config cfg;
 

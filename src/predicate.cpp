@@ -1,6 +1,6 @@
-#include "lumen/predicate.h"
+#include "lumen/predicate.hpp"
 
-#include "number_parse.h"
+#include "number_parse.hpp"
 
 #include <memory>
 #include <optional>

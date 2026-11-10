@@ -48,7 +48,7 @@ ctest --test-dir build/debug -R TestName --output-on-failure
 - **Records own their strings** — builders copy message/tags into a stack scratch buffer, then pack them into one immutable `shared_ptr<const char[]>` block per record (one allocation, no locks). Never store a `string_view` into producer memory in a record.
 - **Sink `on_*` methods MUST be non-blocking** — called on the single dispatch thread. Offload I/O to sink-owned threads.
 - **Predicates** — compiled decision trees, immutable after registration. Composed with `&&`, `||`, `!`.
-- **Bridges** — opt-in headers (`lumen/bridges/*.h`), no core changes needed. Ships separately for torch, root, eigen, openmp.
+- **Bridges** — opt-in headers (`bridges/*.hpp`), no core changes needed. Ships separately for torch, root, eigen, openmp.
 - **Python bindings** — optional pybind11, gated by `LUMEN_ENABLE_PYTHON=ON`. Same broker as C++.
 
 ## Key CMake Flags

@@ -1,5 +1,5 @@
-#ifndef LUMEN_CORE_H
-#define LUMEN_CORE_H
+#ifndef LUMEN_CORE_HPP
+#define LUMEN_CORE_HPP
 
 #include <atomic>
 #include <condition_variable>
@@ -12,9 +12,9 @@
 #include <thread>
 #include <vector>
 
-#include "lumen/record.h"
-#include "lumen/predicate.h"
-#include "lumen/sink.h"
+#include "lumen/record.hpp"
+#include "lumen/predicate.hpp"
+#include "lumen/sink.hpp"
 
 namespace lumen {
 

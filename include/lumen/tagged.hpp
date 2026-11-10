@@ -1,11 +1,11 @@
-#ifndef LUMEN_TAGGED_H
-#define LUMEN_TAGGED_H
+#ifndef LUMEN_TAGGED_HPP
+#define LUMEN_TAGGED_HPP
 
 #include <array>
 #include <string>
 #include <string_view>
 
-#include "lumen/record.h"
+#include "lumen/record.hpp"
 
 namespace lumen {
 

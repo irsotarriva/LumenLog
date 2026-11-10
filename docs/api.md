@@ -4,12 +4,12 @@
 
 | Header | Contains |
 |---|---|
-| `lumen/lumen.h` | Umbrella header — everything you typically need |
-| `lumen/core.h` | `Core` singleton, sink management, process/thread tags |
-| `lumen/record.h` | Record types, builders, macros, scope helpers |
-| `lumen/sink.h` | `Sink` base class, `TerminalSink`, `FileSink`, `JsonSink`, `NullSink` |
-| `lumen/predicate.h` | Predicate DSL |
-| `lumen/tagged.h` | `Tagged` mixin for instance-level tags |
+| `lumen/lumen.hpp` | Umbrella header — everything you typically need |
+| `lumen/core.hpp` | `Core` singleton, sink management, process/thread tags |
+| `lumen/record.hpp` | Record types, builders, macros, scope helpers |
+| `lumen/sink.hpp` | `Sink` base class, `TerminalSink`, `FileSink`, `JsonSink`, `NullSink` |
+| `lumen/predicate.hpp` | Predicate DSL |
+| `lumen/tagged.hpp` | `Tagged` mixin for instance-level tags |
 
 ## Core
 

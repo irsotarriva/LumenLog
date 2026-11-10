@@ -1,4 +1,4 @@
-#include "lumen/tagged.h"
+#include "lumen/tagged.hpp"
 
 namespace lumen {
 

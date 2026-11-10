@@ -1,5 +1,5 @@
-#ifndef LUMEN_DETAIL_CLASS_NAME_H
-#define LUMEN_DETAIL_CLASS_NAME_H
+#ifndef LUMEN_DETAIL_CLASS_NAME_HPP
+#define LUMEN_DETAIL_CLASS_NAME_HPP
 
 #include <source_location>
 #include <string_view>

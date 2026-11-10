@@ -1,5 +1,5 @@
-#ifndef LUMEN_BRIDGES_TORCH_H
-#define LUMEN_BRIDGES_TORCH_H
+#ifndef LUMEN_BRIDGES_TORCH_HPP
+#define LUMEN_BRIDGES_TORCH_HPP
 
 #if __has_include(<torch/torch.h>)
 
@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 namespace lumen::bridges {
 

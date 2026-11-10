@@ -6,13 +6,13 @@ Bridges depend only on the producer API (macros and `lumen::metric()`). They hav
 
 ## Available bridges
 
-### Torch (`lumen/bridges/torch.h`)
+### Torch (`lumen/bridges/torch.hpp`)
 
 Hooks into PyTorch training loops. Automatically emits metrics for forward/backward passes.
 
 ```cpp
-#include "lumen/lumen.h"
-#include "lumen/bridges/torch.h"
+#include "lumen/lumen.hpp"
+#include "lumen/bridges/torch.hpp"
 
 // Training code unchanged — metrics appear automatically
 auto model = MyModel();
@@ -25,39 +25,39 @@ Metrics emitted:
 - `grad_norm` — gradient norm after backward pass
 - `learning_rate` — current learning rate from optimizer
 
-### ROOT (`lumen/bridges/root.h`)
+### ROOT (`lumen/bridges/root.hpp`)
 
 Hooks into ROOT TTree fills and histogram operations.
 
 ```cpp
-#include "lumen/lumen.h"
-#include "lumen/bridges/root.h"
+#include "lumen/lumen.hpp"
+#include "lumen/bridges/root.hpp"
 
 // TTree fills emit progress and metrics automatically
 TTree* tree = /* ... */;
 tree->Fill();  // ProgressRecord: TTree fill count
 ```
 
-### Eigen (`lumen/bridges/eigen.h`)
+### Eigen (`lumen/bridges/eigen.hpp`)
 
 Emits timing for large matrix operations above a configurable size threshold.
 
 ```cpp
-#include "lumen/lumen.h"
-#include "lumen/bridges/eigen.h"
+#include "lumen/lumen.hpp"
+#include "lumen/bridges/eigen.hpp"
 
 Eigen::MatrixXd A = /* ... */;
 Eigen::MatrixXd B = /* ... */;
 auto C = A * B;  // MetricRecord: operation duration if matrices exceed threshold
 ```
 
-### OpenMP (`lumen/bridges/openmp.h`)
+### OpenMP (`lumen/bridges/openmp.hpp`)
 
 Emits thread pool utilization metrics.
 
 ```cpp
-#include "lumen/lumen.h"
-#include "lumen/bridges/openmp.h"
+#include "lumen/lumen.hpp"
+#include "lumen/bridges/openmp.hpp"
 
 #pragma omp parallel for
 for (int i = 0; i < N; i++) {
@@ -76,7 +76,7 @@ A bridge header is guarded with `#ifdef` checks for the framework it wraps. Incl
 A bridge is a standalone header. It should:
 
 1. Be guarded by `#ifdef` for the framework it wraps
-2. Depend only on the producer API (`lumen/lumen.h`)
+2. Depend only on the producer API (`lumen/lumen.hpp`)
 3. Use framework extension points to intercept operations
 4. Emit records via `LOG_*`, `lumen::metric()`, or `lumen::progress()`
 5. Be opt-in — produce no side effects until explicitly included
@@ -84,13 +84,13 @@ A bridge is a standalone header. It should:
 Example skeleton:
 
 ```cpp
-// bridges/my_framework.h
+// bridges/my_framework.hpp
 #ifndef LUMEN_BRIDGE_MY_FRAMEWORK_H
 #define LUMEN_BRIDGE_MY_FRAMEWORK_H
 
 #ifdef MY_FRAMEWORK_VERSION  // guard: only active when framework is present
 
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 #include <my_framework/core.h>
 
 namespace lumen::bridge {

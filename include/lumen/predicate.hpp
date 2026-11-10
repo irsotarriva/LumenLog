@@ -1,5 +1,5 @@
-#ifndef LUMEN_PREDICATE_H
-#define LUMEN_PREDICATE_H
+#ifndef LUMEN_PREDICATE_HPP
+#define LUMEN_PREDICATE_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,7 +9,7 @@
 #include <string_view>
 #include <system_error>
 
-#include "lumen/record.h"
+#include "lumen/record.hpp"
 
 namespace lumen {
 

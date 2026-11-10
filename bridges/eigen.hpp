@@ -1,5 +1,5 @@
-#ifndef LUMEN_BRIDGES_EIGEN_H
-#define LUMEN_BRIDGES_EIGEN_H
+#ifndef LUMEN_BRIDGES_EIGEN_HPP
+#define LUMEN_BRIDGES_EIGEN_HPP
 
 #if __has_include(<Eigen/Core>)
 
@@ -7,7 +7,7 @@
 #include <chrono>
 #include <string>
 
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 namespace lumen::bridges {
 

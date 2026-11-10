@@ -1,5 +1,5 @@
-#ifndef LUMEN_DETAIL_ERROR_H
-#define LUMEN_DETAIL_ERROR_H
+#ifndef LUMEN_DETAIL_ERROR_HPP
+#define LUMEN_DETAIL_ERROR_HPP
 
 #include <string>
 #include <system_error>

@@ -1,4 +1,4 @@
-#include "lumen/core.h"
+#include "lumen/core.hpp"
 
 #include <array>
 #include <cstddef>
@@ -7,8 +7,8 @@
 #include <string>
 #include <thread>
 
-#include "lumen/detail/context.h"
-#include "lumen/detail/error.h"
+#include "lumen/detail/context.hpp"
+#include "lumen/detail/error.hpp"
 
 namespace lumen {
 

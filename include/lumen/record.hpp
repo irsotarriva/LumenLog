@@ -1,5 +1,5 @@
-#ifndef LUMEN_RECORD_H
-#define LUMEN_RECORD_H
+#ifndef LUMEN_RECORD_HPP
+#define LUMEN_RECORD_HPP
 
 #include <array>
 #include <charconv>
@@ -18,8 +18,8 @@
 #include <utility>
 
 #include "lumen/detail/class_name.hpp"
-#include "lumen/detail/overflow_policy.h"
-#include "lumen/detail/ring_buffer.h"
+#include "lumen/detail/overflow_policy.hpp"
+#include "lumen/detail/ring_buffer.hpp"
 
 namespace lumen {
 
@@ -423,7 +423,7 @@ private:
 
 }  // namespace lumen
 
-#include "lumen/detail/scope_stack.h"
+#include "lumen/detail/scope_stack.hpp"
 
 // ── Level integer constants for compile-time macro elision ────────────────────
 

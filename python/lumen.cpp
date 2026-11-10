@@ -6,7 +6,7 @@
 #include <cstring>
 #include <string>
 
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 namespace py = pybind11;
 using namespace lumen;

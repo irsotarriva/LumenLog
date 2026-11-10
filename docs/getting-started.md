@@ -51,7 +51,7 @@ target_link_libraries(your_target PRIVATE lumen::lumen)
 ## Your first program
 
 ```cpp
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 int main() {
     // Get the global core. Sinks register here.

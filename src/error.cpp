@@ -1,4 +1,4 @@
-#include "lumen/detail/error.h"
+#include "lumen/detail/error.hpp"
 
 namespace lumen {
 

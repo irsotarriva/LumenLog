@@ -1,8 +1,8 @@
-#include "lumen/detail/context.h"
+#include "lumen/detail/context.hpp"
 
 #include <cstring>
 
-#include "lumen/detail/scope_stack.h"
+#include "lumen/detail/scope_stack.hpp"
 
 namespace lumen {
 namespace detail {

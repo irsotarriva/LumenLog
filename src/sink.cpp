@@ -1,4 +1,4 @@
-#include "lumen/sink.h"
+#include "lumen/sink.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +14,7 @@
 #include <thread>
 #include <unordered_map>
 
-#include "lumen/detail/error.h"
+#include "lumen/detail/error.hpp"
 
 #ifdef LUMEN_ENABLE_DASHBOARD
 #include <ftxui/dom/elements.hpp>

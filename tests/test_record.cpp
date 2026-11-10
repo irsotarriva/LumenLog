@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "lumen/record.h"
+#include "lumen/record.hpp"
 
 namespace lumen {
 namespace {

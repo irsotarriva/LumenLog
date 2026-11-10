@@ -1,6 +1,6 @@
 #include <iostream>
 
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 int main() {
     auto& core = lumen::core();

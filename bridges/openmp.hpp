@@ -1,5 +1,5 @@
-#ifndef LUMEN_BRIDGES_OPENMP_H
-#define LUMEN_BRIDGES_OPENMP_H
+#ifndef LUMEN_BRIDGES_OPENMP_HPP
+#define LUMEN_BRIDGES_OPENMP_HPP
 
 #ifdef _OPENMP
 
@@ -7,7 +7,7 @@
 #include <chrono>
 #include <string>
 
-#include "lumen/lumen.h"
+#include "lumen/lumen.hpp"
 
 namespace lumen::bridges {
 

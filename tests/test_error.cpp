@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-#include "lumen/detail/error.h"
+#include "lumen/detail/error.hpp"
 
 namespace lumen {
 namespace {
