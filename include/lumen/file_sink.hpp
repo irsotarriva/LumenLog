@@ -8,7 +8,7 @@
 #include <memory>
 #include <system_error>
 
-#include "lumen/core.hpp"
+#include "lumen/diagnostics.hpp"
 #include "lumen/sink.hpp"
 #include "lumen/writer_statistics.hpp"
 

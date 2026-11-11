@@ -16,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-#include "lumen/core.hpp"
+#include "lumen/diagnostics.hpp"
 #include "lumen/writer_statistics.hpp"
 
 // The writer thread of the line-writing sinks: a bounded queue of lines, and

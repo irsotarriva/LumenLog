@@ -10,10 +10,11 @@ table; the others are included on their own.
 |---|---|
 | `lumen/lumen.hpp` | Includes the headers below that a program that logs needs |
 | `lumen/macros.hpp` | `LUMEN_LOG_TRACE` … `LUMEN_LOG_FATAL`, `LOG_*`, `LUMEN_SCOPE`, `LUMEN_MEMBER_SCOPE`, `LUMEN_LOOP`, `level_compiled_in` |
-| `lumen/core.hpp` | `Core` (`add_sink`, `remove_sink`, `flush`, `statistics`, `sink_exception_count`, `set_diagnostic_handler`), `core()`, `CoreStatistics`, `QueueStatistics`, `DiagnosticHandler`, `stderr_diagnostics()`; the threading, ordering, loss and lifetime rules |
+| `lumen/core.hpp` | `Core` (`add_sink`, `remove_sink`, `flush`, `statistics`, `sink_exception_count`, `set_diagnostic_handler`), `core()`, `CoreStatistics`, `QueueStatistics`; the threading, ordering, loss and lifetime rules |
+| `lumen/diagnostics.hpp` | `DiagnosticHandler`, `stderr_diagnostics()` (included by `lumen/core.hpp` and the sink headers) |
 | `lumen/record_builder.hpp` | `RecordBuilder`, `MetricBuilder`, `metric()`; tag rules; what a fatal record does |
 | `lumen/progress.hpp` | `ProgressHandle`, `progress()` |
-| `lumen/context.hpp` | `set_process_tag`, `set_thread_tag` and their `remove_*` and `clear_*`; the priority of the context layers |
+| `lumen/context.hpp` | `set_process_tag`, `set_thread_tag` and their `remove_*` and `clear_*`, `ScopedTag` (the object behind `LUMEN_SCOPE`); the priority of the context layers |
 | `lumen/tagged.hpp` | `Tagged` (`lumen_tag`, `lumen_untag`, `lumen_tags`, `lumen_scope`) |
 | `lumen/record.hpp` | `LogRecord`, `MetricRecord`, `ProgressRecord`, `SourceLocation`, `RecordTags`, the `RecordType` concept; who owns a record's strings |
 | `lumen/tag_set.hpp` | `TagSet<N>`, the fixed-capacity tag list of a record |

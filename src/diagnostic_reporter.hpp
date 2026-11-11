@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "lumen/core.hpp"
+#include "lumen/diagnostics.hpp"
 
 namespace lumen::detail {
 

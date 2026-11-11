@@ -4,11 +4,11 @@
 #include <concepts>
 #include <cstdint>
 #include <expected>
-#include <functional>
 #include <memory>
 #include <string_view>
 #include <system_error>
 
+#include "lumen/diagnostics.hpp"
 #include "lumen/predicate.hpp"
 #include "lumen/record.hpp"
 #include "lumen/sink.hpp"
@@ -122,10 +122,12 @@ namespace lumen {
 
 using SinkId = uint64_t;
 
-// Receives one line of text about a problem Core cannot return to anyone: the
-// first record refused by a full queue, the first tag left out of a full
-// record, the first exception thrown by each sink, a dispatch thread that
-// could not be started.
+// A Core's DiagnosticHandler (lumen/diagnostics.hpp) receives one line about
+// each problem the Core cannot return to anyone: the first record refused by
+// a full queue, the first tag left out of a full record, the first exception
+// thrown by each sink, a dispatch thread that could not be started, a
+// shutdown that gave up waiting for a sink callback. A Core starts with
+// stderr_diagnostics().
 //
 // Calls. One Core calls its handler with one line at a time, in the order the
 // lines were reported, never on two threads at once and never nested. The
@@ -139,11 +141,7 @@ using SinkId = uint64_t;
 //
 // A handler should not throw. If it does, the exception is caught, and the
 // line and what was thrown are written to std::cerr; the process and the
-// thread that delivers records go on. An empty handler discards the lines.
-using DiagnosticHandler = std::function<void(std::string_view line)>;
-
-// The handler a Core starts with: writes each line to std::cerr.
-[[nodiscard]] DiagnosticHandler stderr_diagnostics();
+// thread that delivers records go on.
 
 struct QueueStatistics {
     uint64_t accepted = 0;                // queued for delivery (for logs, fatal records included)

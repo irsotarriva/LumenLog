@@ -14,27 +14,10 @@
 #include "lumen/detail/context.hpp"
 #include "lumen/progress.hpp"
 
-// The guards behind LUMEN_SCOPE and LUMEN_LOOP (lumen/macros.hpp documents
-// what they do for the user).
+// The guard behind LUMEN_LOOP (lumen/macros.hpp documents what it does for
+// the user). LUMEN_SCOPE uses lumen::ScopedTag (lumen/context.hpp).
 
 namespace lumen::detail {
-
-// Adds key=value to the calling thread's context while it lives. The context
-// keeps copies of both strings, so LUMEN_SCOPE("run", std::to_string(n)) is
-// safe.
-class ScopeGuard {
-public:
-    ScopeGuard(std::string_view key, std::string_view value) : frame_(push_scope(key, value)) {}
-    ~ScopeGuard() { pop_scope(frame_); }
-
-    ScopeGuard(const ScopeGuard&) = delete;
-    ScopeGuard& operator=(const ScopeGuard&) = delete;
-    ScopeGuard(ScopeGuard&&) = delete;
-    ScopeGuard& operator=(ScopeGuard&&) = delete;
-
-private:
-    FrameToken frame_;
-};
 
 // The state of one LUMEN_LOOP: a progress bar, and the scope tag
 // label=<index> while a body runs. The tag is pushed before each body and

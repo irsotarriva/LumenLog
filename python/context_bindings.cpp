@@ -10,7 +10,6 @@
 
 #include "errors.hpp"
 #include "lumen/context.hpp"
-#include "lumen/detail/scope_stack.hpp"
 #include "registration.hpp"
 #include "tag_values.hpp"
 
@@ -43,7 +42,7 @@ public:
 
     [[nodiscard]] uint64_t enter(std::string_view key, std::string_view value) {
         const uint64_t token = next_token_++;
-        entries_.push_back(Entry{token, std::make_unique<detail::ScopeGuard>(key, value)});
+        entries_.push_back(Entry{token, std::make_unique<ScopedTag>(key, value)});
         return token;
     }
 
@@ -59,7 +58,7 @@ public:
 private:
     struct Entry {
         uint64_t token;
-        std::unique_ptr<detail::ScopeGuard> guard;
+        std::unique_ptr<ScopedTag> guard;
     };
 
     void close_from_(std::size_t first) {

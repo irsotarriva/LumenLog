@@ -15,7 +15,7 @@
 #include "diagnostic_reporter.hpp"
 #include "fatal_records.hpp"
 #include "first_reports.hpp"
-#include "immortal.hpp"
+#include "lumen/detail/immortal.hpp"
 #include "record_preparation.hpp"
 #include "record_queues.hpp"
 #include "sink_registry.hpp"

@@ -31,7 +31,7 @@ headers state the guarantees; this page says which file keeps them.
 | `src/rotating_file.*`, `src/file_sink.cpp` | `FileSink`: `{date}`, appending, rotation |
 | `src/dashboard_model.cpp` | `DashboardModel` (always built) |
 | `src/dashboard_sink.cpp`, `src/dashboard_frame.*` | `DashboardSink`; the only code that uses FTXUI (built with `LUMEN_ENABLE_DASHBOARD`) |
-| `src/immortal.hpp` | Storage for the few objects that are never destroyed |
+| `include/lumen/detail/immortal.hpp` | Storage for the few objects that are never destroyed (also used by the Python module) |
 | `src/error.cpp` | The `"lumen"` error category |
 | `python/` | The pybind11 module, one file per area (`python/registration.hpp` lists them), and `logging_handler.py` |
 | `cmake/build_settings.cmake`, `cmake/config.hpp.in` | The settings that change what the headers compile to (`LUMEN_MIN_LEVEL`, queue capacities), written into the generated and installed `lumen/config.hpp` |

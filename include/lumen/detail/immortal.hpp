@@ -1,5 +1,5 @@
-#ifndef LUMEN_SRC_IMMORTAL_HPP
-#define LUMEN_SRC_IMMORTAL_HPP
+#ifndef LUMEN_DETAIL_IMMORTAL_HPP
+#define LUMEN_DETAIL_IMMORTAL_HPP
 
 #include <array>
 #include <concepts>

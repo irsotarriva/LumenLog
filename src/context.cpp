@@ -17,8 +17,8 @@
 #include <utility>
 #include <vector>
 
-#include "immortal.hpp"
 #include "lumen/context.hpp"
+#include "lumen/detail/immortal.hpp"
 #include "lumen/detail/tag_table.hpp"
 #include "lumen/error.hpp"
 #include "lumen/limits.hpp"

@@ -23,7 +23,7 @@
 #include <vector>
 
 #include "errors.hpp"
-#include "immortal.hpp"
+#include "lumen/detail/immortal.hpp"
 #include "registration.hpp"
 
 namespace py = pybind11;

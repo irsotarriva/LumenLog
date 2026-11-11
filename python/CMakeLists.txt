@@ -23,10 +23,6 @@ pybind11_add_module(lumen_bindings
 )
 
 target_link_libraries(lumen_bindings PRIVATE lumen)
-# src/ for immortal.hpp, the library's never-destroyed storage, and nothing
-# else: the exit hook's state (python/interpreter_exit.cpp) must outlive C++
-# static destruction, where a sink's destructor may still reach it.
-target_include_directories(lumen_bindings PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_features(lumen_bindings PRIVATE cxx_std_23)
 
 # The Python tests (tests/python), run by ctest as one test. When the module

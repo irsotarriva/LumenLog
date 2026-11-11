@@ -25,7 +25,7 @@
 #endif
 
 #include "dashboard_frame.hpp"
-#include "immortal.hpp"
+#include "lumen/detail/immortal.hpp"
 #include "lumen/error.hpp"
 #include "lumen/thread_clock.hpp"
 #include "record_format.hpp"

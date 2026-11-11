@@ -9,7 +9,7 @@
 #include <system_error>
 #include <vector>
 
-#include "lumen/core.hpp"
+#include "lumen/diagnostics.hpp"
 #include "lumen/sink.hpp"
 #include "lumen/terminal_style.hpp"
 #include "lumen/writer_statistics.hpp"
