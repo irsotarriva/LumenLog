@@ -510,12 +510,14 @@ void DashboardSink::restore_terminal_after_signal() noexcept {
     if (dashboards_on_standard_error.load(std::memory_order_relaxed) == 0) {
         return;
     }
-    // Nothing can be done in a signal handler about a failed write.
 #ifdef PLATFORM_WINDOWS
-    static_cast<void>(_write(2, leave_screen.data(), static_cast<unsigned>(leave_screen.size())));
+    const auto written = _write(2, leave_screen.data(), static_cast<unsigned>(leave_screen.size()));
 #else
-    static_cast<void>(::write(STDERR_FILENO, leave_screen.data(), leave_screen.size()));
+    const auto written = ::write(STDERR_FILENO, leave_screen.data(), leave_screen.size());
 #endif
+    // Nothing can be done in a signal handler about a failed write. (A cast
+    // of the call itself to void does not satisfy glibc's warn_unused_result.)
+    static_cast<void>(written);
 }
 
 }  // namespace lumen

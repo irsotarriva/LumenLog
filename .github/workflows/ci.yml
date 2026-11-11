@@ -426,6 +426,7 @@ jobs:
 
       - name: Report
         run: >-
+          mkdir -p build/coverage/coverage &&
           gcovr --root . --object-directory build/coverage
           --gcov-exclude-directories '.*/CMakeFiles/[0-9.]+/.*'
           --filter 'src/' --filter 'include/lumen/'

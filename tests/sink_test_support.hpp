@@ -168,8 +168,21 @@ public:
 
 private:
     [[nodiscard]] static std::optional<std::string> get_(const std::string& name) {
+#ifdef PLATFORM_WINDOWS
+        // MSVC rejects std::getenv under warnings-as-errors; _dupenv_s hands
+        // out a copy made with malloc.
+        char* copy = nullptr;  // owned by `value` from the next statement on
+        std::size_t length = 0;
+        const errno_t failed = _dupenv_s(&copy, &length, name.c_str());
+        const std::unique_ptr<char, decltype(&std::free)> value(copy, &std::free);
+        if (failed != 0 || value == nullptr) {
+            return std::nullopt;
+        }
+        return std::string(value.get());
+#else
         const char* value = std::getenv(name.c_str());  // NOLINT(concurrency-mt-unsafe): see above
         return value == nullptr ? std::nullopt : std::optional<std::string>(value);
+#endif
     }
     static void set_(const std::string& name, const std::optional<std::string>& value) {
 #ifdef PLATFORM_WINDOWS

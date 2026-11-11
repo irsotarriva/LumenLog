@@ -66,8 +66,12 @@ struct ThrowsWhenFormatted {
 template <>
 struct std::formatter<lumen::ThrowsWhenFormatted> {
     constexpr auto parse(std::format_parse_context& context) { return context.begin(); }
+    // A template, because libc++ asks whether the type is formattable with a
+    // context other than std::format_context.
+    template <typename Context>
+        requires std::same_as<typename Context::char_type, char>
     auto format(const lumen::ThrowsWhenFormatted& value,
-                std::format_context& context) const -> decltype(context.out()) {
+                Context& context) const -> decltype(context.out()) {
         if (value.standard_exception) {
             throw std::runtime_error("formatter refused");
         }
