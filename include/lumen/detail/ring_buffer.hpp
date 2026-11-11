@@ -18,9 +18,9 @@ namespace lumen {
 // An element must be movable without throwing: a producer that has claimed a
 // slot must always publish it, or the consumer would wait on that slot forever.
 template <typename T>
-concept RingBufferElement = std::is_nothrow_move_constructible_v<T> &&
-                            std::is_nothrow_move_assignable_v<T> &&
-                            std::is_nothrow_destructible_v<T>;
+concept RingBufferElement =
+    std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T> &&
+    std::is_nothrow_destructible_v<T>;
 
 // Bounded multi-producer, single-consumer FIFO queue (D. Vyukov's bounded
 // queue, with the consumer side specialised to one thread).
@@ -74,8 +74,7 @@ template <RingBufferElement T, std::size_t N>
 class RingBuffer {
 public:
     RingBuffer() noexcept
-        : cells_(std::make_unique_for_overwrite<Cells>()),
-          sequence_(std::make_unique<Sequence>()) {
+        : cells_(std::make_unique_for_overwrite<Cells>()), sequence_(std::make_unique<Sequence>()) {
         for (uint64_t pos = 0; pos < N; ++pos) {
             (*sequence_)[pos].store(free_for_(pos), std::memory_order_relaxed);
         }

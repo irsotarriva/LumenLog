@@ -124,11 +124,11 @@ private:
 
     [[nodiscard]] std::optional<Predicate> parse_primary_(uint32_t depth) {
         switch (token_.kind) {
-            case TokenKind::LParen: return parse_group_(depth);
+            case TokenKind::LParen:     return parse_group_(depth);
             case TokenKind::Identifier: return parse_word_condition_();
             // A quoted key, e.g. "level" == 3.
             case TokenKind::String: return parse_tag_comparison_();
-            case TokenKind::End: return fail_(token_.position, "unexpected end of query");
+            case TokenKind::End:    return fail_(token_.position, "unexpected end of query");
             default:
                 return fail_(token_.position, "expected a condition, got '" + token_.text + "'");
         }
@@ -204,10 +204,12 @@ private:
         if (!advance_()) {
             return std::nullopt;
         }
-        const bool is_word = token_.kind == TokenKind::Identifier || token_.kind == TokenKind::Number;
+        const bool is_word =
+            token_.kind == TokenKind::Identifier || token_.kind == TokenKind::Number;
         const std::optional<LogLevel> level = is_word ? parse_level(token_.text) : std::nullopt;
         if (!level) {
-            return fail_(token_.position, "expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)");
+            return fail_(token_.position,
+                         "expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)");
         }
         if (!advance_()) {
             return std::nullopt;

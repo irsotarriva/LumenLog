@@ -195,11 +195,11 @@ using Verdict = std::optional<bool>;
 template <std::totally_ordered T>
 [[nodiscard]] bool compare(CompareOp op, const T& lhs, const T& rhs) {
     switch (op) {
-        case CompareOp::Equal: return lhs == rhs;
-        case CompareOp::NotEqual: return lhs != rhs;
-        case CompareOp::Less: return lhs < rhs;
-        case CompareOp::LessEqual: return lhs <= rhs;
-        case CompareOp::Greater: return lhs > rhs;
+        case CompareOp::Equal:        return lhs == rhs;
+        case CompareOp::NotEqual:     return lhs != rhs;
+        case CompareOp::Less:         return lhs < rhs;
+        case CompareOp::LessEqual:    return lhs <= rhs;
+        case CompareOp::Greater:      return lhs > rhs;
         case CompareOp::GreaterEqual: return lhs >= rhs;
     }
     return false;
@@ -207,7 +207,8 @@ template <std::totally_ordered T>
 
 // Every tag condition looks tags up here, so all of them follow one rule: the
 // first entry with `key` is the tag's value.
-[[nodiscard]] std::optional<std::string_view> find_tag(const RecordTags& tags, std::string_view key) {
+[[nodiscard]] std::optional<std::string_view> find_tag(const RecordTags& tags,
+                                                       std::string_view key) {
     for (const RecordTags::Entry& entry : tags) {
         if (entry.key == key) {
             return entry.value;
@@ -366,7 +367,8 @@ Predicate level_equals(LogLevel level) {
 }
 
 Predicate tag_equals(std::string_view key, std::string_view value) {
-    return PredicateAccess::make(Node::TagText{std::string(key), CompareOp::Equal, std::string(value)});
+    return PredicateAccess::make(
+        Node::TagText{std::string(key), CompareOp::Equal, std::string(value)});
 }
 
 Predicate tag_not_equals(std::string_view key, std::string_view value) {

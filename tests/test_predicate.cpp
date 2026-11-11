@@ -20,9 +20,9 @@ TagSet<16> make_tags() {
     return tags;
 }
 
-inline constexpr std::array<CompareOp, 6> all_ops = {CompareOp::Equal,     CompareOp::NotEqual,
-                                                     CompareOp::Less,      CompareOp::LessEqual,
-                                                     CompareOp::Greater,   CompareOp::GreaterEqual};
+inline constexpr std::array<CompareOp, 6> all_ops = {CompareOp::Equal,   CompareOp::NotEqual,
+                                                     CompareOp::Less,    CompareOp::LessEqual,
+                                                     CompareOp::Greater, CompareOp::GreaterEqual};
 
 // Always / Never.
 
@@ -91,11 +91,14 @@ TEST(PredicateTest, LevelCompareAllOperators) {
     EXPECT_TRUE(level_compare(CompareOp::Less, LogLevel::Warn).evaluate(tags, LogLevel::Info));
     EXPECT_FALSE(level_compare(CompareOp::Less, LogLevel::Warn).evaluate(tags, LogLevel::Warn));
     EXPECT_TRUE(level_compare(CompareOp::LessEqual, LogLevel::Warn).evaluate(tags, LogLevel::Warn));
-    EXPECT_FALSE(level_compare(CompareOp::LessEqual, LogLevel::Warn).evaluate(tags, LogLevel::Error));
+    EXPECT_FALSE(
+        level_compare(CompareOp::LessEqual, LogLevel::Warn).evaluate(tags, LogLevel::Error));
     EXPECT_TRUE(level_compare(CompareOp::Greater, LogLevel::Warn).evaluate(tags, LogLevel::Error));
     EXPECT_FALSE(level_compare(CompareOp::Greater, LogLevel::Warn).evaluate(tags, LogLevel::Warn));
-    EXPECT_TRUE(level_compare(CompareOp::GreaterEqual, LogLevel::Warn).evaluate(tags, LogLevel::Warn));
-    EXPECT_FALSE(level_compare(CompareOp::GreaterEqual, LogLevel::Warn).evaluate(tags, LogLevel::Info));
+    EXPECT_TRUE(
+        level_compare(CompareOp::GreaterEqual, LogLevel::Warn).evaluate(tags, LogLevel::Warn));
+    EXPECT_FALSE(
+        level_compare(CompareOp::GreaterEqual, LogLevel::Warn).evaluate(tags, LogLevel::Info));
     EXPECT_TRUE(level_compare(CompareOp::Equal, LogLevel::Warn).evaluate(tags, LogLevel::Warn));
     EXPECT_FALSE(level_compare(CompareOp::Equal, LogLevel::Warn).evaluate(tags, LogLevel::Info));
     EXPECT_TRUE(level_compare(CompareOp::NotEqual, LogLevel::Warn).evaluate(tags, LogLevel::Info));
@@ -450,7 +453,8 @@ TEST(PredicateTest, AssignmentPreservesBehavior) {
 }
 
 TEST(PredicateTest, PredicatesSharingNodesWorkAfterOriginalIsDestroyed) {
-    auto original = std::make_unique<Predicate>(tag_equals("env", "prod") && level_at_least(LogLevel::Info));
+    auto original =
+        std::make_unique<Predicate>(tag_equals("env", "prod") && level_at_least(LogLevel::Info));
     const Predicate copy = *original;
     Predicate assigned;
     assigned = *original;
@@ -461,7 +465,8 @@ TEST(PredicateTest, PredicatesSharingNodesWorkAfterOriginalIsDestroyed) {
     original.reset();
 
     const auto prod = make_tags();
-    for (const Predicate* p : std::array<const Predicate*, 4>{&copy, &assigned, &moved, &combined}) {
+    for (const Predicate* p :
+         std::array<const Predicate*, 4>{&copy, &assigned, &moved, &combined}) {
         EXPECT_TRUE(p->evaluate(prod, LogLevel::Warn));
         EXPECT_FALSE(p->evaluate(prod, LogLevel::Debug));
     }
@@ -559,7 +564,8 @@ TEST(PredicateTest, LevelConditionIsIgnoredInsideAnd) {
     EXPECT_TRUE(match.add("run_id", "42"));
     TagSet<16> other;
     EXPECT_TRUE(other.add("run_id", "7"));
-    const Predicate p = level_at_least(LogLevel::Warn) && tag_compare("run_id", CompareOp::Equal, 42);
+    const Predicate p =
+        level_at_least(LogLevel::Warn) && tag_compare("run_id", CompareOp::Equal, 42);
 
     EXPECT_TRUE(p.evaluate(match));
     EXPECT_FALSE(p.evaluate(other));
@@ -569,7 +575,8 @@ TEST(PredicateTest, LevelConditionIsIgnoredInsideOr) {
     // Treating the level part as "true" would pass every metric here.
     TagSet<16> other;
     EXPECT_TRUE(other.add("run_id", "7"));
-    const Predicate p = level_at_least(LogLevel::Warn) || tag_compare("run_id", CompareOp::Equal, 42);
+    const Predicate p =
+        level_at_least(LogLevel::Warn) || tag_compare("run_id", CompareOp::Equal, 42);
 
     EXPECT_FALSE(p.evaluate(other));
 }

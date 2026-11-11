@@ -281,7 +281,8 @@ struct StressOutcome {
     return producer * stress_items_per_producer + index;
 }
 
-void record_delivery(const Tracked& item, std::vector<uint64_t>& next_index, StressOutcome& outcome) {
+void record_delivery(const Tracked& item, std::vector<uint64_t>& next_index,
+                     StressOutcome& outcome) {
     const uint64_t value = item.value();
     if (value >= stress_total) {
         ++outcome.invalid_values;

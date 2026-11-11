@@ -23,9 +23,9 @@ TagSet<16> tags_of(std::initializer_list<std::pair<std::string_view, std::string
 // Parses `query` (failing the test on a parse error) and evaluates it.
 bool eval(std::string_view query, const TagSet<16>& tags, LogLevel level = LogLevel::Info) {
     const auto parsed = parse_predicate(query);
-    EXPECT_TRUE(parsed.has_value()) << "query: " << query << "\n  error at "
-                                    << (parsed ? 0 : parsed.error().position) << ": "
-                                    << (parsed ? "" : parsed.error().message);
+    EXPECT_TRUE(parsed.has_value())
+        << "query: " << query << "\n  error at " << (parsed ? 0 : parsed.error().position) << ": "
+        << (parsed ? "" : parsed.error().message);
     return parsed.has_value() && parsed->evaluate(tags, level);
 }
 
@@ -207,22 +207,22 @@ TEST(PredicateParserTest, EmptyQueryIsAnError) {
 }
 
 TEST(PredicateParserTest, RejectsMalformedQueries) {
-    parse_error("level >= LOUD");        // unknown level
-    parse_error("level WARN");           // missing operator
-    parse_error("x = 1");                // single '='
-    parse_error("x == 1 & y == 2");      // single '&'
-    parse_error("x == 1 | y == 2");      // single '|'
-    parse_error("(x == 1");              // unclosed paren
-    parse_error("x == 1)");              // stray paren
-    parse_error("x == \"open");          // unterminated string
-    parse_error("x < warmup");           // ordering needs a number
-    parse_error("x == 1.2.3");           // not a number
-    parse_error("sensor_id");            // bare key
-    parse_error("exists(x");             // unclosed exists
-    parse_error("exists()");             // missing key
-    parse_error("x == 1 y == 2");        // missing operator between conditions
-    parse_error("x == 1 &&");            // dangling operator
-    parse_error("x == 1 # comment");     // unknown character
+    parse_error("level >= LOUD");     // unknown level
+    parse_error("level WARN");        // missing operator
+    parse_error("x = 1");             // single '='
+    parse_error("x == 1 & y == 2");   // single '&'
+    parse_error("x == 1 | y == 2");   // single '|'
+    parse_error("(x == 1");           // unclosed paren
+    parse_error("x == 1)");           // stray paren
+    parse_error("x == \"open");       // unterminated string
+    parse_error("x < warmup");        // ordering needs a number
+    parse_error("x == 1.2.3");        // not a number
+    parse_error("sensor_id");         // bare key
+    parse_error("exists(x");          // unclosed exists
+    parse_error("exists()");          // missing key
+    parse_error("x == 1 y == 2");     // missing operator between conditions
+    parse_error("x == 1 &&");         // dangling operator
+    parse_error("x == 1 # comment");  // unknown character
 }
 
 TEST(PredicateParserTest, BareKeyErrorSuggestsExists) {
@@ -294,8 +294,8 @@ TEST(PredicateParserTest, NonAsciiLetterInKeyIsRejected) {
 }
 
 TEST(PredicateParserTest, NonAsciiLetterInKeyIsRejectedUnderLatin1Locale) {
-    const ScopedCLocale latin1({"de_DE.ISO-8859-1", "de_DE.iso88591", "en_US.ISO-8859-1",
-                                "en_US.iso88591"});
+    const ScopedCLocale latin1(
+        {"de_DE.ISO-8859-1", "de_DE.iso88591", "en_US.ISO-8859-1", "en_US.iso88591"});
     if (!latin1.active()) {
         GTEST_SKIP() << "no ISO-8859-1 locale installed";
     }

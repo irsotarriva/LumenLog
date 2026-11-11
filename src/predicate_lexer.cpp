@@ -53,7 +53,7 @@ namespace {
         case '=': return CompareOp::Equal;
         case '!': return CompareOp::NotEqual;
         case '<': return has_eq ? CompareOp::LessEqual : CompareOp::Less;
-        default: return has_eq ? CompareOp::GreaterEqual : CompareOp::Greater;
+        default:  return has_eq ? CompareOp::GreaterEqual : CompareOp::Greater;
     }
 }
 
@@ -181,7 +181,8 @@ PredicateLexer::Result PredicateLexer::lex_number_() {
     const std::string_view digits = text.starts_with('+') ? text.substr(1) : text;
     const std::optional<double> value = parse_double(digits);
     if (!value) {
-        return fail_(pos_, "invalid number '" + std::string(text) + "' (quote it to compare as text)");
+        return fail_(pos_,
+                     "invalid number '" + std::string(text) + "' (quote it to compare as text)");
     }
     Token token = take_(TokenKind::Number, length);
     token.number = *value;

@@ -10,8 +10,8 @@
 
 #include <cstdint>
 
-#include "lumen/macros.hpp"
 #include "lumen/limits.hpp"
+#include "lumen/macros.hpp"
 
 static_assert(static_cast<int32_t>(lumen::compiled_min_level) == LUMEN_CHECK_MIN_LEVEL_VALUE,
               "LUMEN_MIN_LEVEL_VALUE fallback in macros.hpp differs from the CMake default");

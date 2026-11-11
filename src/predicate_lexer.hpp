@@ -31,7 +31,7 @@ struct Token {
     std::string text;
     CompareOp op = CompareOp::Equal;  // Compare only
     double number = 0.0;              // Number only
-    std::size_t position = 0;              // byte offset of the token's first character
+    std::size_t position = 0;         // byte offset of the token's first character
 };
 
 [[nodiscard]] PredicateParseError make_parse_error(std::size_t position, std::string message);

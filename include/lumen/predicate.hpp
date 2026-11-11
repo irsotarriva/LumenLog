@@ -151,9 +151,9 @@ private:
 // most 63 deep; deeper queries are a parse error.
 
 struct PredicateParseError {
-    std::error_code code;  // LumenError::InvalidPredicate
-    std::size_t position = 0;   // byte offset into the query where the error was found
-    std::string message;   // human-readable, e.g. "expected ')'"
+    std::error_code code;      // LumenError::InvalidPredicate
+    std::size_t position = 0;  // byte offset into the query where the error was found
+    std::string message;       // human-readable, e.g. "expected ')'"
 };
 
 [[nodiscard]] std::expected<Predicate, PredicateParseError> parse_predicate(std::string_view query);
