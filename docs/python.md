@@ -248,8 +248,10 @@ Python. It has `add_sink`, `remove_sink`, `sink_exception_count`, `flush`,
 `statistics()` (a `CoreStatistics` with `logs`, `metrics`, `progress` and
 `tags_dropped`), `set_diagnostic_handler(callable or None)` and
 `reset_diagnostic_handler()`. A Python diagnostic handler is called with one
-`str` on the library's dispatch thread; an exception it raises goes to
-`sys.unraisablehook`.
+`str`, on the thread that delivers records (the dispatch thread, or the one
+inside `Core.flush`; the comment of the C++ `lumen::DiagnosticHandler` gives
+the full rule); an exception it
+raises goes to `sys.unraisablehook`.
 
 ## Errors
 
