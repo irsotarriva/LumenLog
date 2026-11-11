@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/functional.h>
+#include <pybind11/stl/filesystem.h>
 
 #include <memory>
 #include <cstring>
@@ -226,7 +227,7 @@ PYBIND11_MODULE(lumen_bindings, m) {
         .value("White", AnsiColor::White);
 
     py::enum_<FileFormat>(m, "FileFormat")
-        .value("PlainText", FileFormat::PlainText)
+        .value("Text", FileFormat::Text)
         .value("KeyValue", FileFormat::KeyValue)
         .value("Json", FileFormat::Json);
 
@@ -241,38 +242,48 @@ PYBIND11_MODULE(lumen_bindings, m) {
         .def(py::init<>())
         .def_readwrite("time_format", &TerminalSink::Config::time_format)
         .def_readwrite("inline_tags", &TerminalSink::Config::inline_tags)
-        .def_readwrite("dashboard_metrics", &TerminalSink::Config::dashboard_metrics)
-        .def_readwrite("dashboard_height", &TerminalSink::Config::dashboard_height)
-        .def_readwrite("enable_dashboard", &TerminalSink::Config::enable_dashboard)
         .def_readwrite("colors", &TerminalSink::Config::colors);
 
     py::class_<FileSink::Config>(m, "FileConfig")
         .def(py::init<>())
         .def_readwrite("path", &FileSink::Config::path)
-        .def_readwrite("rotate_mb", &FileSink::Config::rotate_mb)
+        .def_readwrite("max_file_bytes", &FileSink::Config::max_file_bytes)
         .def_readwrite("max_files", &FileSink::Config::max_files)
         .def_readwrite("format", &FileSink::Config::format);
 
     py::classh<TerminalSink, Sink>(m, "TerminalSink")
-        .def(py::init<TerminalSink::Config>(), py::arg("config"))
+        .def(py::init([](TerminalSink::Config config) {
+                 auto sink = TerminalSink::create(std::move(config));
+                 if (!sink) throw py::value_error(sink.error().message());
+                 return std::move(*sink);
+             }),
+             py::arg("config"))
         .def("on_log", &TerminalSink::on_log)
         .def("on_metric", &TerminalSink::on_metric)
         .def("on_progress", &TerminalSink::on_progress)
         .def("flush", &TerminalSink::flush);
 
     py::classh<FileSink, Sink>(m, "FileSink")
-        .def(py::init<FileSink::Config>(), py::arg("config"))
+        .def(py::init([](FileSink::Config config) {
+                 auto sink = FileSink::create(std::move(config));
+                 if (!sink) throw py::value_error(sink.error().message());
+                 return std::move(*sink);
+             }),
+             py::arg("config"))
         .def("on_log", &FileSink::on_log)
         .def("on_metric", &FileSink::on_metric)
         .def("on_progress", &FileSink::on_progress)
         .def("flush", &FileSink::flush);
 
-    py::classh<JsonSink, Sink>(m, "JsonSink")
-        .def(py::init<std::string_view>(), py::arg("path"))
-        .def("on_log", &JsonSink::on_log)
-        .def("on_metric", &JsonSink::on_metric)
-        .def("on_progress", &JsonSink::on_progress)
-        .def("flush", &JsonSink::flush);
+    // A FileSink writing FileFormat.Json.
+    m.def(
+        "JsonSink",
+        [](std::filesystem::path path) {
+            auto sink = FileSink::create({.path = std::move(path), .format = FileFormat::Json});
+            if (!sink) throw py::value_error(sink.error().message());
+            return std::move(*sink);
+        },
+        py::arg("path"));
 
     py::classh<NullSink, Sink>(m, "NullSink")
         .def(py::init<>());
