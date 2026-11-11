@@ -5,10 +5,12 @@
 int main() {
     auto& core = lumen::core();
 
-    const auto id = core.add_sink(
-        std::make_unique<lumen::TerminalSink>(lumen::TerminalSink::default_config()),
-        lumen::always()
-    );
+    auto terminal = lumen::TerminalSink::create({});
+    if (!terminal) {
+        std::cerr << "cannot create the terminal sink: " << terminal.error().message() << '\n';
+        return 1;
+    }
+    const auto id = core.add_sink(std::move(*terminal), lumen::always());
     (void)id;  // retained for program lifetime
 
     (void)lumen::set_process_tag("app", "example");

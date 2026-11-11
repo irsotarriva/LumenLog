@@ -60,7 +60,6 @@ include(cmake/sanitizers.cmake)
 # Library
 add_library(lumen
   src/core.cpp
-  src/sink.cpp
   src/predicate.cpp
   src/predicate_lexer.cpp
   src/predicate_parser.cpp
@@ -68,6 +67,15 @@ add_library(lumen
   src/tagged.cpp
   src/progress.cpp
   src/error.cpp
+  # Sinks, and the line formats and writer thread they share.
+  src/text_encoding.cpp
+  src/time_format.cpp
+  src/record_format.cpp
+  src/line_writer.cpp
+  src/terminal_output.cpp
+  src/terminal_sink.cpp
+  src/rotating_file.cpp
+  src/file_sink.cpp
 )
 add_library(lumen::lumen ALIAS lumen)
 
@@ -96,7 +104,6 @@ include(cmake/build_settings.cmake)
 
 if(LUMEN_ENABLE_DASHBOARD)
   find_package(ftxui CONFIG REQUIRED)
-  target_compile_definitions(lumen PRIVATE LUMEN_ENABLE_DASHBOARD)
   target_link_libraries(lumen PRIVATE ftxui::dom ftxui::screen)
 endif()
 

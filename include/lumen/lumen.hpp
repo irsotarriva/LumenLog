@@ -9,6 +9,7 @@
 #include "lumen/context.hpp"
 #include "lumen/core.hpp"
 #include "lumen/error.hpp"
+#include "lumen/file_sink.hpp"
 #include "lumen/level.hpp"
 #include "lumen/limits.hpp"
 #include "lumen/macros.hpp"
@@ -19,6 +20,7 @@
 #include "lumen/sink.hpp"
 #include "lumen/tag_set.hpp"
 #include "lumen/tagged.hpp"
+#include "lumen/terminal_sink.hpp"
 #include "lumen/thread_clock.hpp"
 
 #endif
