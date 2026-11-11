@@ -1229,6 +1229,16 @@ TEST(CoreShutdownTest, ShutdownWaitsLongerThanItsTimeoutForASinkThatKeepsMakingP
     EXPECT_TRUE(reported->copy().empty());
 }
 
+// How a process that aborted itself ended: POSIX reports the signal, Windows
+// an exit code of 3.
+[[nodiscard]] auto aborted() {
+#if defined(PLATFORM_WINDOWS)
+    return testing::ExitedWithCode(3);
+#else
+    return testing::KilledBySignal(SIGABRT);
+#endif
+}
+
 TEST(CoreFatalDeathTest, FatalWithTheDefaultTerminateHandlerAbortsWithoutTheHandlersMessage) {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_EXIT(
@@ -1237,7 +1247,7 @@ TEST(CoreFatalDeathTest, FatalWithTheDefaultTerminateHandlerAbortsWithoutTheHand
             EXPECT_TRUE(core.add_sink(std::make_unique<StderrSink>()));
             log_to(core, "boom", LogLevel::Fatal);
         },
-        testing::KilledBySignal(SIGABRT), "^delivered:boom\nflushed\n$");
+        aborted(), "^delivered:boom\nflushed\n$");
 }
 
 TEST(CoreFatalDeathTest, FatalCallsTheProgramsOwnTerminateHandler) {
@@ -1252,7 +1262,7 @@ TEST(CoreFatalDeathTest, FatalCallsTheProgramsOwnTerminateHandler) {
             EXPECT_TRUE(core.add_sink(std::make_unique<StderrSink>()));
             log_to(core, "boom", LogLevel::Fatal);
         },
-        testing::KilledBySignal(SIGABRT), "flushed\nthe program's handler\n$");
+        aborted(), "flushed\nthe program's handler\n$");
 }
 
 TEST(CoreFatalDeathTest, FatalWhileACallbackNeverReturnsEndsTheProcessAfterTheShutdownTimeout) {
@@ -1268,7 +1278,7 @@ TEST(CoreFatalDeathTest, FatalWhileACallbackNeverReturnsEndsTheProcessAfterTheSh
             EXPECT_TRUE(gate->wait_until_entered(1));
             log_to(core, "boom", LogLevel::Fatal);
         },
-        testing::KilledBySignal(SIGABRT),
+        aborted(),
         "lumen: a fatal record was not delivered: the thread delivering records made no "
         "progress for 50 ms");
 }

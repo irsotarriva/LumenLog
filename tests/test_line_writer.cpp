@@ -290,7 +290,9 @@ TEST(LineWriterTest, ForkChildWritesItsOwnLinesButNotThoseQueuedInTheParent) {
         }
         for (const std::string& line : lines) {
             const std::string text = line + '\n';
-            static_cast<void>(::write(to_parent, text.data(), text.size()));
+            // A failed write shows as a missing line, which the test reports.
+            const auto written = ::write(to_parent, text.data(), text.size());
+            static_cast<void>(written);
         }
         return BatchOutcome{};
     };

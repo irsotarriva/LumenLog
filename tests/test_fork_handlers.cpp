@@ -134,7 +134,9 @@ public:
     void on_log(const LogRecord& r) override {
         if (::getpid() != creator_) {
             const std::string line = std::string(r.message) + '\n';
-            static_cast<void>(::write(fd_, line.data(), line.size()));
+            // A failed write shows as a missing line, which the test reports.
+            const auto written = ::write(fd_, line.data(), line.size());
+            static_cast<void>(written);
             return;
         }
         if (r.message == "blocks") {
