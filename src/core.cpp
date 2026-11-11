@@ -7,6 +7,7 @@
 #include <concepts>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <exception>
 #include <format>
 #include <iostream>
@@ -173,7 +174,7 @@ DiagnosticHandler stderr_diagnostics() {
 }
 
 struct Core::Impl {
-    explicit Impl(DiagnosticHandler handler) : diagnostics(std::move(handler)) {
+    explicit Impl(DiagnosticHandler handler) : diagnostics(share(std::move(handler))) {
         // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
         dispatcher = std::thread([this] { run_dispatcher(); });
     }
@@ -429,16 +430,67 @@ struct Core::Impl {
         }
     }
 
+    // Lines reach the handler one at a time, in the order they were
+    // reported. The thread that finds nobody draining becomes the drainer and
+    // passes on every pending line, its own and those other threads (or the
+    // handler itself, re-entering) add meanwhile; the others only queue their
+    // line. No lock is held while the handler runs, so a handler may replace
+    // itself, log, or flush.
     void report(std::string_view line) {
-        DiagnosticHandler handler;
         {
             const std::scoped_lock lock(diagnostics_mutex);
-            handler = diagnostics;
+            pending_lines.emplace_back(line);
+            if (draining) {
+                return;
+            }
+            draining = true;
         }
-        // Called without the lock, so a handler may replace itself.
-        if (handler) {
+        drain_diagnostics();
+    }
+
+    void drain_diagnostics() {
+        while (true) {
+            std::string line;
+            std::shared_ptr<const DiagnosticHandler> handler;
+            {
+                const std::scoped_lock lock(diagnostics_mutex);
+                if (pending_lines.empty()) {
+                    draining = false;
+                    return;
+                }
+                line = std::move(pending_lines.front());
+                pending_lines.pop_front();
+                handler = diagnostics;
+            }
+            if (handler) {
+                call_handler(*handler, line);
+            }
+        }
+    }
+
+    // A handler that throws loses neither the line nor the process: both the
+    // line and what was thrown go to std::cerr instead.
+    static void call_handler(const DiagnosticHandler& handler, std::string_view line) noexcept {
+        try {
             handler(line);
+        } catch (const std::exception& e) {
+            write_after_handler_failure(line, e.what());
+        } catch (...) {
+            write_after_handler_failure(line, "an exception not derived from std::exception");
         }
+    }
+
+    static void write_after_handler_failure(std::string_view line, std::string_view what) noexcept {
+        std::cerr << line << "\nlumen: the diagnostic handler threw (" << what
+                  << "); the line above is written to std::cerr instead\n"
+                  << std::flush;
+    }
+
+    [[nodiscard]] static std::shared_ptr<const DiagnosticHandler> share(DiagnosticHandler handler) {
+        if (!handler) {
+            return nullptr;
+        }
+        return std::make_shared<const DiagnosticHandler>(std::move(handler));
     }
 
     void report_first_losses() {
@@ -611,8 +663,12 @@ struct Core::Impl {
     }
 
     void set_diagnostic_handler(DiagnosticHandler handler) {
-        const std::scoped_lock lock(diagnostics_mutex);
-        diagnostics = std::move(handler);
+        std::shared_ptr<const DiagnosticHandler> previous = share(std::move(handler));
+        {
+            const std::scoped_lock lock(diagnostics_mutex);
+            diagnostics.swap(previous);
+        }
+        // `previous` is released here, without the lock.
     }
 
     LogQueue logs;
@@ -645,8 +701,12 @@ struct Core::Impl {
     uint64_t delivery_version = std::numeric_limits<uint64_t>::max();  // guarded by consume_mutex
     std::atomic<SinkId> next_sink_id{1};
 
+    // Shared, so that the drainer copies a pointer, which cannot throw, and
+    // a replaced handler lives until its last call returns.
     std::mutex diagnostics_mutex;
-    DiagnosticHandler diagnostics;  // guarded by diagnostics_mutex
+    std::shared_ptr<const DiagnosticHandler> diagnostics;  // guarded by diagnostics_mutex
+    std::deque<std::string> pending_lines;                 // guarded by diagnostics_mutex
+    bool draining = false;                                 // guarded by diagnostics_mutex
     std::atomic<bool> reported_queue_full{false};
     std::atomic<bool> reported_tags_dropped{false};
 

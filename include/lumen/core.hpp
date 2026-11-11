@@ -77,9 +77,22 @@ using SinkId = uint64_t;
 
 // Receives one line of text about a problem Core cannot return to anyone: the
 // first record refused by a full queue, the first tag left out of a full
-// record, the first exception thrown by each sink. Called on the thread that
-// delivers records, never concurrently with itself for one Core. An empty
-// handler discards the lines.
+// record, the first exception thrown by each sink, a dispatch thread that
+// could not be started.
+//
+// Calls. One Core calls its handler with one line at a time, in the order the
+// lines were reported, never on two threads at once and never nested. The
+// call happens on a thread that delivers records (the dispatch thread, or a
+// thread inside flush()). A line reported while the handler is already
+// running is queued, and the thread running the handler passes it on after
+// the current call returns; so the handler may log, flush or replace itself,
+// and a reporting thread does not wait for a handler busy elsewhere. No Core
+// lock is held during the call except, for a sink's exception, the one that
+// serialises delivery.
+//
+// A handler should not throw. If it does, the exception is caught, and the
+// line and what was thrown are written to std::cerr; the process and the
+// thread that delivers records go on. An empty handler discards the lines.
 using DiagnosticHandler = std::function<void(std::string_view line)>;
 
 // The handler a Core starts with: writes each line to std::cerr.

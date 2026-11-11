@@ -406,6 +406,121 @@ TEST_F(CoreStatisticsTest, EmptyDiagnosticHandlerSilencesDiagnostics) {
     EXPECT_TRUE(_diagnostic_lines().empty());
 }
 
+// The diagnostic handler.
+
+// Records every line it receives and how many calls were running at once;
+// the first call blocks on `gate` until the test opens it.
+class ObservedHandler {
+public:
+    void operator()(std::string_view line) {
+        const int now = in_flight_.fetch_add(1) + 1;
+        int seen = max_in_flight_.load();
+        while (now > seen && !max_in_flight_.compare_exchange_weak(seen, now)) {
+        }
+        if (calls_.fetch_add(1) == 0) {
+            gate.wait_inside();
+        }
+        {
+            const std::scoped_lock lock(mutex_);
+            lines_.emplace_back(line);
+        }
+        changed_.notify_all();
+        in_flight_.fetch_sub(1);
+    }
+    [[nodiscard]] bool wait_for_lines(std::size_t count) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, generous_timeout, [&] { return lines_.size() >= count; });
+    }
+    [[nodiscard]] std::vector<std::string> lines() {
+        const std::scoped_lock lock(mutex_);
+        return lines_;
+    }
+    [[nodiscard]] int max_in_flight() const { return max_in_flight_.load(); }
+
+    Gate gate;
+
+private:
+    std::atomic<int> in_flight_{0};
+    std::atomic<int> max_in_flight_{0};
+    std::atomic<int> calls_{0};
+    std::mutex mutex_;
+    std::condition_variable changed_;  // waits on mutex_
+    std::vector<std::string> lines_;   // guarded by mutex_
+};
+
+struct ThrowingOnLogSink : Sink {
+    void on_log(const LogRecord& /*record*/) override { throw std::runtime_error("disk on fire"); }
+    void flush() override {}
+};
+
+void log_with_one_tag_too_many(Core& core) {
+    RecordBuilder b(core, LogLevel::Info, std::source_location::current(), "full");
+    for (std::size_t i = 0; i <= max_record_tags; ++i) {
+        b.tag("k" + std::to_string(i), i);
+    }
+}
+
+TEST(CoreDiagnosticsTest, LineReportedWhileTheHandlerRunsElsewhereIsPassedOnAfterItNotAlongside) {
+    const test::CleanContext context;
+    auto observed = std::make_shared<ObservedHandler>();
+    Core core([observed](std::string_view line) { (*observed)(line); });
+    ASSERT_TRUE(core.add_sink(std::make_unique<ThrowingOnLogSink>(), tag_exists("throw")));
+
+    // The dispatcher reports the dropped tag and blocks inside the handler.
+    log_with_one_tag_too_many(core);
+    ASSERT_TRUE(observed->gate.wait_until_entered(1));
+    // This thread delivers the next record and reports the sink's exception
+    // while the dispatcher is still inside the handler.
+    log_to(core, "throws").tag("throw", true);
+    core.flush();
+    EXPECT_TRUE(observed->lines().empty());
+
+    observed->gate.open();
+    ASSERT_TRUE(observed->wait_for_lines(2));
+    const auto lines = observed->lines();
+    ASSERT_EQ(lines.size(), 2U);
+    EXPECT_NE(lines[0].find("tag was dropped"), std::string::npos);
+    EXPECT_NE(lines[1].find("disk on fire"), std::string::npos);
+    EXPECT_EQ(observed->max_in_flight(), 1);
+}
+
+TEST(CoreDiagnosticsTest, ThrowingHandlerOnEitherThreadLeavesItsLineOnStderrAndDeliveryRunning) {
+    struct ThrowingOnFlushSink : Sink {
+        void flush() override { throw std::runtime_error("cannot flush"); }
+    };
+    const test::CleanContext context;
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    Core core([calls](std::string_view /*line*/) {
+        calls->fetch_add(1);
+        throw std::runtime_error("handler failed");
+    });
+    auto captured = capture(core);
+    ASSERT_TRUE(core.add_sink(std::make_unique<ThrowingOnFlushSink>()));
+    testing::internal::CaptureStderr();
+
+    // On the dispatch thread: the dropped tag, reported without any flush().
+    log_with_one_tag_too_many(core);
+    const auto deadline = std::chrono::steady_clock::now() + generous_timeout;
+    while (calls->load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    log_to(core, "after the first diagnostic");
+    const bool delivery_went_on = captured->wait_for_logs(2, generous_timeout);
+    // On this thread: flush() calls the sink's flush, which throws, and
+    // reports that here. flush() must return normally.
+    core.flush();
+    log_to(core, "after the second diagnostic");
+    core.flush();
+
+    const std::string err = testing::internal::GetCapturedStderr();
+    EXPECT_TRUE(delivery_went_on);
+    EXPECT_EQ(calls->load(), 2);
+    EXPECT_EQ(captured->logs().size(), 3U);
+    EXPECT_NE(err.find("tag was dropped"), std::string::npos);
+    EXPECT_NE(err.find("cannot flush"), std::string::npos);
+    EXPECT_NE(err.find("the diagnostic handler threw (handler failed)"), std::string::npos);
+}
+
 // The sink registry.
 
 class CoreRegistryTest : public LocalCoreTest {};
