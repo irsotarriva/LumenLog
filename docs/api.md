@@ -15,7 +15,7 @@ table; the others are included on their own.
 | `lumen/progress.hpp` | `ProgressHandle`, `progress()` |
 | `lumen/context.hpp` | `set_process_tag`, `set_thread_tag` and their `remove_*` and `clear_*`; the priority of the context layers |
 | `lumen/tagged.hpp` | `Tagged` (`lumen_tag`, `lumen_untag`, `lumen_tags`, `lumen_scope`) |
-| `lumen/record.hpp` | `LogRecord`, `MetricRecord`, `ProgressRecord`, `SourceLocation`, `RecordTags`; who owns a record's strings |
+| `lumen/record.hpp` | `LogRecord`, `MetricRecord`, `ProgressRecord`, `SourceLocation`, `RecordTags`, the `RecordType` concept; who owns a record's strings |
 | `lumen/tag_set.hpp` | `TagSet<N>`, the fixed-capacity tag list of a record |
 | `lumen/level.hpp` | `LogLevel` |
 | `lumen/limits.hpp` | Every fixed capacity, and what happens when it is reached |
@@ -63,10 +63,11 @@ if (!set && set.error() == lumen::LumenError::TagTableFull) {
 |---|---|
 | `InvalidSinkId` | `remove_sink`, `sink_exception_count`: no sink has this id |
 | `NullSink` | `add_sink`: the sink is null |
-| `SinkBusy` | `remove_sink` from inside a callback of the sink being removed |
+| `SinkBusy` | `remove_sink` while a callback of that sink runs further up the calling thread's stack |
 | `TagTableFull` | `set_process_tag`, `set_thread_tag`, `Tagged::lumen_tag`: the key is new and the table is full |
 | `InvalidPredicate` | `parse_predicate` (in `PredicateParseError::code`) |
 | `InvalidSinkConfig` | `TerminalSink::create`, `FileSink::create`, `DashboardSink::create`: a `Config` field is out of range |
 | `FileOpenFailed` | `FileSink::create`: the file cannot be opened for appending |
 | `IoError` | never returned: a failed write is reported through a sink's diagnostics and counted in its statistics |
 | `NotATerminal` | `DashboardSink::create`: the destination is not a terminal |
+| `CoreShutDown` | `add_sink` once the Core has begun shutting down |

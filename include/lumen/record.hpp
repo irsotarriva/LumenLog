@@ -1,6 +1,7 @@
 #ifndef LUMEN_RECORD_HPP
 #define LUMEN_RECORD_HPP
 
+#include <concepts>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -74,6 +75,13 @@ struct ProgressRecord {
     uint32_t thread_id{};
     RecordStorage storage;
 };
+
+// One of the three record types above. The one definition of "a record";
+// narrower sets (such as the records a builder makes) are written in terms
+// of it.
+template <typename R>
+concept RecordType =
+    std::same_as<R, LogRecord> || std::same_as<R, MetricRecord> || std::same_as<R, ProgressRecord>;
 
 }  // namespace lumen
 

@@ -64,6 +64,27 @@ foreach(mode IN ITEMS static thread_local)
   set_tests_properties(${name} PROPERTIES TIMEOUT 60)
 endforeach()
 
+# exit() from inside a sink callback, on the dispatch thread and inside
+# flush(). The verdict is the process's exit status.
+add_executable(lumen_test_exit_from_callback exit_from_callback.cpp)
+target_link_libraries(lumen_test_exit_from_callback PRIVATE lumen)
+foreach(mode IN ITEMS on_log flush)
+  add_test(NAME ExitFromCallback.${mode}DeliversWhatIsLeftWithoutAbortOrHang
+           COMMAND lumen_test_exit_from_callback ${mode})
+  set_tests_properties(ExitFromCallback.${mode}DeliversWhatIsLeftWithoutAbortOrHang
+                       PROPERTIES TIMEOUT 60)
+endforeach()
+
+# A Core whose dispatch thread cannot be started. The failure is injected by
+# replacing pthread_create in the test executable, which only the Linux
+# dynamic linker lets the C++ runtime see.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(lumen_tests_core_without_thread core_without_thread.cpp)
+  target_link_libraries(lumen_tests_core_without_thread
+                        PRIVATE lumen GTest::gtest GTest::gtest_main ${CMAKE_DL_LIBS})
+  gtest_discover_tests(lumen_tests_core_without_thread PROPERTIES TIMEOUT 120)
+endif()
+
 # The Json lines of a FileSink, parsed by a real JSON parser: Python's json
 # module, which every CI runner has. No JSON library is added to the build.
 add_executable(lumen_json_sample json_sample.cpp)

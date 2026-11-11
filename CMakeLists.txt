@@ -57,6 +57,14 @@ include(cmake/sanitizers.cmake)
 # Library
 add_library(lumen
   src/core.cpp
+  src/delivery.cpp
+  src/delivery_stack.cpp
+  src/diagnostic_reporter.cpp
+  src/fatal_records.cpp
+  src/first_reports.cpp
+  src/record_queues.cpp
+  src/sink_registry.cpp
+  src/wakeup.cpp
   src/predicate.cpp
   src/predicate_lexer.cpp
   src/predicate_parser.cpp
