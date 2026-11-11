@@ -14,8 +14,8 @@
 namespace lumen::detail {
 
 struct FrameSettings {
-    uint16_t width = 0;  // 0: the terminal's size
-    uint16_t height = 0;
+    uint16_t width = 0;   // 0: 80 columns (the sink measures the terminal and fills these in)
+    uint16_t height = 0;  // 0: 24 rows
     std::size_t panel_rows = 8;
     LevelColors colors = default_level_colors;
 };

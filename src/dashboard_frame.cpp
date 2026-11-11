@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
-#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,7 +14,8 @@
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/color.hpp>
 #include <ftxui/screen/screen.hpp>
-#include <ftxui/screen/terminal.hpp>
+
+#include "text_encoding.hpp"
 
 namespace lumen::detail {
 
@@ -67,7 +67,7 @@ constexpr std::array<std::string_view, 8> spark_levels = {
 }
 
 [[nodiscard]] ftxui::Element metric_row(const DashboardModel::MetricSeries& series) {
-    ftxui::Element name = ftxui::text(" " + series.name + " ") | ftxui::bold;
+    ftxui::Element name = ftxui::text(" " + text_escaped(series.name) + " ") | ftxui::bold;
     if (series.values.empty()) {
         return ftxui::hbox({std::move(name), ftxui::text("(no data)") | ftxui::dim});
     }
@@ -80,7 +80,7 @@ constexpr std::array<std::string_view, 8> spark_levels = {
 }
 
 [[nodiscard]] ftxui::Element progress_row(const DashboardModel::ProgressBar& bar) {
-    ftxui::Element label = ftxui::text(" " + bar.label + " ") | ftxui::bold;
+    ftxui::Element label = ftxui::text(" " + text_escaped(bar.label) + " ") | ftxui::bold;
     if (bar.total == 0) {
         return ftxui::hbox({std::move(label), ftxui::text(std::format("{} done", bar.current))});
     }
@@ -133,19 +133,11 @@ struct Size {
     uint16_t height = 0;
 };
 
-// `measured` is an int because ftxui::Dimensions holds ints.
-[[nodiscard]] uint16_t or_fallback(int measured, uint16_t fallback) {
-    constexpr int largest = std::numeric_limits<uint16_t>::max();
-    return measured > 0 ? static_cast<uint16_t>(std::min(measured, largest)) : fallback;
-}
-
+// The caller measures the terminal; FTXUI's own measurement looks at
+// standard output, which need not be the stream the frame is written to.
 [[nodiscard]] Size frame_size(const FrameSettings& settings) {
-    if (settings.width > 0 && settings.height > 0) {
-        return {settings.width, settings.height};
-    }
-    const ftxui::Dimensions terminal = ftxui::Terminal::Size();
-    return {settings.width > 0 ? settings.width : or_fallback(terminal.dimx, fallback_width),
-            settings.height > 0 ? settings.height : or_fallback(terminal.dimy, fallback_height)};
+    return {settings.width > 0 ? settings.width : fallback_width,
+            settings.height > 0 ? settings.height : fallback_height};
 }
 
 // FTXUI separates rows with "\r\n" or "\n" depending on its version. Each row

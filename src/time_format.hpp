@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -17,11 +18,13 @@
 namespace lumen::detail {
 
 // A validated TerminalSink::Config::time_format pattern: std::strftime
-// conversions plus %L (milliseconds) and %N (nanoseconds).
+// conversions plus %L (milliseconds) and %N (nanoseconds). The pattern may
+// be of any length.
 class TimeFormat {
 public:
     // Fails with LumenError::InvalidSinkConfig on a '%' that is not followed
-    // by an accepted conversion character.
+    // by an accepted conversion character (%n and %t, which write a newline
+    // and a tab, are not accepted) and on a NUL character.
     [[nodiscard]] static std::expected<TimeFormat, std::error_code> parse(std::string_view pattern,
                                                                           TimeZone zone);
 
@@ -44,6 +47,8 @@ private:
 
     TimeFormat(std::vector<Piece> pieces, TimeZone zone)
         : pieces_(std::move(pieces)), zone_(zone) {}
+    // The piece of %L or %N; nullopt for any other conversion character.
+    [[nodiscard]] static std::optional<PieceKind> subsecond_kind_(char conversion) noexcept;
     [[nodiscard]] static std::expected<std::vector<Piece>, std::error_code> split_(
         std::string_view pattern);
     [[nodiscard]] static bool fits_(const std::vector<Piece>& pieces);

@@ -14,13 +14,22 @@
 // callback that waits for a terminal, a disk or a lock held by a slow thread
 // delays every other sink and, once the queues fill, makes the Core drop
 // records. A sink that does I/O hands the work to a thread of its own. The
-// sinks shipped with Lumen do: each formats the record on the calling thread
-// and appends the text to a bounded queue that its writer thread empties
-// (lumen/writer_statistics.hpp states what happens when that queue is full).
+// sinks shipped with Lumen do, and their on_* never waits for I/O:
+// TerminalSink and FileSink format the record on the calling thread and
+// append the text to a bounded queue that their writer thread empties
+// (lumen/writer_statistics.hpp states what happens when that queue is full);
+// DashboardSink updates its model under a mutex that its drawing thread holds
+// only to copy the model. Their diagnostics (a full queue, a failed write)
+// are reported by those threads, never by on_*, so a diagnostic handler that
+// writes to a blocked standard error does not block the dispatch thread
+// either.
 //
 // flush() is the opposite: it is where a sink may wait. It returns when what
 // the sink received before the call has reached its destination (for the
-// shipped sinks: written and the stream flushed; not fsync'ed).
+// shipped sinks: written and the stream flushed; not fsync'ed). After a sink
+// received a Fatal record, Core flushes it and terminates the process; the
+// shipped sinks then wait at most a bounded time (fatal_flush_timeout in
+// lumen/writer_statistics.hpp; DashboardSink about one second).
 //
 // Exceptions. A sink should not throw. One that does is contained by Core
 // (counted and reported, see Core::sink_exception_count), and the record is

@@ -37,18 +37,27 @@ namespace lumen {
 // Each line ends with '\n'. With colour on, only the level name is coloured
 // (ESC[<colour>m before it, ESC[0m after it; the padding is outside).
 //
-// Text is written as received except for bytes below 0x20 and 0x7F, which
-// would break the one-record-per-line layout or drive the terminal: they are
-// written as \n, \r, \t or \xHH. Metric values are written in the shortest
-// form that reads back as the same double (std::to_chars); NaN and infinities
-// as NaN, Infinity and -Infinity.
+// A record is always one line and cannot drive the terminal. Text (the
+// message, names, labels, tags, the source file and the literal text of
+// time_format) is written as received except for what could break the
+// one-record-per-line layout or be acted on by a terminal:
+//   - bytes below 0x20 and 0x7F as \n, \r, \t or \xHH;
+//   - each byte that is not part of a valid UTF-8 sequence as \xHH;
+//   - the C1 controls U+0080-U+009F (U+009B is CSI) and the bidirectional
+//     overrides and isolates U+202A-U+202E and U+2066-U+2069 as \uHHHH.
+// Hex digits are lower case; '\' itself is not escaped, so an escape and the
+// same characters typed literally look alike. Metric values are written in
+// the shortest form that reads back as the same double (std::to_chars); NaN
+// and infinities as NaN, Infinity and -Infinity.
 //
 // Threads. on_* formats the line on the calling thread and queues it; a
 // thread owned by the sink writes it (see lumen/writer_statistics.hpp for the
-// queue bound and what happens when it is full). flush() returns when every
-// line queued before it has been written and the stream flushed. The
-// destructor writes what is still queued, then stops the thread; it waits
-// for the stream as long as the stream blocks.
+// queue bound and what happens when it is full). on_* never waits for the
+// stream or for the diagnostic handler. flush() returns when every line
+// queued before it has been written and the stream flushed; after a Fatal
+// record it waits at most fatal_flush_timeout. The destructor writes what is
+// still queued, then stops the thread; it waits for the stream as long as the
+// stream blocks.
 class TerminalSink final : public Sink {
 public:
     struct Config {
@@ -62,7 +71,10 @@ public:
         // A std::strftime pattern with two additions: %L is the millisecond
         // (000-999) and %N the nanosecond (000000000-999999999) within the
         // second. Only the conversions listed in std::strftime that need no
-        // modifier are accepted (no %E or %O forms). Empty: no time column.
+        // modifier are accepted (no %E or %O forms), except %n and %t, which
+        // would put a newline or a tab into the line. The pattern may not
+        // contain a NUL character; its length is not limited. Literal text in
+        // it is escaped like a message. Empty: no time column.
         std::string time_format = "%H:%M:%S.%L";
         TimeZone time_zone = TimeZone::Local;
         // Tags shown on a line, in this order. Tags not listed are not shown.
@@ -71,13 +83,15 @@ public:
         // Lines that may wait for the writer thread; at least 1.
         std::size_t max_queued_lines = 10000;
         // Receives the first queue-full drop and the first write failure
-        // (one line each); called on the dispatch thread or on the writer
-        // thread, never concurrently with itself. Empty: discard.
+        // (one line each); called on the sink's writer thread only, never
+        // concurrently with itself. Empty: discard.
         DiagnosticHandler diagnostics = stderr_diagnostics();
     };
 
     // Fails with LumenError::InvalidSinkConfig if time_format is not a valid
-    // pattern or max_queued_lines is 0.
+    // pattern or max_queued_lines is 0, and with the error std::thread
+    // reports (std::errc::resource_unavailable_try_again when the system is
+    // out of threads) if the writer thread cannot be started.
     [[nodiscard]] static std::expected<std::unique_ptr<TerminalSink>, std::error_code> create(
         Config config);
 

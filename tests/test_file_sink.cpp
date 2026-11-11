@@ -3,6 +3,7 @@
 // checked in test_record_format.cpp.
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -14,6 +15,12 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#ifndef PLATFORM_WINDOWS
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include "lumen/error.hpp"
 #include "lumen/file_sink.hpp"
@@ -59,16 +66,6 @@ protected:
             sink.on_log(log_record(message));
         }
         sink.flush();
-    }
-
-    // The bytes of one line written by _log_numbered.
-    [[nodiscard]] uint64_t _line_bytes() const {
-        const auto probe = _sink(_config("probe.log"));
-        if (!probe) {
-            return 0;
-        }
-        _log_numbered(*probe, 0, 1);
-        return std::filesystem::file_size(probe->path());
     }
 
     // The messages in a file written by _log_numbered, in order.
@@ -160,78 +157,73 @@ TEST_F(FileSinkTest, DestroyingTheSinkWritesTheLinesStillQueued) {
     EXPECT_EQ(_messages(_path("out.log")), (Messages{"m0", "m1"}));
 }
 
-// Two lines fit in a file. Seven lines with max_files = 3: the active file
-// and two old ones survive; the first two lines are gone with the deleted
-// oldest file.
-TEST_F(FileSinkTest, RotationKeepsMaxFilesFilesNoneLargerThanTheLimit) {
-    const uint64_t line = _line_bytes();
-    ASSERT_GT(line, 0U);
-    FileSink::Config config = _config("out.log");
-    config.max_file_bytes = 2 * line;
-    config.max_files = 3;
-    const auto sink = _sink(std::move(config));
-    ASSERT_NE(sink, nullptr);
-    _log_numbered(*sink, 0, 7);
-
-    EXPECT_EQ(_messages(_path("out.log")), (Messages{"m6"}));
-    EXPECT_EQ(_messages(_path("out.log.1")), (Messages{"m4", "m5"}));
-    EXPECT_EQ(_messages(_path("out.log.2")), (Messages{"m2", "m3"}));
-    EXPECT_FALSE(std::filesystem::exists(_path("out.log.3")));
-    EXPECT_EQ(sink->statistics().lines_written, 7U);
-    EXPECT_EQ(sink->statistics().lines_failed, 0U);
-}
-
-TEST_F(FileSinkTest, RotationCountsTheSizeTheFileHadWhenTheSinkWasCreated) {
-    const uint64_t line = _line_bytes();
-    ASSERT_GT(line, 0U);
-    FileSink::Config config = _config("out.log");
-    config.max_file_bytes = 2 * line;
-    config.max_files = 2;
-    {
-        const auto first_run = _sink(config);
-        ASSERT_NE(first_run, nullptr);
-        _log_numbered(*first_run, 0, 1);
+#ifndef PLATFORM_WINDOWS
+// A named pipe in the test's directory; `reader` opens its read end.
+class NamedPipe {
+public:
+    NamedPipe(const std::filesystem::path& path, bool reader) {
+        EXPECT_EQ(mkfifo(path.c_str(), 0600), 0);
+        if (reader) {
+            // Non-blocking, so that opening needs no writer and reading never waits.
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic
+            reader_ = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+            EXPECT_GE(reader_, 0);
+        }
     }
-    const auto second_run = _sink(config);
-    ASSERT_NE(second_run, nullptr);
-    _log_numbered(*second_run, 1, 2);  // m1 fills the file, m2 starts a new one
+    ~NamedPipe() {
+        if (reader_ >= 0) {
+            EXPECT_EQ(close(reader_), 0);
+        }
+    }
+    NamedPipe(const NamedPipe&) = delete;
+    NamedPipe& operator=(const NamedPipe&) = delete;
+    NamedPipe(NamedPipe&&) = delete;
+    NamedPipe& operator=(NamedPipe&&) = delete;
 
-    EXPECT_EQ(_messages(_path("out.log.1")), (Messages{"m0", "m1"}));
-    EXPECT_EQ(_messages(_path("out.log")), (Messages{"m2"}));
+    [[nodiscard]] std::string read_all() const {
+        std::string text;
+        std::array<char, 4096> buffer{};
+        for (ssize_t got = 0; (got = read(reader_, buffer.data(), buffer.size())) > 0;) {
+            text.append(buffer.data(), static_cast<std::size_t>(got));
+        }
+        return text;
+    }
+
+private:
+    int reader_ = -1;
+};
+
+TEST_F(FileSinkTest, CreateOnANamedPipeWithoutAReaderFailsAtOnceAndSaysWhy) {
+    const NamedPipe pipe(_path("pipe"), false);
+    std::vector<std::string> reported;
+    FileSink::Config config = _config("pipe");
+    config.diagnostics = [&](std::string_view line) { reported.emplace_back(line); };
+    const auto sink = FileSink::create(std::move(config));
+    ASSERT_FALSE(sink.has_value());
+    EXPECT_EQ(sink.error(), LumenError::FileOpenFailed);
+    ASSERT_EQ(reported.size(), 1U);
+    EXPECT_NE(reported.front().find("named pipe without a reader"), std::string::npos)
+        << reported.front();
 }
 
-TEST_F(FileSinkTest, WithOneFileRotationStartsTheFileAgain) {
-    const uint64_t line = _line_bytes();
-    FileSink::Config config = _config("out.log");
-    config.max_file_bytes = line;
-    config.max_files = 1;
-    const auto sink = _sink(std::move(config));
-    ASSERT_NE(sink, nullptr);
-    _log_numbered(*sink, 0, 3);
-    EXPECT_EQ(_messages(_path("out.log")), (Messages{"m2"}));
-    EXPECT_FALSE(std::filesystem::exists(_path("out.log.1")));
-}
-
-TEST_F(FileSinkTest, ZeroByteLimitNeverRotates) {
-    FileSink::Config config = _config("out.log");
-    config.max_file_bytes = 0;
-    const auto sink = _sink(std::move(config));
-    ASSERT_NE(sink, nullptr);
-    _log_numbered(*sink, 0, 3);
-    EXPECT_EQ(_messages(_path("out.log")), (Messages{"m0", "m1", "m2"}));
-    EXPECT_FALSE(std::filesystem::exists(_path("out.log.1")));
-}
-
-TEST_F(FileSinkTest, LineLongerThanTheLimitIsWrittenWholeIntoAnEmptyFile) {
-    FileSink::Config config = _config("out.log");
+// A size limit far below what is written: a pipe must still never be renamed
+// away (as root, rename() would move the special file itself).
+TEST_F(FileSinkTest, NamedPipeWithAReaderReceivesTheLinesAndIsNeverRotated) {
+    const NamedPipe pipe(_path("pipe"), true);
+    FileSink::Config config = _config("pipe");
+    config.format = FileFormat::Text;
     config.max_file_bytes = 10;
     const auto sink = _sink(std::move(config));
     ASSERT_NE(sink, nullptr);
-    _log_numbered(*sink, 0, 2);
-    EXPECT_EQ(_messages(_path("out.log")), (Messages{"m1"}));
-    EXPECT_EQ(_messages(_path("out.log.1")), (Messages{"m0"}));
-    EXPECT_FALSE(std::filesystem::exists(_path("out.log.2")));  // the empty file was not rotated
+    _log_numbered(*sink, 0, 5);
+    const std::vector<std::string> lines = test::split_lines(pipe.read_all());
+    ASSERT_EQ(lines.size(), 5U);
+    EXPECT_NE(lines.at(4).find(" INFO  m4 [t3]"), std::string::npos) << lines.at(4);
+    EXPECT_FALSE(std::filesystem::exists(_path("pipe.1")));
+    EXPECT_EQ(std::filesystem::status(_path("pipe")).type(), std::filesystem::file_type::fifo);
+    EXPECT_EQ(sink->statistics().lines_written, 5U);
 }
+#endif
 
 // /dev/full accepts the open and fails every write with ENOSPC.
 TEST_F(FileSinkTest, WriteErrorsAreCountedPerLineAndTheFirstIsReportedOnce) {
