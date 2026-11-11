@@ -76,6 +76,19 @@
 // sink is registered any more), flush() does nothing and records are counted
 // as dropped_after_shutdown.
 //
+// Shutdown can also start inside a sink callback: a callback that calls
+// exit() runs static destruction, and so the global core's shutdown, on the
+// thread that is delivering (the dispatch thread, or a thread inside
+// flush()). That thread holds the delivery lock further up its stack and
+// never returns there, so the shutdown differs: the record whose callback is
+// running is handed to the sinks that had not received it, everything still
+// queued is delivered and every sink is flushed, all on that thread, except
+// the sinks whose callbacks are on its stack. The sinks are then not
+// destroyed, and the dispatch thread is left to end with the process instead
+// of being joined. Destroying a Core you own from inside one of its own
+// callbacks is undefined behaviour, as for any object destroyed while one of
+// its member functions runs.
+//
 // One race is not covered: a record that another thread submits while
 // shutdown is in progress either is delivered, or is counted as
 // dropped_after_shutdown, or, if its push lands after the final delivery

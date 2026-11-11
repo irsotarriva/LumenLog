@@ -51,6 +51,17 @@ add_test(NAME LateLogging.StaticDestructorLogsAreCountedAfterShutdown
 set_tests_properties(LateLogging.StaticDestructorLogsAreCountedAfterShutdown
                      PROPERTIES TIMEOUT 60)
 
+# exit() from inside a sink callback, on the dispatch thread and inside
+# flush(). The verdict is the process's exit status.
+add_executable(lumen_test_exit_from_callback exit_from_callback.cpp)
+target_link_libraries(lumen_test_exit_from_callback PRIVATE lumen)
+foreach(mode IN ITEMS on_log flush)
+  add_test(NAME ExitFromCallback.${mode}DeliversWhatIsLeftWithoutAbortOrHang
+           COMMAND lumen_test_exit_from_callback ${mode})
+  set_tests_properties(ExitFromCallback.${mode}DeliversWhatIsLeftWithoutAbortOrHang
+                       PROPERTIES TIMEOUT 60)
+endforeach()
+
 # The Json lines of a FileSink, parsed by a real JSON parser: Python's json
 # module, which every CI runner has. No JSON library is added to the build.
 add_executable(lumen_json_sample json_sample.cpp)

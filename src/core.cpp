@@ -652,6 +652,10 @@ struct Core::Impl {
             stopping.store(true, std::memory_order_release);
         }
         wake_cv.notify_one();
+        if (delivering_here()) {
+            shut_down_from_delivery();
+            return;
+        }
         if (dispatcher.joinable()) {
             dispatcher.join();
         }
@@ -664,6 +668,22 @@ struct Core::Impl {
         }
         report_first_losses();
         destroy_sinks();
+    }
+
+    // Shutdown started inside a sink callback of this Core: the callback
+    // called exit(), so static destruction runs on the delivering thread.
+    // That thread holds consume_mutex further up its stack and never returns
+    // there, so it delivers what is left itself, cannot join the dispatcher
+    // (which may be this thread, or be waiting for that mutex) and does not
+    // destroy the sinks (some are in a call on this stack).
+    void shut_down_from_delivery() noexcept {
+        finish_in_flight();
+        deliver_everything_queued();
+        flush_sinks();
+        report_first_losses();
+        if (dispatcher.joinable()) {
+            dispatcher.detach();
+        }
     }
 
     // Caller: shut_down(). No sink is registered after this.
