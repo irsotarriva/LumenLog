@@ -23,14 +23,18 @@ pybind11_add_module(lumen_bindings
 )
 
 target_link_libraries(lumen_bindings PRIVATE lumen)
-# src/ for immortal.hpp, the library's never-destroyed storage.
+# src/ for immortal.hpp, the library's never-destroyed storage, and nothing
+# else: the exit hook's state (python/interpreter_exit.cpp) must outlive C++
+# static destruction, where a sink's destructor may still reach it.
 target_include_directories(lumen_bindings PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_features(lumen_bindings PRIVATE cxx_std_23)
 
-# The Python tests (tests/python), run by ctest as one test. Each test file
-# prints "SKIP:" and exits 0 when it cannot import the module; that must count
-# as a failure here. The tests that start child processes bound each one with
-# a timeout of their own; the ctest timeout is the backstop.
+# The Python tests (tests/python), run by ctest as one test. When the module
+# cannot be imported, tests/python/support.py prints "SKIP:" and re-raises the
+# ImportError; the line is matched below as well, so the test fails even if a
+# runner reports the import error as a skip. The tests that start child
+# processes bound each one with a timeout of their own; the ctest timeout is
+# the backstop.
 if(LUMEN_BUILD_TESTS)
   set(lumen_python_test_env
     "PYTHONPATH=path_list_prepend:$<TARGET_FILE_DIR:lumen_bindings>"
@@ -44,7 +48,11 @@ if(LUMEN_BUILD_TESTS)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
       if(LUMEN_SANITIZER STREQUAL "address")
         set(lumen_sanitizer_runtime libasan.so)
-        list(APPEND lumen_python_test_env "ASAN_OPTIONS=set:detect_leaks=0")
+        # PYTHONMALLOC=malloc: Python objects come from malloc, not from
+        # Python's own pools, so ASan sees a use of a freed Python object
+        # (a str whose text the module still points into, for instance).
+        list(APPEND lumen_python_test_env "ASAN_OPTIONS=set:detect_leaks=0"
+                                          "PYTHONMALLOC=set:malloc")
       else()
         set(lumen_sanitizer_runtime libtsan.so)
       endif()
