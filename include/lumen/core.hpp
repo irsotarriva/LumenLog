@@ -150,8 +150,10 @@ struct CoreStatistics {
     uint64_t tags_dropped = 0;
 };
 
+// The records a BasicRecordBuilder makes: progress records come from
+// ProgressHandle instead.
 template <typename R>
-concept BuiltRecord = std::same_as<R, LogRecord> || std::same_as<R, MetricRecord>;
+concept BuiltRecord = RecordType<R> && !std::same_as<R, ProgressRecord>;
 
 template <BuiltRecord R>
 class BasicRecordBuilder;

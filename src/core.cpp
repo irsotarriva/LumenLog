@@ -38,10 +38,6 @@ using LogQueue = RingBuffer<LogRecord, log_queue_capacity>;
 using MetricQueue = RingBuffer<MetricRecord, metric_queue_capacity>;
 using ProgressQueue = RingBuffer<ProgressRecord, progress_queue_capacity>;
 
-template <typename R>
-concept AnyRecord =
-    std::same_as<R, LogRecord> || std::same_as<R, MetricRecord> || std::same_as<R, ProgressRecord>;
-
 // One registered sink. Entries are shared between the registry and the
 // snapshots the delivering thread holds, so an entry outlives its removal
 // until no snapshot refers to it.
@@ -151,7 +147,7 @@ void deliver_to(Sink& s, const ProgressRecord& r) {
     s.on_progress(r);
 }
 
-template <AnyRecord R>
+template <RecordType R>
 constexpr std::string_view callback_name = "on_log";
 template <>
 constexpr std::string_view callback_name<MetricRecord> = "on_metric";
@@ -161,7 +157,7 @@ constexpr std::string_view callback_name<ProgressRecord> = "on_progress";
 // Copies `texts` (the record's text, and for some log records its source
 // strings) and every tag string into one NUL-terminated block and re-points
 // the views at it.
-template <AnyRecord R>
+template <RecordType R>
 void own_strings(R& record, std::span<std::string_view* const> texts) {
     std::size_t total = 0;
     for (const std::string_view* const text : texts) {
@@ -208,7 +204,7 @@ struct Core::Impl {
     Impl(Impl&&) = delete;
     Impl& operator=(Impl&&) = delete;
 
-    template <AnyRecord R>
+    template <RecordType R>
     [[nodiscard]] auto& queue() {
         if constexpr (std::same_as<R, LogRecord>) {
             return logs;
@@ -219,7 +215,7 @@ struct Core::Impl {
         }
     }
 
-    template <AnyRecord R>
+    template <RecordType R>
     [[nodiscard]] std::atomic<uint64_t>& after_shutdown() {
         if constexpr (std::same_as<R, LogRecord>) {
             return logs_after_shutdown;
@@ -230,7 +226,7 @@ struct Core::Impl {
         }
     }
 
-    template <AnyRecord R>
+    template <RecordType R>
     void finalize(R& record, uint32_t tags_dropped_explicit, SourceStrings source) {
         record.timestamp_ns = now_ns();
         record.thread_id = this_thread_id();
@@ -252,7 +248,7 @@ struct Core::Impl {
 
     // R is named explicitly by the caller, so `record` is an rvalue
     // reference, not a forwarding one. `source` matters for log records only.
-    template <AnyRecord R>
+    template <RecordType R>
     void submit(std::type_identity_t<R>&& record, uint32_t tags_dropped_explicit,
                 SourceStrings source = SourceStrings::Static) {
         if (!accepting.load(std::memory_order_acquire)) {
@@ -396,7 +392,7 @@ struct Core::Impl {
                deliver_queue(logs, log_target);
     }
 
-    template <AnyRecord R, std::size_t N>
+    template <RecordType R, std::size_t N>
     [[nodiscard]] uint64_t deliver_queue(RingBuffer<R, N>& q, uint64_t target) {
         uint64_t delivered = 0;
         R record;
@@ -441,7 +437,7 @@ struct Core::Impl {
     }
 
     // Caller holds consume_mutex.
-    template <AnyRecord R>
+    template <RecordType R>
     void dispatch(const R& record) {
         DeliveryFrame* const frame = delivery_frame_for(this);
         const InFlight outer =
@@ -464,7 +460,7 @@ struct Core::Impl {
         --snapshot_loops;
     }
 
-    template <AnyRecord R>
+    template <RecordType R>
     void offer_to_remaining_sinks(const R& record, InFlight& in_flight) {
         while (in_flight.sinks != nullptr && in_flight.next < in_flight.sinks->size()) {
             SinkEntry& entry = *(*in_flight.sinks)[in_flight.next++];

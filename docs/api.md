@@ -15,7 +15,7 @@ table; the others are included on their own.
 | `lumen/progress.hpp` | `ProgressHandle`, `progress()` |
 | `lumen/context.hpp` | `set_process_tag`, `set_thread_tag` and their `remove_*` and `clear_*`; the priority of the context layers |
 | `lumen/tagged.hpp` | `Tagged` (`lumen_tag`, `lumen_untag`, `lumen_tags`, `lumen_scope`) |
-| `lumen/record.hpp` | `LogRecord`, `MetricRecord`, `ProgressRecord`, `SourceLocation`, `RecordTags`; who owns a record's strings |
+| `lumen/record.hpp` | `LogRecord`, `MetricRecord`, `ProgressRecord`, `SourceLocation`, `RecordTags`, the `RecordType` concept; who owns a record's strings |
 | `lumen/tag_set.hpp` | `TagSet<N>`, the fixed-capacity tag list of a record |
 | `lumen/level.hpp` | `LogLevel` |
 | `lumen/limits.hpp` | Every fixed capacity, and what happens when it is reached |
