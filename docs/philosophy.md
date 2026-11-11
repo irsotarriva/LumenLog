@@ -79,4 +79,4 @@ Metrics and progress records are always emitted regardless of `LUMEN_MIN_LEVEL`.
 
 ## Extensibility without modification
 
-Adding a new sink requires no changes to core library files. Sinks implement a virtual interface and register with the core singleton. Bridges (framework hooks) are standalone headers that depend only on the producer API — include one and framework calls emit records automatically, with zero changes to the framework or to user code.
+Adding a new sink requires no changes to core library files. Sinks implement a virtual interface and register with the core singleton. Bridges are standalone headers that depend only on the producer API: helpers that the user's code calls to turn values held by framework objects (Eigen, OpenMP, ROOT, libtorch) into records. They hook no framework call.
