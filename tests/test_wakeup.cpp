@@ -37,6 +37,11 @@ void push_one_of_each_kind_in_turn(RecordQueues& queues, uint64_t index) {
     }
 }
 
+// The dispatcher's question: is there a record to deliver?
+[[nodiscard]] auto pending_in(const RecordQueues& queues) {
+    return [&queues] { return queues.has_pending(); };
+}
+
 [[nodiscard]] uint64_t pop_everything(RecordQueues& queues) {
     return queues.pop_up_to(queues.heads(), [](const auto& /*record*/) {});
 }
@@ -47,7 +52,7 @@ class OneWait {
 public:
     OneWait(Wakeup& wakeup, const RecordQueues& queues) : wakeup_(&wakeup) {
         std::packaged_task<bool()> task(
-            [&wakeup, &queues] { return wakeup.wait_for_work(queues); });
+            [&wakeup, &queues] { return wakeup.wait_for_work(pending_in(queues)); });
         result_ = task.get_future();
         // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
         thread_ = std::thread(std::move(task));
@@ -107,14 +112,14 @@ TEST(WakeupTest, WaitAfterStopReturnsFalseEvenWithARecordQueued) {
     Wakeup wakeup;
     push_one_log(queues);
     wakeup.stop();
-    EXPECT_FALSE(wakeup.wait_for_work(queues));
+    EXPECT_FALSE(wakeup.wait_for_work(pending_in(queues)));
 }
 
 TEST(WakeupTest, WaitWithARecordAlreadyQueuedReturnsTrueWithoutAWake) {
     RecordQueues queues;
     Wakeup wakeup;
     push_one_log(queues);
-    EXPECT_TRUE(wakeup.wait_for_work(queues));
+    EXPECT_TRUE(wakeup.wait_for_work(pending_in(queues)));
 }
 
 TEST(WakeupTest, RecordPushedAndWokenWhileTheConsumerWaitsEndsTheWaitWithTrue) {
@@ -125,6 +130,61 @@ TEST(WakeupTest, RecordPushedAndWokenWhileTheConsumerWaitsEndsTheWaitWithTrue) {
     wakeup.wake_if_sleeping();
     ASSERT_TRUE(wait.returned_within(generous_timeout)) << "the wake-up was lost";
     EXPECT_TRUE(wait.result());
+}
+
+// How many times a wait with nothing queued checks for work before it
+// blocks: stopped once it has checked, it makes all of its checks anyway.
+[[nodiscard]] uint32_t checks_before_sleeping() {
+    const RecordQueues queues;
+    Wakeup wakeup;
+    std::atomic<uint32_t> checks{0};
+    // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
+    std::thread consumer([&] {
+        static_cast<void>(wakeup.wait_for_work([&] {
+            checks.fetch_add(1);
+            return queues.has_pending();
+        }));
+    });
+    while (checks.load() == 0) {
+        std::this_thread::yield();
+    }
+    wakeup.stop();
+    consumer.join();
+    return checks.load();
+}
+
+TEST(WakeupTest, RecordPushedDuringAnyCheckBeforeSleepingEndsTheWaitWithTrue) {
+    // A producer publishes its record and calls wake_if_sleeping() while the
+    // consumer is checking the queues on its way to sleep: the record is
+    // pushed from inside the consumer's k-th check, after that check found
+    // nothing, for every check the consumer makes. Each wait must end with
+    // true; one still waiting is a lost wake-up (the record stays queued and
+    // no further push follows).
+    const uint32_t checks_per_wait = checks_before_sleeping();
+    ASSERT_GT(checks_per_wait, 0U);
+    for (uint32_t k = 1; k <= checks_per_wait; ++k) {
+        RecordQueues queues;
+        Wakeup wakeup;
+        uint32_t checks = 0;  // used by the consumer thread only
+        const auto has_work = [&] {
+            const bool pending = queues.has_pending();
+            if (++checks == k && !pending) {
+                EXPECT_TRUE(queues.push<LogRecord>(LogRecord{}));
+                wakeup.wake_if_sleeping();
+            }
+            return pending;
+        };
+        std::packaged_task<bool()> task([&] { return wakeup.wait_for_work(has_work); });
+        std::future<bool> result = task.get_future();
+        std::thread consumer(std::move(task));
+        const bool ended = result.wait_for(generous_timeout) == std::future_status::ready;
+        if (!ended) {
+            wakeup.stop();  // so that the consumer ends and can be joined
+        }
+        consumer.join();
+        EXPECT_TRUE(ended) << "a record pushed during check " << k << " was never taken";
+        EXPECT_TRUE(result.get()) << "check " << k;
+    }
 }
 
 // The consumer side of the stress test below: waits, empties the queues and
@@ -147,7 +207,7 @@ public:
 
 private:
     void run_(Wakeup& wakeup, RecordQueues& queues) {
-        while (wakeup.wait_for_work(queues)) {
+        while (wakeup.wait_for_work(pending_in(queues))) {
             const uint64_t popped = pop_everything(queues);
             {
                 const std::scoped_lock lock(mutex_);
