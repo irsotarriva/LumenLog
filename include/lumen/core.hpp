@@ -56,6 +56,13 @@
 // is reported once through the diagnostic handler. Nothing else is lost
 // while the Core is running.
 //
+// Out of memory. Lumen does not turn a failed allocation into an error
+// code. Where it happens in submission (a record's string block, a fatal
+// record's place in its mailbox), on the dispatch thread, or while reporting
+// a sink's exception, std::bad_alloc ends the process through
+// std::terminate(). Elsewhere (the constructor, add_sink,
+// set_diagnostic_handler, flush) it may propagate to the caller.
+//
 // Fatal records (LogLevel::Fatal, see BasicRecordBuilder) are not queued: the
 // thread that raises one delivers, on its own stack, everything queued
 // before it, then the fatal record, flushes every sink and calls
