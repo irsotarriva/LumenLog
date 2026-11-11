@@ -67,6 +67,7 @@ are not defined.
 | `eigen.solver.iterations` | `solver.iterations()` | `solver=<name>`, `info=success\|numerical_issue\|no_convergence\|invalid_input` |
 | `eigen.solver.error` | `solver.error()`, Eigen's estimate of the relative residual \|Ax − b\| / \|b\| | as above |
 
+<!-- check: requires=eigen prelude=bridge_eigen wrap=body -->
 ```cpp
 #include <Eigen/IterativeLinearSolvers>
 #include "lumen/bridges/eigen.hpp"
@@ -104,6 +105,7 @@ region, call `add(units)` inside it from any thread, and `emit()` after the
 region has ended. `add()` takes no lock: each thread writes its own
 cache-line-sized slot (three OpenMP runtime queries and an addition per call).
 
+<!-- check: requires=openmp prelude=bridge_openmp wrap=body -->
 ```cpp
 #include "lumen/bridges/openmp.hpp"
 
@@ -147,6 +149,7 @@ ROOT adds a basket to both byte counts when it writes the basket out, so while
 a tree is being filled they lag behind the entry count; after `tree.Write()`
 on a tree attached to a file they cover every entry.
 
+<!-- check: requires=root prelude=bridge_root wrap=body -->
 ```cpp
 #include <TFile.h>
 #include <TTree.h>
@@ -168,6 +171,7 @@ lumen::bridges::emit_tree_summary(tree);
 An event loop needs no bridge: `Long64_t` is an integer type, so `LUMEN_LOOP`
 reports progress over the entries and tags every record with `entry=<i>`:
 
+<!-- check: requires=root prelude=bridge_root wrap=body -->
 ```cpp
 LUMEN_LOOP("entry", i, tree.GetEntries()) {
     tree.GetEntry(i);
@@ -200,6 +204,7 @@ Errors. Each method returns `std::expected`; on failure nothing is emitted:
 | `NoGradients` | `emit_gradient_norm`: no parameter has a gradient (no `backward()` yet, or all frozen) |
 | `FrameworkException` | libtorch threw (for instance `item()` on a meta tensor, or optimizer options without `get_lr()`); the exception's message is also logged as a `Warn` record tagged `model=<name>` |
 
+<!-- check: requires=torch prelude=bridge_torch wrap=body -->
 ```cpp
 #include <torch/torch.h>
 #include "lumen/bridges/torch.hpp"
@@ -303,6 +308,10 @@ framework into a configure error.
 | OpenMP | GCC 13 libgomp (OpenMP 4.5): locally, in the Linux GCC jobs of the main CI matrix (except `linux-gcc-tsan`), and in `bridges (torch)`. Not run under ThreadSanitizer (libgomp is not instrumented, so TSan reports false races) | tests pass locally |
 | libtorch | libtorch 2.5.1 CPU (cxx11 ABI), GCC 13: CI job `bridges (torch)` only | written without access to libtorch; not yet run |
 | ROOT | ROOT 6.32 from conda-forge, conda-forge GCC 13: CI job `bridges (root)` only | written without access to ROOT; not yet run |
+
+The code blocks on this page are compiled by the documentation check against
+the same frameworks; a block whose framework is missing is reported by ctest
+as `Docs.Bridge<Name>Blocks.SkippedFrameworkNotFound`.
 
 To run the bridge tests yourself, point CMake at the frameworks:
 

@@ -1,287 +1,71 @@
-# API Reference
+# Headers
 
-## Headers
+The public headers are the API reference: each one states, next to every
+declaration, what it does, on which thread and with which errors. This page
+says where to look. `lumen/lumen.hpp` includes every header in the first
+table; the others are included on their own.
 
-| Header | Contains |
+<!-- check: header-table -->
+| Header | Declares |
 |---|---|
-| `lumen/lumen.hpp` | Umbrella header — everything you typically need |
-| `lumen/core.hpp` | `Core` singleton, sink management, process/thread tags |
-| `lumen/record.hpp` | Record types and builders |
-| `lumen/macros.hpp` | `LUMEN_LOG_*` / `LOG_*`, `LUMEN_SCOPE`, `LUMEN_LOOP`, `LUMEN_MEMBER_SCOPE`, and the `LUMEN_MIN_LEVEL_VALUE` threshold |
-| `lumen/sink.hpp` | `Sink` base class, `TerminalSink`, `FileSink`, `JsonSink`, `NullSink` |
-| `lumen/predicate.hpp` | Predicate DSL |
-| `lumen/tagged.hpp` | `Tagged` mixin for instance-level tags |
+| `lumen/lumen.hpp` | Includes the headers below that a program that logs needs |
+| `lumen/macros.hpp` | `LUMEN_LOG_TRACE` … `LUMEN_LOG_FATAL`, `LOG_*`, `LUMEN_SCOPE`, `LUMEN_MEMBER_SCOPE`, `LUMEN_LOOP`, `level_compiled_in` |
+| `lumen/core.hpp` | `Core` (`add_sink`, `remove_sink`, `flush`, `statistics`, `sink_exception_count`, `set_diagnostic_handler`), `core()`, `CoreStatistics`, `QueueStatistics`, `DiagnosticHandler`, `stderr_diagnostics()`; the threading, ordering, loss and lifetime rules |
+| `lumen/record_builder.hpp` | `RecordBuilder`, `MetricBuilder`, `metric()`; tag rules; what a fatal record does |
+| `lumen/progress.hpp` | `ProgressHandle`, `progress()` |
+| `lumen/context.hpp` | `set_process_tag`, `set_thread_tag` and their `remove_*` and `clear_*`; the priority of the context layers |
+| `lumen/tagged.hpp` | `Tagged` (`lumen_tag`, `lumen_untag`, `lumen_tags`, `lumen_scope`) |
+| `lumen/record.hpp` | `LogRecord`, `MetricRecord`, `ProgressRecord`, `SourceLocation`, `RecordTags`; who owns a record's strings |
+| `lumen/tag_set.hpp` | `TagSet<N>`, the fixed-capacity tag list of a record |
+| `lumen/level.hpp` | `LogLevel` |
+| `lumen/limits.hpp` | Every fixed capacity, and what happens when it is reached |
+| `lumen/predicate.hpp` | `Predicate`, its builders and operators, `parse_predicate` and its grammar, `PredicateParseError` |
+| `lumen/error.hpp` | `LumenError`, its `std::error_code` category |
+| `lumen/sink.hpp` | `Sink` and its contract, `NullSink` |
+| `lumen/terminal_sink.hpp` | `TerminalSink` and its `Config`; the line layout |
+| `lumen/file_sink.hpp` | `FileSink`, its `Config`, `FileFormat` and the three line formats; rotation |
+| `lumen/thread_clock.hpp` | `now_ns()`, `this_thread_id()`: the timestamp and thread number of records |
 
-## Core
+| Header | Declares |
+|---|---|
+| `lumen/terminal_style.hpp` | `AnsiColor`, `ColorMode` (and the colour rule of `Auto`), `LevelColors`, `default_level_colors`, `color_for`, `TimeZone` |
+| `lumen/writer_statistics.hpp` | `WriterStatistics`; how the shipped sinks queue and write lines |
+| `lumen/dashboard_sink.hpp` | `DashboardSink` (only linkable with `LUMEN_ENABLE_DASHBOARD=ON`) |
+| `lumen/dashboard_model.hpp` | `DashboardModel`, what the dashboard keeps; usable without FTXUI |
+| `lumen/bridges/eigen.hpp` | `emit_matrix_summary`, `emit_solver_summary` ([Bridges](bridges.md)) |
+| `lumen/bridges/openmp.hpp` | `emit_openmp_configuration`, `OpenMpWorkBalance` |
+| `lumen/bridges/root.hpp` | `emit_tree_summary` |
+| `lumen/bridges/torch.hpp` | `TorchTrainingMetrics`, `TorchMetricsError` |
 
-### `lumen::core()`
+Everything is in namespace `lumen`, the bridges in `lumen::bridges`. Headers
+under `lumen/detail/` are internal: they are included by the public headers
+and are not part of the API.
 
-Returns the global `Core` singleton (Meyer's singleton).
+Every public header compiles as the only include of a translation unit
+(test `CompileCheck.EveryHeaderAlone`), and every bridge header compiles
+without its framework (`CompileCheck.BridgesWithoutFrameworks`).
 
+## Error codes
+
+`LumenError` values are `std::error_code`s of the category `"lumen"`.
+Compare a returned code with the enumerator directly:
+
+<!-- check: prelude=common wrap=body -->
 ```cpp
-auto& core = lumen::core();
+const auto set = lumen::set_thread_tag("stage", "warmup");
+if (!set && set.error() == lumen::LumenError::TagTableFull) {
+    LUMEN_LOG_WARN("too many thread tags; stage not set");
+}
 ```
 
-### `Core::add_sink`
-
-```cpp
-SinkId add_sink(std::unique_ptr<Sink> sink, Predicate predicate);
-```
-
-Register a sink with a filter predicate. Returns an opaque `SinkId` for later removal.
-
-### `Core::remove_sink`
-
-```cpp
-std::expected<std::unique_ptr<Sink>, std::error_code> remove_sink(SinkId id);
-```
-
-Remove a previously registered sink. Returns the sink's `unique_ptr` on success.
-
-### `Core::set_process_tag`
-
-```cpp
-void set_process_tag(std::string_view key, std::string_view value);
-```
-
-Set a tag attached to every record from this process. Call at startup.
-
-### `Core::set_thread_tag`
-
-```cpp
-void set_thread_tag(std::string_view key, std::string_view value);
-```
-
-Set a tag attached to every record from the calling thread. Call at thread creation.
-
-### `Core::sink_exception_count`
-
-```cpp
-std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id);
-```
-
-Number of exceptions that escaped this sink's callbacks and were contained by the core. `LumenError::InvalidSinkId` if the sink is not registered.
-
-### `Core::flush`
-
-```cpp
-void flush();
-```
-
-Block until every record emitted before the call has been delivered to the sinks and each sink's `flush()` has returned (for `FileSink`/`JsonSink`: the data has been written to the file). Pending records are drained on the calling thread, serialised with the dispatch thread, so sinks are never called concurrently. Calling `flush()` from inside a sink callback is a no-op.
-
-## Record types
-
-### `LogRecord`
-
-```cpp
-struct LogRecord {
-    LogLevel         level;          // TRACE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4, FATAL=5
-    std::string_view message;
-    TagSet<16>       tags;
-    uint64_t         timestamp_ns;
-    uint32_t         thread_id;
-    SourceLocation   source;         // { file, function, class_name, line }
-    std::shared_ptr<const char[]> storage;  // owns message and tag strings
-};
-```
-
-Every record owns its strings: when a record is emitted, the message (or metric name, or progress label) and all tag keys and values are copied into `storage`, a NUL-terminated block shared by the record's copies. It is therefore safe to log temporaries (`LOG_INFO(std::format(...))`, `.tag("k", some_string)`), and a sink may keep a copy of a record for as long as it likes. `SourceLocation` strings are static and are not copied. The same applies to `MetricRecord` and `ProgressRecord`.
-
-### `MetricRecord`
-
-```cpp
-struct MetricRecord {
-    std::string_view name;
-    double           value;
-    TagSet<16>       tags;
-    uint64_t         timestamp_ns;
-    std::shared_ptr<const char[]> storage;
-};
-```
-
-### `ProgressRecord`
-
-```cpp
-struct ProgressRecord {
-    uint64_t         id;
-    std::string_view label;
-    uint64_t         current;
-    uint64_t         total;
-    TagSet<16>       tags;
-    uint64_t         timestamp_ns;
-    std::shared_ptr<const char[]> storage;
-};
-```
-
-When `current == total`, the record signals completion.
-
-### `TagSet<N>`
-
-Fixed-capacity key-value container. Thread-safe for reads, not for concurrent writes.
-
-```cpp
-template<size_t N>
-struct TagSet {
-    bool        add(std::string_view key, std::string_view value);
-    const char* find(std::string_view key) const;
-    bool        has(std::string_view key) const;
-    size_t      count() const;
-    // iterable via begin() / end()
-};
-```
-
-## Log macros
-
-```cpp
-LUMEN_LOG_TRACE(fmt, ...)    // Severity 0
-LUMEN_LOG_DEBUG(fmt, ...)    // Severity 1
-LUMEN_LOG_INFO(fmt, ...)     // Severity 2
-LUMEN_LOG_WARN(fmt, ...)     // Severity 3
-LUMEN_LOG_ERROR(fmt, ...)    // Severity 4
-LUMEN_LOG_FATAL(fmt, ...)    // Severity 5 — calls std::terminate after dispatch
-```
-
-The short names `LOG_TRACE` … `LOG_FATAL` are aliases for these, defined unless `LUMEN_NO_SHORT_MACROS` is defined before including Lumen.
-
-With a single argument the message is logged verbatim (no format parsing, so runtime strings and braces are fine). With more arguments, `fmt` is a `std::format` string checked at compile time. Each macro returns `RecordBuilder&` for `.tag()` chaining. `LOG_FATAL` flushes all sinks before terminating.
-
-Below `LUMEN_MIN_LEVEL`, macros expand to `((void)0)`.
-
-## Record builder
-
-```cpp
-struct RecordBuilder {
-    RecordBuilder& tag(std::string_view key, std::string_view value);
-    RecordBuilder& tag(std::string_view key, int64_t value);
-    RecordBuilder& tag(std::string_view key, double value);
-    // Destructor commits the record to the ring buffer
-};
-```
-
-## Metric emission
-
-```cpp
-MetricBuilder& metric(std::string_view name, double value);
-```
-
-Returns `MetricBuilder&` with the same `.tag()` interface. Never elided by `LUMEN_MIN_LEVEL`.
-
-## Progress emission
-
-```cpp
-ProgressHandle progress(std::string_view label, uint64_t total);
-```
-
-### `ProgressHandle`
-
-```cpp
-struct ProgressHandle {
-    void update(uint64_t position);  // Set absolute position
-    void tick();                     // Increment by 1
-    void finish();                   // Mark complete
-    // Destructor calls finish() if not already finished
-};
-```
-
-## Scope macros
-
-```cpp
-LUMEN_SCOPE(key, value, ...)           // Push tags for current scope (RAII)
-LUMEN_LOOP(label, var, total)          // Progress bar + scope tags for loop
-LUMEN_MEMBER_SCOPE                     // Activate instance tags for method
-```
-
-All scope macros are RAII — safe under exceptions and early returns.
-
-## Tagged mixin
-
-```cpp
-class Tagged {
-protected:
-    void lumen_tag(std::string_view key, std::string_view value);
-    void lumen_tag(std::string_view key, int64_t value);
-    void lumen_tag(std::string_view key, double value);
-    [[nodiscard]] Scope lumen_scope();
-    const TagSet<8>& tags() const;
-};
-```
-
-Store up to 8 instance-level tags. Use `LUMEN_MEMBER_SCOPE` to activate them for a method call.
-
-## Sink base class
-
-```cpp
-class Sink {
-public:
-    virtual void on_log(const LogRecord&)     {}
-    virtual void on_metric(const MetricRecord&) {}
-    virtual void on_progress(const ProgressRecord&) {}
-    virtual void flush() = 0;
-    virtual ~Sink() = default;
-};
-```
-
-`on_*` methods are called from the dispatch thread and must be non-blocking.
-
-## Predicate DSL
-
-```cpp
-Predicate always();
-Predicate never();
-Predicate level_at_least(LogLevel min_level);
-Predicate level_equals(LogLevel level);
-Predicate tag_equals(std::string_view key, std::string_view value);
-Predicate tag_exists(std::string_view key);
-Predicate level_compare(CompareOp op, LogLevel level);      // CompareOp: Equal NotEqual Less LessEqual Greater GreaterEqual
-Predicate tag_compare(std::string_view key, CompareOp op, double value);
-Predicate tag_less(std::string_view key, double value);     // also tag_less_equal,
-Predicate tag_greater(std::string_view key, double value);  // tag_greater_equal
-
-std::expected<Predicate, PredicateParseError> parse_predicate(std::string_view query);
-
-Predicate operator&&(Predicate a, Predicate b);
-Predicate operator||(Predicate a, Predicate b);
-Predicate operator!(Predicate a);
-```
-
-See [Predicates](predicates.md) for numeric comparison semantics and the query grammar.
-
-## Built-in sinks
-
-### TerminalSink
-
-```cpp
-struct TerminalSink::Config {
-    AnsiColor colors[6];              // Per-level colors
-    std::string time_format;          // strftime format
-    std::vector<std::string_view> inline_tags;
-    std::vector<std::string_view> dashboard_metrics;
-    int dashboard_height;
-};
-
-static Config default_config();
-```
-
-### FileSink
-
-```cpp
-struct FileSink::Config {
-    std::string path;                 // Supports {date} substitution
-    size_t rotate_mb;                 // 0 = no rotation
-    int max_files;                    // Keep last N rotated files
-    FileFormat format;                // PlainText, KeyValue, Json
-};
-```
-
-### JsonSink
-
-```cpp
-explicit JsonSink(std::string path);
-```
-
-### NullSink
-
-```cpp
-NullSink();  // Discards all records
-```
+| Code | Returned by |
+|---|---|
+| `InvalidSinkId` | `remove_sink`, `sink_exception_count`: no sink has this id |
+| `NullSink` | `add_sink`: the sink is null |
+| `SinkBusy` | `remove_sink` from inside a callback of the sink being removed |
+| `TagTableFull` | `set_process_tag`, `set_thread_tag`, `Tagged::lumen_tag`: the key is new and the table is full |
+| `InvalidPredicate` | `parse_predicate` (in `PredicateParseError::code`) |
+| `InvalidSinkConfig` | `TerminalSink::create`, `FileSink::create`, `DashboardSink::create`: a `Config` field is out of range |
+| `FileOpenFailed` | `FileSink::create`: the file cannot be opened for appending |
+| `IoError` | never returned: a failed write is reported through a sink's diagnostics and counted in its statistics |
+| `NotATerminal` | `DashboardSink::create`: the destination is not a terminal |
