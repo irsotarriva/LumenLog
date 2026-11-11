@@ -1,9 +1,20 @@
 #include "fatal_records.hpp"
 
+#include <chrono>
 #include <thread>
 #include <utility>
 
 namespace lumen::detail {
+
+namespace {
+
+// How long the delivering thread waits, after the last fatal record it
+// knows of, for one that another thread raises at about the same time (for
+// instance every worker failing on the same input). Delays termination by
+// this much once; a record announced meanwhile restarts the wait.
+constexpr std::chrono::milliseconds late_fatal_grace{20};
+
+}  // namespace
 
 void FatalRecords::announce() noexcept {
     announced_.fetch_add(1, std::memory_order_acq_rel);
@@ -16,6 +27,14 @@ void FatalRecords::post(LogRecord&& record) {
 
 void FatalRecords::deliver_all(Delivery& delivery) {
     delivery.finish_in_flight();
+    do {
+        deliver_announced_(delivery);
+        std::this_thread::sleep_for(late_fatal_grace);
+    } while (delivered_ != announced_.load(std::memory_order_acquire));
+    delivery.flush_sinks();
+}
+
+void FatalRecords::deliver_announced_(Delivery& delivery) {
     while (true) {
         delivery.deliver_everything_queued();
         for (const LogRecord& fatal : take_()) {
@@ -23,12 +42,11 @@ void FatalRecords::deliver_all(Delivery& delivery) {
             ++delivered_;
         }
         if (delivered_ == announced_.load(std::memory_order_acquire)) {
-            break;
+            return;
         }
         // Another thread has announced a fatal record and is posting it.
         std::this_thread::yield();
     }
-    delivery.flush_sinks();
 }
 
 uint64_t FatalRecords::announced() const noexcept {

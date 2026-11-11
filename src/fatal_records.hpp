@@ -15,7 +15,8 @@ namespace lumen::detail {
 // raise fatal records at once. Each is announced (counted) before it is
 // stamped and posted, and the one thread that delivers does not stop until
 // every announced record has been delivered, so a fatal record raised while
-// another is being delivered is delivered too.
+// another is being delivered is delivered too. It also waits a short grace
+// period after the last one for records raised at about the same time.
 class FatalRecords {
 public:
     void announce() noexcept;
@@ -23,13 +24,14 @@ public:
 
     // Caller holds a Session of `delivery` (its own, or one further up its
     // stack). Finishes the record in flight, delivers everything queued and
-    // every fatal record announced so far, waiting for those still being
-    // posted, then flushes the sinks.
+    // every fatal record announced so far or within the grace period,
+    // waiting for those still being posted, then flushes the sinks.
     void deliver_all(Delivery& delivery);
 
     [[nodiscard]] uint64_t announced() const noexcept;
 
 private:
+    void deliver_announced_(Delivery& delivery);
     [[nodiscard]] std::vector<LogRecord> take_();
 
     std::atomic<uint64_t> announced_{0};

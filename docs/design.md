@@ -65,7 +65,8 @@ mailbox instead of the queue. The thread that holds the delivery lock (the
 caller, or the thread already delivering if the fatal record was raised in a
 callback) first finishes the record whose callback was running, then
 delivers everything queued and every posted fatal record, waits until every
-announced fatal record has been posted and delivered, flushes the sinks and
+announced fatal record has been posted and delivered, then 20 ms more for
+fatal records raised at about the same time, flushes the sinks and
 terminates. So fatal records raised on several threads at once are all
 delivered.
 

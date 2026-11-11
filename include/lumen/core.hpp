@@ -63,9 +63,10 @@
 // callback is running is first handed to the sinks that had not received it
 // yet; the sink whose callback raised the fatal record receives nothing more
 // (it is in the middle of a call). When several threads raise fatal records
-// at once, each one whose submission began before the delivering thread
-// finished is delivered, in the order they were submitted, before the
-// process terminates; one raised after that moment is not.
+// at once, one thread delivers them all, in the order they were submitted,
+// and terminates the process: after the last fatal record it knows of, it
+// waits 20 ms for others, and a fatal record submitted before that wait ends
+// is delivered too. One submitted later is not.
 //
 // Lifetime of the global core(). It is created on first use and never
 // destroyed. When static destruction reaches the point where a function-local
