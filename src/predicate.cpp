@@ -97,7 +97,9 @@ struct PredicateAccess {
     }
     // A default-constructed Predicate has no node and behaves as always().
     [[nodiscard]] static NodePtr node_or_always(const Predicate& predicate) {
-        if (predicate.node_) return predicate.node_;
+        if (predicate.node_) {
+            return predicate.node_;
+        }
         return std::make_shared<const Predicate::Node>(Predicate::Node::Constant{true});
     }
 };
@@ -153,7 +155,9 @@ namespace {
 
 void hand_over(std::array<NodePtr, 2>& children, std::vector<NodePtr>& queue) {
     for (NodePtr& child : children) {
-        if (child) queue.push_back(std::move(child));
+        if (child) {
+            queue.push_back(std::move(child));
+        }
     }
 }
 
@@ -208,7 +212,9 @@ template <std::totally_ordered T>
 // first entry with `key` is the tag's value.
 [[nodiscard]] std::optional<std::string_view> find_tag(const TagSet<16>& tags, std::string_view key) {
     for (const TagSet<16>::Entry& entry : tags) {
-        if (entry.key == key) return entry.value;
+        if (entry.key == key) {
+            return entry.value;
+        }
     }
     return std::nullopt;
 }
@@ -328,13 +334,17 @@ inline constexpr size_t inline_depth = 128;
 Predicate::Predicate(std::shared_ptr<const Node> node) : node_(std::move(node)) {}
 
 bool Predicate::evaluate(const TagSet<16>& tags, LogLevel level) const {
-    if (!node_) return true;
+    if (!node_) {
+        return true;
+    }
     // Every condition has an opinion when the level is known.
     return evaluate_tree(*node_, tags, level).value_or(true);
 }
 
 bool Predicate::evaluate(const TagSet<16>& tags) const {
-    if (!node_) return true;
+    if (!node_) {
+        return true;
+    }
     // Only level conditions can be undecided, and a predicate made only of
     // them places no constraint on a record without a level.
     return evaluate_tree(*node_, tags, std::nullopt).value_or(true);
