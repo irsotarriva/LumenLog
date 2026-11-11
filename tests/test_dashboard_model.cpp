@@ -190,5 +190,12 @@ TEST(DashboardModelTest, ZeroCountLimitsAreTakenAsOne) {
     EXPECT_EQ(bar_ids(model), (Ids{2}));
 }
 
+TEST(DashboardModelTest, NegativeLingerIsTakenAsZeroSoAFinishedBarGoesAtTheFirstExpiry) {
+    DashboardModel model({.finished_bar_linger = -std::chrono::seconds{1}}, {});
+    model.add_progress(bar_state(1, 10, 10, 5 * second_ns));
+    model.expire_progress(5 * second_ns);
+    EXPECT_TRUE(model.progress_bars().empty());
+}
+
 }  // namespace
 }  // namespace lumen

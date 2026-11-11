@@ -239,10 +239,62 @@ TEST_F(RotationTest, RotationWorksAgainOnceTheObstacleIsGone) {
 
 // Each open failure gives LumenError::FileOpenFailed, and one diagnostic line
 // with the cause the platform reported.
+TEST_F(RotationTest, TwoFailuresOfOneBatchAreJoinedBySemicolonInTheOrderTheyHappened) {
+    _make_obstacle("out.log.2");
+    std::ofstream(_path("out.log.1")) << "old\n";
+    const auto file = _file("out.log", {.max_file_bytes = 20, .max_files = 3});
+    ASSERT_NE(file, nullptr);
+    const detail::BatchOutcome outcome = file->write(ten_byte_lines(3));
+    const std::string remove_note = "cannot remove " + _path("out.log.2").string() + ": ";
+    const std::string rename_note = "; cannot rename " + _path("out.log.1").string() + ": ";
+    EXPECT_EQ(outcome.failure.rfind(remove_note, 0), 0U) << outcome.failure;
+    EXPECT_NE(outcome.failure.find(rename_note), std::string::npos) << outcome.failure;
+}
+
+TEST_F(RotationTest, RotationsBeforeEveryOldFileExistsReportNoFailure) {
+    // Two rotations with max_files = 4: out.log.2 and out.log.3 do not exist
+    // yet when they would be shifted, which is not a failure.
+    const auto file = _file("out.log", {.max_file_bytes = 10, .max_files = 4});
+    ASSERT_NE(file, nullptr);
+    const detail::BatchOutcome outcome = file->write(ten_byte_lines(3));
+    EXPECT_EQ(outcome.failure, "");
+    EXPECT_EQ(outcome.failed_lines, 0U);
+    EXPECT_EQ(test::read_file(_path("out.log.2")), "line 1000\n");
+    EXPECT_EQ(test::read_file(_path("out.log.1")), "line 1001\n");
+    EXPECT_EQ(test::read_file(_path("out.log")), "line 1002\n");
+}
+
+// POSIX only: Windows does not let a file be removed while it is open.
+#ifndef PLATFORM_WINDOWS
+// With max_files = 1 the active file is removed to rotate. Something else
+// has replaced it with a directory that holds a file, so the removal fails,
+// and so does the reopening. The first line went to the old file (still
+// open); the second is the one that fails.
+TEST_F(RotationTest, FailedRemovalOfTheActiveFileIsReportedAndTheNextLineFails) {
+    const auto file = _file("out.log", {.max_file_bytes = 10, .max_files = 1});
+    ASSERT_NE(file, nullptr);
+    std::filesystem::remove(_path("out.log"));
+    _make_obstacle("out.log");
+    const detail::BatchOutcome outcome = file->write(ten_byte_lines(2));
+    EXPECT_NE(outcome.failure.find("cannot remove " + _path("out.log").string() + ": "),
+              std::string::npos)
+        << outcome.failure;
+    EXPECT_EQ(outcome.failed_lines, 1U);
+}
+#endif
+
+// Opening a directory as a file fails with EISDIR on POSIX systems; the
+// Microsoft C runtime reports EACCES instead.
+#ifdef PLATFORM_WINDOWS
+constexpr std::errc directory_open_error = std::errc::permission_denied;
+#else
+constexpr std::errc directory_open_error = std::errc::is_a_directory;
+#endif
+
 TEST_F(RotationTest, OpenFailureReportsItsCauseThroughTheDiagnosticHandler) {
     std::filesystem::create_directory(_path("a_directory"));
     for (const auto& [name, cause] :
-         {std::pair<std::string, std::errc>{"a_directory", std::errc::is_a_directory},
+         {std::pair<std::string, std::errc>{"a_directory", directory_open_error},
           std::pair<std::string, std::errc>{"no_such_dir/out.log",
                                             std::errc::no_such_file_or_directory}}) {
         std::vector<std::string> reported;
@@ -255,6 +307,16 @@ TEST_F(RotationTest, OpenFailureReportsItsCauseThroughTheDiagnosticHandler) {
         EXPECT_EQ(reported.front(), "lumen: FileSink: cannot open " + _path(name).string() + ": " +
                                         std::make_error_code(cause).message());
     }
+}
+
+TEST_F(RotationTest, AFileOfOneByteIsRotatedBeforeALineThatWouldTakeItPastTheLimit) {
+    std::ofstream(_path("out.log"), std::ios::binary) << "x";
+    const auto file = _file("out.log", {.max_file_bytes = 10, .max_files = 2});
+    ASSERT_NE(file, nullptr);
+    const detail::BatchOutcome outcome = file->write(ten_byte_lines(1));
+    EXPECT_EQ(outcome.failed_lines, 0U);
+    EXPECT_EQ(test::read_file(_path("out.log.1")), "x");
+    EXPECT_EQ(test::read_file(_path("out.log")), "line 1000\n");
 }
 
 }  // namespace

@@ -175,5 +175,15 @@ TEST(ClassNameTest, ThisCompilersOwnSpellingsYieldTheClass) {
     EXPECT_EQ(extract_class_name(global), "") << global;
 }
 
+TEST(ClassNameTest, ANameThatEndsInOperatorIsNotTheOperatorKeyword) {
+    EXPECT_EQ(extract_class_name("void cooperator::run()"), "cooperator");
+    EXPECT_EQ(extract_class_name("void Shop::cooperator()"), "Shop");
+}
+
+TEST(ClassNameTest, APartThatIsNotAnIdentifierYieldsNoClassName) {
+    // Clang spells some closures "$_0"; that is not a class name.
+    EXPECT_EQ(extract_class_name("auto f()::$_0::operator()() const"), "");
+}
+
 }  // namespace
 }  // namespace lumen

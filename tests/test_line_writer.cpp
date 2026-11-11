@@ -215,6 +215,24 @@ TEST(LineWriterTest, FailureWithoutLostLinesIsReportedAndCountsNothingAsFailed) 
     EXPECT_NE(reported.front().find("write failed (cannot rename)"), std::string::npos);
 }
 
+TEST(LineWriterTest, FailureWithoutAReasonIsReportedAsNoDetailAndCountsAtMostTheBatch) {
+    // The destination claims more failed lines than it was given and says
+    // nothing about why: the count is capped at the one line of the batch.
+    const auto recorded = std::make_shared<Recorded>();
+    const BatchWriter silent_failure = [](std::span<const std::string> /*lines*/) {
+        return BatchOutcome{.failed_lines = 5, .failure = ""};
+    };
+    const auto writer = make_writer(100, silent_failure, recording_handler(recorded));
+    ASSERT_NE(writer, nullptr);
+    writer->enqueue("x");
+    writer->wait_until_written();
+    EXPECT_EQ(writer->statistics().lines_written, 0U);
+    EXPECT_EQ(writer->statistics().lines_failed, 1U);
+    EXPECT_EQ(recorded->all_diagnostics(),
+              (std::vector<std::string>{"lumen: TestSink: write failed (no detail); later "
+                                        "failures are only counted (statistics().lines_failed)"}));
+}
+
 TEST(LineWriterTest, ExceptionFromTheDestinationFailsTheWholeBatchWithItsMessage) {
     const auto recorded = std::make_shared<Recorded>();
     const BatchWriter throwing = [](std::span<const std::string> /*lines*/) -> BatchOutcome {

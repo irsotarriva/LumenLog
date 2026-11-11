@@ -30,6 +30,18 @@ class _Clearing:
         return 1
 
 
+class _Replacing:
+    """A tag value whose __index__ replaces the value of another key in its dict."""
+
+    def __init__(self, tags, key):
+        self.tags = tags
+        self.key = key
+
+    def __index__(self):
+        self.tags[self.key] = "replaced"
+        return 1
+
+
 class _Growing:
     """A tag value whose __index__ adds an entry to the dict it is in."""
 
@@ -159,6 +171,15 @@ class TagArgumentTest(LumenTestCase):
     def test_tag_value_whose_index_adds_an_entry_raises_runtime_error(self):
         tags = {"first": 1}
         tags["growing"] = _Growing(tags)
+        with self.assertRaisesRegex(RuntimeError, "changed while it was read"):
+            lumen.info("mutated", tags=tags)
+        self.assertEqual(self.flushed_logs(), [])
+
+    def test_tag_value_whose_index_replaces_another_value_raises_runtime_error(self):
+        # The dict keeps its size, so only comparing each value read with the
+        # value in the dict afterwards notices the change.
+        tags = {"first": "original"}
+        tags["replacing"] = _Replacing(tags, "first")
         with self.assertRaisesRegex(RuntimeError, "changed while it was read"):
             lumen.info("mutated", tags=tags)
         self.assertEqual(self.flushed_logs(), [])

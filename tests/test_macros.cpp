@@ -21,6 +21,7 @@ namespace lumen {
 namespace {
 
 using test::GlobalCoreTest;
+using test::StderrSink;
 using test::tag_of;
 
 template <typename T>
@@ -182,13 +183,6 @@ TEST_F(MacroTest, MetricAndProgressHelpersUseTheGlobalCore) {
 TEST(MacroCoreTest, CoreReturnsTheSameObjectEveryTime) {
     EXPECT_EQ(&core(), &core());
 }
-
-// Writes what it receives to stderr, where the death test reads it.
-class StderrSink : public Sink {
-public:
-    void on_log(const LogRecord& r) override { std::cerr << "delivered:" << r.message << '\n'; }
-    void flush() override { std::cerr << "flushed" << '\n' << std::flush; }
-};
 
 TEST(MacroFatalDeathTest, FatalMacroDeliversItsRecordFlushesAndTerminates) {
     GTEST_FLAG_SET(death_test_style, "threadsafe");

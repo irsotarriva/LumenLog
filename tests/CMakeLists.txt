@@ -24,6 +24,7 @@ add_executable(lumen_tests
   test_class_name.cpp
   test_fork_handlers.cpp
   test_portable_error.cpp
+  test_wakeup.cpp
 )
 
 if(LUMEN_ENABLE_DASHBOARD)

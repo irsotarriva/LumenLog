@@ -9,6 +9,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <exception>
 #include <expected>
 #include <iostream>
@@ -40,6 +41,7 @@ using test::CaptureSink;
 using test::LocalCoreTest;
 using test::log_to;
 using test::metric_to;
+using test::StderrSink;
 using test::tag_of;
 
 constexpr std::chrono::seconds generous_timeout{10};
@@ -190,6 +192,25 @@ TEST_F(CoreSubmitTest, RecordIsDeliveredWithoutFlushWhileTheDispatcherIdles) {
     EXPECT_TRUE(_captured->wait_for_logs(1, generous_timeout));
 }
 
+// std::clock() is the process's CPU time on POSIX systems but wall time on
+// Windows, where this measurement would be meaningless.
+#ifndef PLATFORM_WINDOWS
+TEST_F(CoreSubmitTest, IdleDispatcherUsesUnderATenthOfTheCpuTimeOfABusyLoop) {
+    log_to(_core, "last record before idling");
+    _core.flush();
+    const std::clock_t cpu_before = std::clock();
+    // Not a wait for anything: the interval over which the idle process's
+    // CPU time is measured. A dispatcher that never slept would spend all
+    // of it on a core; an idle one spends almost none.
+    constexpr std::chrono::milliseconds idle_interval{500};
+    std::this_thread::sleep_for(idle_interval);
+    const std::clock_t cpu_used = std::clock() - cpu_before;
+    const auto busy_loop_cpu = static_cast<std::clock_t>(
+        std::chrono::duration<double>(idle_interval).count() * CLOCKS_PER_SEC);
+    EXPECT_LT(cpu_used, busy_loop_cpu / 10);
+}
+#endif
+
 TEST_F(CoreSubmitTest, ThousandRecordsFromOneThreadArriveInSubmissionOrder) {
     for (int i = 0; i < 1000; ++i) {
         log_to(_core, "ordered").tag("i", i);
@@ -326,6 +347,56 @@ TEST_F(CoreFlushTest, FlushOnEachOfFourProducerThreadsLeavesNoRecordUndelivered)
     EXPECT_EQ(_captured->logs().size(), static_cast<std::size_t>(thread_count * per_thread));
 }
 
+// Counts the log records of each producer thread, by their "t" tag.
+class PerThreadCount {
+public:
+    explicit PerThreadCount(std::size_t threads) : counts_(threads, 0) {}
+    void add(std::size_t thread) {
+        const std::scoped_lock lock(mutex_);
+        ++counts_.at(thread);
+    }
+    [[nodiscard]] uint64_t of(std::size_t thread) const {
+        const std::scoped_lock lock(mutex_);
+        return counts_.at(thread);
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<uint64_t> counts_;  // guarded by mutex_
+};
+
+TEST_F(CoreFlushTest, FlushReturnsOnlyOnceEveryRecordItsThreadSubmittedIsDelivered) {
+    // While other threads claim queue slots and publish them, a flush must
+    // wait for a slot claimed before it and not yet published, rather than
+    // stop at it: the records behind that slot were submitted before the
+    // flush too.
+    constexpr std::size_t thread_count = 4;
+    constexpr uint64_t rounds = 5000;
+    auto counts = std::make_shared<PerThreadCount>(thread_count);
+    ASSERT_TRUE(_core.add_sink(callback_sink([counts](const LogRecord& r) {
+        counts->add(static_cast<std::size_t>(std::stoul(std::string(r.tags.find("t")))));
+    })));
+    std::vector<std::thread> threads;
+    threads.reserve(thread_count);
+    for (std::size_t t = 0; t < thread_count; ++t) {
+        threads.emplace_back([this, t, counts] {
+            for (uint64_t round = 1; round <= rounds; ++round) {
+                log_to(_core, "counted").tag("t", t);
+                _core.flush();
+                if (counts->of(t) != round) {
+                    ADD_FAILURE() << "thread " << t << ": " << counts->of(t)
+                                  << " records delivered when flush returned, " << round
+                                  << " submitted";
+                    return;
+                }
+            }
+        });
+    }
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+}
+
 TEST(CoreFlushAcrossCoresTest, FlushReachedThroughAnotherCoresCallbackReturnsAtOnce) {
     // Flushes `other` from its own flush(), which only Core::flush() calls,
     // on the thread that called it.
@@ -361,6 +432,27 @@ TEST(CoreFlushAcrossCoresTest, FlushReachedThroughAnotherCoresCallbackReturnsAtO
     // sink, the opposite lock order, which ThreadSanitizer reports as a
     // potential deadlock (two threads doing both would deadlock).
     EXPECT_TRUE(second.remove_sink(*flushes_first));
+}
+
+TEST(CoreFlushAcrossCoresTest, CallbackThatFlushedAnotherCoreThenFlushesItsOwnReturnsAtOnce) {
+    // Leaving the other Core's delivery must leave this thread delivering
+    // for its own Core still: its flush() from the callback has to return
+    // at once instead of waiting for the delivery it is part of.
+    Core other;
+    Core core;
+    Core* const own = &core;
+    Core* const second = &other;
+    auto returned = std::make_shared<std::atomic<bool>>(false);
+    ASSERT_TRUE(core.add_sink(callback_sink([own, second, returned](const LogRecord& r) {
+        if (r.message == "flush both") {
+            second->flush();
+            own->flush();
+            returned->store(true);
+        }
+    })));
+    log_to(core, "flush both");
+    core.flush();
+    EXPECT_TRUE(returned->load());
 }
 
 // Loss accounting.
@@ -409,6 +501,27 @@ TEST_F(CoreStatisticsTest, FirstQueueFullDropIsReportedOnceAsADiagnosticLine) {
     }
     _core.flush();
 
+    const auto lines = _diagnostic_lines();
+    ASSERT_EQ(lines.size(), 1U);
+    EXPECT_NE(lines[0].find("queue was full"), std::string::npos);
+}
+
+TEST_F(CoreStatisticsTest, ASingleRecordRefusedByAFullQueueIsCountedAndReported) {
+    auto gate = std::make_shared<Gate>();
+    auto received = std::make_shared<std::atomic<uint64_t>>(0);
+    ASSERT_TRUE(_core.add_sink(std::make_unique<GateSink>(gate, received)));
+    log_to(_core, "first");
+    ASSERT_TRUE(gate->wait_until_entered(1));
+    // The dispatcher holds "first"; the queue takes exactly its capacity
+    // more, and the one record after that is the only one refused.
+    for (uint64_t i = 0; i < log_queue_capacity + 1; ++i) {
+        log_to(_core, "flood");
+    }
+    gate->open();
+    _core.flush();
+
+    EXPECT_EQ(_core.statistics().logs.dropped_queue_full, 1U);
+    EXPECT_EQ(received->load(), log_queue_capacity + 1);
     const auto lines = _diagnostic_lines();
     ASSERT_EQ(lines.size(), 1U);
     EXPECT_NE(lines[0].find("queue was full"), std::string::npos);
@@ -614,19 +727,21 @@ TEST_F(CoreRegistryTest, RemoveSinkWaitsForItsRunningCallbackAndQueuedRecordsAre
     }
     ASSERT_TRUE(gate->wait_until_entered(1));
 
-    std::atomic<bool> remove_returned{false};
+    std::atomic<uint64_t> received_when_remove_returned{0};
     std::thread remover([&] {
         EXPECT_TRUE(_core.remove_sink(*id).has_value());
-        remove_returned = true;
+        received_when_remove_returned = received->load();
     });
-    // remove_sink must still be waiting: the callback has not returned.
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(remove_returned.load());
+    // remove_sink takes the sink out of the registry before it waits for
+    // the callback, so once the id is unknown the remover is past that point.
+    while (_core.sink_exception_count(*id).has_value()) {
+        std::this_thread::yield();
+    }
     EXPECT_EQ(received->load(), 0U);
     gate->open();
     remover.join();
     // The callback that was running completed before remove_sink returned...
-    EXPECT_EQ(received->load(), 1U);
+    EXPECT_EQ(received_when_remove_returned.load(), 1U);
     _core.flush();
     // ...and the four records still queued never reached the removed sink.
     EXPECT_EQ(received->load(), 1U);
@@ -826,13 +941,6 @@ TEST(CoreShutdownTest, SinkDestructorCallingItsCoreAtShutdownGetsErrorsInsteadOf
 }
 
 // Fatal records.
-
-// Writes what it receives to stderr, where the death test reads it.
-class StderrSink : public Sink {
-public:
-    void on_log(const LogRecord& r) override { std::cerr << "delivered:" << r.message << '\n'; }
-    void flush() override { std::cerr << "flushed" << '\n' << std::flush; }
-};
 
 TEST(CoreFatalDeathTest,
      FatalRecordIsDeliveredAfterEarlierRecordsAndSinksAreFlushedBeforeTermination) {

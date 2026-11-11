@@ -6,11 +6,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -104,6 +106,32 @@ public:
 
 private:
     std::shared_ptr<Captured> _captured;
+};
+
+// Writes the message of each log record it receives, and each flush, to
+// std::cerr: a death test matches what its child process wrote there.
+class StderrSink : public Sink {
+public:
+    void on_log(const LogRecord& r) override { std::cerr << "delivered:" << r.message << '\n'; }
+    void flush() override { std::cerr << "flushed" << '\n' << std::flush; }
+};
+
+// A copy of `text` in a heap block of exactly its size, with no terminator
+// after it: code that reads one byte past the view then reads past the
+// block, which AddressSanitizer (the debug preset) reports. Without a
+// sanitizer such a read goes unnoticed.
+class ExactBuffer {
+public:
+    explicit ExactBuffer(std::string_view text)
+        // NOLINTNEXTLINE(*-avoid-c-arrays): a block of exactly text.size() bytes
+        : bytes_(std::make_unique<char[]>(text.size())), size_(text.size()) {
+        std::ranges::copy(text, bytes_.get());
+    }
+    [[nodiscard]] std::string_view view() const { return {bytes_.get(), size_}; }
+
+private:
+    std::unique_ptr<char[]> bytes_;  // NOLINT(*-avoid-c-arrays): see the constructor
+    std::size_t size_;
 };
 
 // Registers a CaptureSink on `core` and returns what it captures.

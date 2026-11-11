@@ -169,6 +169,20 @@ lumen.info("in time")
         self.assertIn("lumen: 3 record(s) produced from Python after the interpreter began to "
                       "exit were dropped", result.stderr)
 
+    def test_a_single_record_produced_after_the_exit_hook_is_reported_too(self):
+        result = run_child(self, """
+import atexit
+def late():
+    import lumen_bindings as lumen
+    lumen.info("late")
+atexit.register(late)
+import lumen_bindings as lumen
+lumen.info("in time")
+""")
+        self.assert_clean_exit(result, 0, [])
+        self.assertIn("lumen: 1 record(s) produced from Python after the interpreter began to "
+                      "exit were dropped", result.stderr)
+
     def test_slow_python_sink_gets_what_it_takes_in_time_and_the_rest_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "all.log")
