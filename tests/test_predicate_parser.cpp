@@ -35,7 +35,7 @@ PredicateParseError parse_error(std::string_view query) {
     return parsed ? PredicateParseError{} : parsed.error();
 }
 
-// ── The examples in predicate.hpp ────────────────────────────────────────────
+// The examples in predicate.hpp.
 
 TEST(PredicateParserTest, FirstExampleQueryFromHeader) {
     constexpr std::string_view query = "level >= WARN && run_id == 42 && !exists(suppress)";
@@ -59,7 +59,7 @@ TEST(PredicateParserTest, SecondExampleQueryFromHeader) {
     EXPECT_FALSE(eval(query, tags_of({{"stage", "cooldown"}, {"temperature", "300"}})));
 }
 
-// ── Level comparisons ────────────────────────────────────────────────────────
+// Level comparisons.
 
 TEST(PredicateParserTest, LevelOperators) {
     const TagSet<16> none;
@@ -78,7 +78,7 @@ TEST(PredicateParserTest, LevelNamesAreCaseInsensitiveAndNumericLevelsWork) {
     EXPECT_TRUE(eval("level == 4", none, LogLevel::Error));
 }
 
-// ── Tag comparisons ──────────────────────────────────────────────────────────
+// Tag comparisons.
 
 TEST(PredicateParserTest, NumericEqualityIgnoresSpelling) {
     EXPECT_TRUE(eval("sensor_id == 42", tags_of({{"sensor_id", "42.0"}})));
@@ -163,7 +163,7 @@ TEST(PredicateParserTest, DottedKeys) {
     EXPECT_TRUE(eval("sensor.id == 42", tags_of({{"sensor.id", "42"}})));
 }
 
-// ── Boolean structure ────────────────────────────────────────────────────────
+// Boolean structure.
 
 TEST(PredicateParserTest, AndBindsTighterThanOr) {
     // true || (false && false)  ==  true
@@ -192,7 +192,7 @@ TEST(PredicateParserTest, ParsedPredicateSurvivesCopy) {
     EXPECT_TRUE(copy.evaluate(tags_of({{"x", "2"}}), LogLevel::Info));
 }
 
-// ── Error paths ──────────────────────────────────────────────────────────────
+// Error paths.
 
 TEST(PredicateParserTest, ErrorsCarryCodeAndPosition) {
     const PredicateParseError err = parse_error("level >= WARN && sensor_id == ");
@@ -249,7 +249,7 @@ TEST(PredicateParserTest, ModerateNestingIsAccepted) {
     EXPECT_TRUE(eval(query, {}));
 }
 
-// ── Independence from the C locale ───────────────────────────────────────────
+// Independence from the C locale.
 
 // Switches the global C locale to the first of `names` installed here, and
 // back on destruction. active() is false if none of them is installed; most

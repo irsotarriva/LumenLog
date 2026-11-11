@@ -24,7 +24,7 @@ inline constexpr std::array<CompareOp, 6> all_ops = {CompareOp::Equal,     Compa
                                                      CompareOp::Less,      CompareOp::LessEqual,
                                                      CompareOp::Greater,   CompareOp::GreaterEqual};
 
-// ── Always / Never ────────────────────────────────────────────────────────────
+// Always / Never.
 
 TEST(PredicateTest, AlwaysTrue) {
     const Predicate p = always();
@@ -40,7 +40,7 @@ TEST(PredicateTest, NeverFalse) {
     EXPECT_FALSE(p.evaluate(tags, LogLevel::Fatal));
 }
 
-// ── LevelAtLeast ──────────────────────────────────────────────────────────────
+// LevelAtLeast.
 
 TEST(PredicateTest, LevelAtLeastMatches) {
     const Predicate p = level_at_least(LogLevel::Info);
@@ -76,7 +76,7 @@ TEST(PredicateTest, LevelAtLeastFatalPassesOnlyFatal) {
     EXPECT_TRUE(p.evaluate(tags, LogLevel::Fatal));
 }
 
-// ── LevelEquals ───────────────────────────────────────────────────────────────
+// LevelEquals.
 
 TEST(PredicateTest, LevelEquals) {
     const Predicate p = level_equals(LogLevel::Warn);
@@ -102,7 +102,7 @@ TEST(PredicateTest, LevelCompareAllOperators) {
     EXPECT_FALSE(level_compare(CompareOp::NotEqual, LogLevel::Warn).evaluate(tags, LogLevel::Warn));
 }
 
-// ── TagEquals / TagNotEquals ──────────────────────────────────────────────────
+// TagEquals / TagNotEquals.
 
 TEST(PredicateTest, TagEqualsMatch) {
     const Predicate p = tag_equals("env", "prod");
@@ -139,7 +139,7 @@ TEST(PredicateTest, TagEqualsEmptyStringMatchesPresentEmptyValue) {
     EXPECT_TRUE(tag_not_equals("k", "x").evaluate(tags, LogLevel::Info));
 }
 
-// ── TagExists ─────────────────────────────────────────────────────────────────
+// TagExists.
 
 TEST(PredicateTest, TagExistsMatch) {
     const Predicate p = tag_exists("env");
@@ -161,7 +161,7 @@ TEST(PredicateTest, TagExistsMatchesEmptyValue) {
     EXPECT_TRUE(tag_exists("flag").evaluate(tags, LogLevel::Info));
 }
 
-// ── Numeric tag comparisons ──────────────────────────────────────────────────
+// Numeric tag comparisons.
 
 TEST(PredicateTest, TagLessAndGreater) {
     TagSet<16> tags;
@@ -195,7 +195,7 @@ TEST(PredicateTest, TagCompareComposesWithLevel) {
     EXPECT_FALSE(p.evaluate(tags, LogLevel::Info));
 }
 
-// ── Missing or unusable tags ─────────────────────────────────────────────────
+// Missing or unusable tags.
 
 TEST(PredicateTest, TextComparisonsAgainstMissingTagAreFalse) {
     const auto tags = make_tags();
@@ -235,7 +235,7 @@ TEST(PredicateTest, NegatedComparisonOfMissingTagIsTrue) {
     EXPECT_TRUE((!tag_compare("k", CompareOp::NotEqual, 1.0)).evaluate(tags, LogLevel::Info));
 }
 
-// ── Duplicate keys ───────────────────────────────────────────────────────────
+// Duplicate keys.
 
 TEST(PredicateTest, FirstOfDuplicateKeysDecidesTextComparisons) {
     TagSet<16> tags;
@@ -265,7 +265,7 @@ TEST(PredicateTest, FirstOfDuplicateKeysDecidesNumericComparisons) {
     EXPECT_FALSE(tag_compare("m", CompareOp::Equal, 5.0).evaluate(tags, LogLevel::Info));
 }
 
-// ── And ───────────────────────────────────────────────────────────────────────
+// And.
 
 TEST(PredicateTest, AndBothTrue) {
     const Predicate p = tag_equals("env", "prod") && level_at_least(LogLevel::Info);
@@ -295,7 +295,7 @@ TEST(PredicateTest, AlwaysIsNeutralInAnd) {
     EXPECT_TRUE((always() && always()).evaluate(tags, LogLevel::Trace));
 }
 
-// ── Or ────────────────────────────────────────────────────────────────────────
+// Or.
 
 TEST(PredicateTest, OrWithTrueLeftIsTrue) {
     const Predicate p = always() || never();
@@ -325,7 +325,7 @@ TEST(PredicateTest, NeverIsNeutralInOr) {
     EXPECT_FALSE((never() || never()).evaluate(tags, LogLevel::Trace));
 }
 
-// ── Not ───────────────────────────────────────────────────────────────────────
+// Not.
 
 TEST(PredicateTest, NotInvertsAlways) {
     const Predicate p = !always();
@@ -348,7 +348,7 @@ TEST(PredicateTest, NotInvertsTagEquals) {
     EXPECT_FALSE(p.evaluate(tags, LogLevel::Info));
 }
 
-// ── Composite ─────────────────────────────────────────────────────────────────
+// Composite.
 
 TEST(PredicateTest, CompositeEveryCombination) {
     auto tags = make_tags();
@@ -381,7 +381,7 @@ TEST(PredicateTest, DeepNesting) {
     EXPECT_TRUE(p.evaluate(tags, LogLevel::Info));
 }
 
-// ── Default-constructed predicates ───────────────────────────────────────────
+// Default-constructed predicates.
 
 TEST(PredicateTest, DefaultPredicateMatchesEveryRecord) {
     const Predicate p;
@@ -408,7 +408,7 @@ TEST(PredicateTest, TagConditionsAreFalseOnEmptyTagSet) {
     EXPECT_FALSE(p.evaluate(empty, LogLevel::Warn));
 }
 
-// ── Copy semantics ────────────────────────────────────────────────────────────
+// Copy semantics.
 
 TEST(PredicateTest, CopyPreservesBehavior) {
     const Predicate p1 = tag_equals("env", "prod") && level_at_least(LogLevel::Info);
@@ -469,7 +469,7 @@ TEST(PredicateTest, PredicatesSharingNodesWorkAfterOriginalIsDestroyed) {
     EXPECT_TRUE(negated.evaluate(prod, LogLevel::Debug));
 }
 
-// ── Deep trees built in C++ ──────────────────────────────────────────────────
+// Deep trees built in C++.
 //
 // The parser limits nesting, the operators do not. Building, evaluating and
 // destroying these must neither copy the tree on each step nor recurse once
@@ -543,7 +543,7 @@ TEST(PredicateTest, DeepChainsSharingNodesCanBeDestroyedOnTwoThreadsAtOnce) {
     EXPECT_TRUE(shared.evaluate(with_k, LogLevel::Info));
 }
 
-// ── Records without a level (metrics, progress) ──────────────────────────────
+// Records without a level (metrics, progress).
 
 TEST(PredicateTest, LevelOnlyPredicatesPassRecordsWithoutLevel) {
     const TagSet<16> tags;

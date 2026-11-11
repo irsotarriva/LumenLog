@@ -69,7 +69,7 @@ static_assert(!CanInstantiate<int, 0>, "capacity zero is rejected");
 static_assert(!CanInstantiate<int, 3>, "a capacity that is not a power of two is rejected");
 static_assert(!CanInstantiate<ThrowingMove, 4>, "an element whose move may throw is rejected");
 
-// ── Single-threaded semantics ────────────────────────────────────────────────
+// Single-threaded semantics.
 
 TEST(RingBufferTest, TryPopReturnsPushedElementsInFifoOrder) {
     RingBuffer<int, 8> buffer;
@@ -210,7 +210,7 @@ TEST(RingBufferTest, CapacityOneHoldsExactlyOneElementAtATime) {
     EXPECT_EQ(buffer.rejected_count(), 100U);
 }
 
-// ── Element lifetime ─────────────────────────────────────────────────────────
+// Element lifetime.
 
 TEST(RingBufferTest, ConstructingAndDestroyingEmptyBufferCreatesNoElements) {
     const LifetimeCounts counts;
@@ -254,7 +254,7 @@ TEST(RingBufferTest, EveryElementIsDestroyedExactlyOnceIncludingUnconsumedAfterW
     EXPECT_EQ(counts.destroyed.load(), counts.constructed.load());
 }
 
-// ── Multi-producer stress ────────────────────────────────────────────────────
+// Multi-producer stress.
 
 constexpr uint64_t stress_producers = 4;
 constexpr uint64_t stress_items_per_producer = 20'000;

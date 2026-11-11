@@ -27,7 +27,7 @@ using test::tags_of;
 
 using States = std::vector<std::pair<uint64_t, uint64_t>>;
 
-// ── LUMEN_SCOPE ──────────────────────────────────────────────────────────
+// LUMEN_SCOPE.
 
 class ScopeTest : public LocalCoreTest {
 protected:
@@ -148,7 +148,7 @@ TEST(ScopeDeathTest, DestroyingAScopeGuardOnAnotherThreadAssertsInDebugBuilds) {
 }
 #endif
 
-// ── LUMEN_LOOP (it drives a progress bar on the global core) ────────────
+// LUMEN_LOOP (it drives a progress bar on the global core).
 
 class LoopTest : public GlobalCoreTest {
 protected:
