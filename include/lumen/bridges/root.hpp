@@ -1,57 +1,49 @@
 #ifndef LUMEN_BRIDGES_ROOT_HPP
 #define LUMEN_BRIDGES_ROOT_HPP
 
+// ROOT helper. Nothing here hooks TTree::Fill or any other ROOT call: the
+// function emits records only when the program calls it, typically after
+// writing a tree, or every so many entries while filling one.
+//
+//   emit_tree_summary(tree)   entries and stored size of a TTree
+//
+// An event loop needs no bridge for progress: Long64_t is an integer type, so
+//   LUMEN_LOOP("entry", i, tree.GetEntries()) { tree.GetEntry(i); ... }
+// already reports progress and tags each record with entry=<i>.
+//
+// The header is empty unless <TTree.h> can be included.
+
 #if __has_include(<TTree.h>)
 
 #include <TTree.h>
-#include <cstdint>
-#include <string>
 
-#include "lumen/lumen.hpp"
+#include <string_view>
+
+#include "lumen/core.hpp"
+#include "lumen/record_builder.hpp"
 
 namespace lumen::bridges {
 
-class RootTreeHook {
-public:
-    explicit RootTreeHook(TTree& tree)
-        : tree_(tree)
-        , tree_name_(tree.GetName())
-        , entries_at_start_(static_cast<uint64_t>(tree.GetEntries())) {}
-
-    void before_fill() {
-        fill_calls_++;
-        if (fill_calls_ % 100 == 0) {
-            lumen::metric("root.tree.entries",
-                          static_cast<double>(tree_.GetEntries()))
-                .tag("tree", tree_name_);
-        }
-    }
-
-    void after_write() {
-        lumen::metric("root.tree.bytes_written",
-                      static_cast<double>(tree_.GetTotBytes()))
-            .tag("tree", tree_name_);
-    }
-
-    void finalize() {
-        uint64_t total_entries = static_cast<uint64_t>(tree_.GetEntries()) - entries_at_start_;
-        lumen::metric("root.tree.total_entries",
-                      static_cast<double>(total_entries))
-            .tag("tree", tree_name_);
-        lumen::metric("root.tree.bytes_total",
-                      static_cast<double>(tree_.GetTotBytes()))
-            .tag("tree", tree_name_);
-    }
-
-private:
-    TTree&       tree_;
-    std::string  tree_name_;
-    uint64_t     entries_at_start_;
-    uint64_t     fill_calls_ = 0;
-};
+// Emits three metrics, each tagged tree=<tree.GetName()>:
+//   root.tree.entries             tree.GetEntries()
+//   root.tree.uncompressed_bytes  tree.GetTotBytes(), in bytes
+//   root.tree.compressed_bytes    tree.GetZipBytes(), in bytes
+// ROOT adds a basket to both byte counts when it writes the basket out, so
+// while a tree is being filled they lag behind the entry count; after
+// tree.Write() (or TTree::FlushBaskets()) on a tree attached to a file they
+// describe every entry.
+inline void emit_tree_summary(const TTree& tree, Core& core = lumen::core()) {
+    const std::string_view name = tree.GetName();
+    MetricBuilder(core, "root.tree.entries", static_cast<double>(tree.GetEntries()))
+        .tag("tree", name);
+    MetricBuilder(core, "root.tree.uncompressed_bytes", static_cast<double>(tree.GetTotBytes()))
+        .tag("tree", name);
+    MetricBuilder(core, "root.tree.compressed_bytes", static_cast<double>(tree.GetZipBytes()))
+        .tag("tree", name);
+}
 
 }  // namespace lumen::bridges
 
-#endif
+#endif  // __has_include(<TTree.h>)
 
 #endif
