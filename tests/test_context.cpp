@@ -121,7 +121,15 @@ TEST_F(ContextTest, RemovedProcessTagIsNoLongerOnRecords) {
     // that the removal has to invalidate.
     EXPECT_EQ(_tag_on_one_record("gone"), "1");
     EXPECT_TRUE(remove_process_tag("gone"));
-    EXPECT_FALSE(remove_process_tag("gone"));
+    // Checked before anything else changes the process tags, so that only
+    // the removal can have made the record current.
+    EXPECT_EQ(_tags_of_one_record(),
+              (std::vector<std::pair<std::string, std::string>>{{"kept", "2"}}));
+}
+
+TEST_F(ContextTest, RemovingAMissingProcessTagReturnsFalseAndLeavesTheOthers) {
+    ASSERT_TRUE(set_process_tag("kept", "2"));
+    EXPECT_FALSE(remove_process_tag("never_set"));
     EXPECT_EQ(_tags_of_one_record(),
               (std::vector<std::pair<std::string, std::string>>{{"kept", "2"}}));
 }

@@ -3,12 +3,15 @@
 // other than this target's are covered by test_elision.cpp.
 #include <gtest/gtest.h>
 
+#include <concepts>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <source_location>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "lumen/macros.hpp"
@@ -19,6 +22,12 @@ namespace {
 
 using test::GlobalCoreTest;
 using test::tag_of;
+
+template <typename T>
+    requires std::is_arithmetic_v<T> || std::convertible_to<T, std::string_view>
+void log_from_a_function_template(const T& value) {
+    LOG_INFO("from a function template {}", value);
+}
 
 class MacroTest : public GlobalCoreTest {
 protected:
@@ -114,14 +123,37 @@ TEST_F(MacroTest, ElseAfterAnEnabledMacroBindsToTheCallersIf) {
 }
 // NOLINTEND(readability-braces-around-statements)
 
-TEST_F(MacroTest, MacroWorksInsideALambdaAndAFunctionTemplate) {
+TEST_F(MacroTest, MacroWorksInsideALambdaAGenericLambdaAndAFunctionTemplate) {
     auto in_lambda = [] { LOG_INFO("from lambda"); };
     in_lambda();
     [](auto value) { LOG_INFO("from generic lambda {}", value); }(5);
+    log_from_a_function_template(7);
+    log_from_a_function_template(std::string("text"));
     const auto records = _logs();
-    ASSERT_EQ(records.size(), 2U);
+    ASSERT_EQ(records.size(), 4U);
     EXPECT_EQ(records[0].message, "from lambda");
     EXPECT_EQ(records[1].message, "from generic lambda 5");
+    EXPECT_EQ(records[2].message, "from a function template 7");
+    EXPECT_EQ(records[3].message, "from a function template text");
+}
+
+TEST_F(MacroTest, FormatFailureInsideTheMacroIsLoggedInsteadOfThrown) {
+    const int negative_width = -1;
+    LUMEN_LOG_WARN("width {:{}}", 5, negative_width).tag("kept", "yes");
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_TRUE(records[0].message.starts_with("formatting failed: ")) << records[0].message;
+    EXPECT_TRUE(records[0].message.ends_with("; format string: width {:{}}")) << records[0].message;
+    EXPECT_EQ(records[0].level, LogLevel::Warn);
+    EXPECT_EQ(tag_of(records[0].tags, "kept"), "yes");
+}
+
+TEST_F(MacroTest, NullCStringMessageIsLoggedAsNull) {
+    const char* const message = nullptr;
+    LUMEN_LOG_INFO(message);
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(records[0].message, "(null)");
 }
 
 TEST_F(MacroTest, RecordFromAnExitedThreadKeepsThatThreadsTags) {

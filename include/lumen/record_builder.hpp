@@ -54,8 +54,15 @@ public:
         record_.message = scratch_.store(message);
     }
 
+    // As above, for a C string; a null pointer is logged as "(null)".
+    BasicRecordBuilder(Core& core, LogLevel level, std::source_location loc, const char* message)
+        requires std::same_as<R, LogRecord>
+        : BasicRecordBuilder(core, level, loc, text_or_null_(message)) {}
+
     // A log record whose message is std::format(fmt, args...), checked at
-    // compile time and formatted into the builder's scratch buffer.
+    // compile time and formatted into the builder's scratch buffer. A
+    // formatting failure at run time does not throw: the message then says
+    // that formatting failed (see StringScratch::store_formatted).
     template <typename... Args>
         requires std::same_as<R, LogRecord> && (sizeof...(Args) > 0)
     BasicRecordBuilder(Core& core, LogLevel level, std::source_location loc,
@@ -110,6 +117,11 @@ public:
         return *this;
     }
 
+    // As above, for a C string; a null pointer is tagged as "(null)".
+    BasicRecordBuilder& tag(std::string_view key, const char* value) {
+        return tag(key, text_or_null_(value));
+    }
+
     // Any integer or floating-point type (a plain `int` would otherwise be
     // ambiguous between int64_t and double). bool has its own overload.
     template <typename T>
@@ -127,6 +139,11 @@ public:
     }
 
 private:
+    // string_view(nullptr) is undefined, so a null C string is spelled out.
+    [[nodiscard]] static constexpr std::string_view text_or_null_(const char* text) noexcept {
+        return text == nullptr ? std::string_view("(null)") : std::string_view(text);
+    }
+
     void init_log_(LogLevel level, std::source_location loc) {
         record_.level = level;
         record_.source.file = loc.file_name();

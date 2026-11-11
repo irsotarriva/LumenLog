@@ -6,7 +6,8 @@
 #include <system_error>
 
 // Ambient context: tags that Core adds to every record without the logging
-// statement naming them, in four layers below the explicit tags. When a record is submitted,
+// statement naming them, in four layers (2-5 below) under the record's own
+// explicit tags (1). When a record is submitted,
 // Core keeps the record's own (explicit) tags and then adds each layer in this
 // order, skipping keys the record already has, until the record holds
 // max_record_tags tags (lumen/limits.hpp):
@@ -30,14 +31,22 @@
 // Core (the global lumen::core() and any other) reads the same context.
 //
 // Threads. Every function here may be called from any thread. The process
-// table is guarded by a mutex; producers read it through a per-thread copy
-// that is refreshed only after a change, so logging takes no lock unless the
-// process tags changed since that thread's previous record. Thread tags are
-// visible only to records produced by the thread that set them.
+// table is guarded by a mutex; each producing thread keeps a reference to the
+// version it last read and re-reads it only after a change, so logging takes
+// no lock unless the process tags changed since that thread's previous
+// record. Thread tags are visible only to records produced by the thread that
+// set them.
 //
 // Lifetime. Keys and values are copied. The process table lives until the
-// program ends (it is never destroyed, so logging during static destruction
-// still reads it). A thread's tags are destroyed when the thread exits.
+// program ends: it is never destroyed. A thread's context (its tags and its
+// scopes) is destroyed together with the thread's thread_local objects, in an
+// order the program does not control, so a log statement can run after it:
+// in the destructor of a thread_local, or on the main thread in the
+// destructor of a static object. Such a record is submitted like any other,
+// with its explicit tags and the process tags; the thread's tags and scopes
+// are no longer added. From then on set_thread_tag() fails with
+// std::errc::operation_not_permitted, remove_thread_tag() returns false and
+// LUMEN_SCOPE adds nothing.
 
 namespace lumen {
 
@@ -54,6 +63,8 @@ namespace lumen {
 void clear_process_tags();
 
 // As set_process_tag, for the calling thread's layer (max_thread_tags keys).
+// Also fails with std::errc::operation_not_permitted once the calling
+// thread's context has been destroyed (see Lifetime above).
 [[nodiscard]] std::expected<void, std::error_code> set_thread_tag(std::string_view key,
                                                                   std::string_view value);
 

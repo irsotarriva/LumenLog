@@ -273,16 +273,17 @@ INFO  worker started app=context_layers worker=1
 INFO  inside two scopes app=context_layers worker=1 detector=none run=7
 INFO  calibrating 128 channels app=context_layers worker=1 detector=tracker run=7
 INFO  explicit tag app=context_layers worker=1 detector=none run=8
-PROGRESS event 0/2 app=context_layers worker=1 detector=none run=7 event=
+PROGRESS event 0/2 app=context_layers worker=1 detector=none run=7
 DEBUG processing event 0 app=context_layers worker=1 detector=none run=7 event=0
-PROGRESS event 1/2 app=context_layers worker=1 detector=none run=7 event=0
+PROGRESS event 1/2 app=context_layers worker=1 detector=none run=7
 DEBUG processing event 1 app=context_layers worker=1 detector=none run=7 event=1
-PROGRESS event 2/2 app=context_layers worker=1 detector=none run=7 event=1
+PROGRESS event 2/2 app=context_layers worker=1 detector=none run=7
 INFO  main thread: no worker tag, no scope app=context_layers
 ```
 
-The loop's progress records carry the loop's own scope tag with the index of
-the last body that ran (empty before the first).
+Records logged in a loop body carry `event=<index>`; the loop's own progress
+records do not, since they are sent between bodies and already hold the
+count.
 
 ### Process and thread tags
 
@@ -300,9 +301,15 @@ lumen::clear_process_tags();
 `LumenError::TagTableFull` when the key is new and the table is full (16
 process keys, 8 per thread). A thread tag is seen only by records of the
 thread that set it, and is destroyed when the thread exits. The process table
-is never destroyed, so logging during static destruction still reads it. The
-process table is guarded by a mutex; each thread reads a copy of it that is
-refreshed only after a change.
+is never destroyed. The process table is guarded by a mutex; each thread
+holds the version it last read, and re-reads it only after a change.
+
+A thread's context (its tags and scopes) is destroyed with the thread's
+`thread_local` objects, in an order the program does not control. A record
+logged after that (from a `thread_local` destructor, or on the main thread
+from the destructor of a static object) is handled like any other record,
+with its explicit tags and the process tags; its thread's tags and scopes are gone, and
+`set_thread_tag` then fails with `std::errc::operation_not_permitted`.
 
 ### Scopes
 

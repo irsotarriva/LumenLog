@@ -20,10 +20,24 @@
 //   LUMEN_LOG_INFO("energy {:.2f} GeV", energy);     // std::format, checked at compile time
 //   LUMEN_LOG_INFO("done").tag("n", 42).tag("ok", true);
 //
-// LUMEN_LOG_TRACE ... LUMEN_LOG_ERROR are expressions of type RecordBuilder
-// (lumen/record_builder.hpp: tag rules, when the record is submitted). Each
-// is one statement, safe as the body of an `if` without braces, with or
-// without `else`.
+// LUMEN_LOG_TRACE ... LUMEN_LOG_ERROR are statements, not expressions: each
+// expands to an `if constexpr` whose branch builds a RecordBuilder
+// (lumen/record_builder.hpp: tag rules, when the record is submitted), so
+// `.tag(...)` may follow the closing parenthesis and the whole is ended by
+// `;`. A log statement is safe as the body of an `if` without braces, with
+// or without `else`:
+//
+//   if (converged) LUMEN_LOG_INFO("done"); else LUMEN_LOG_WARN("not yet");
+//
+// It cannot be used where an expression is needed (an initializer, an
+// operand of `,` or `?:`, a function argument).
+//
+// Messages. A message given alone is logged verbatim; a null `const char*`
+// is logged as "(null)". A formatted message that fails at run time (a
+// dynamic width that is not a valid integer, a user formatter that throws)
+// does not throw out of the statement: the record is still sent, and its
+// message says that formatting failed, with the format string and the
+// exception's text.
 //
 // LUMEN_LOG_FATAL("...", args...) is a statement that delivers the record,
 // flushes the sinks and terminates the program (exact semantics: "Fatal" in
@@ -48,13 +62,20 @@
 // LUMEN_LOOP is a `for` loop over e = 0 .. n_epochs - 1; `e` has the type of
 // `n_epochs` (any integer type) and is const. While a body runs, records carry
 // the scope tag epoch=<e>; nested loops with different labels each add their
-// own tag. The loop drives a progress bar labelled "epoch" (ProgressHandle,
+// own tag. Nested loops with the same label follow the rule of any two scopes
+// with the same key: the inner one wins, so while the inner loop's body runs
+// the records carry the inner index, and the outer index again once the
+// inner loop has ended. Give nested loops different labels to see both.
+// The loop drives a progress bar labelled "epoch" (ProgressHandle,
 // lumen/progress.hpp) that counts completed iterations:
 //   - 0/n is sent before the first body, k/n after the k-th body completes
 //     (a `continue` completes the body), and n/n after the last;
 //   - with n == 0 (or negative), the single record 0/0 is sent;
 //   - leaving early (`break`, `return`, an exception) sends nothing more, so
 //     the last record is the number of bodies that completed.
+// The progress records are sent between bodies, so they do not carry the
+// loop's own epoch=<e> tag (they hold the count already); they do carry the
+// rest of the context, including the tag of an enclosing loop.
 // The label and the total are evaluated once. The loop variable cannot be
 // changed by the body, and `break`/`continue` refer to the LUMEN_LOOP itself.
 // What a macro cannot fix: `var` must be a plain name, and each argument
@@ -64,7 +85,11 @@
 // local objects and must be destroyed on the thread that created them, in
 // reverse order of creation, which is what block scope does. Moving a guard's
 // lifetime across threads (coroutines resumed elsewhere, tasks handed to a
-// pool) is not supported; debug builds assert on it.
+// pool) is not supported; debug builds assert on it. Release builds keep
+// memory safe and get the context wrong in a bounded way: a guard destroyed
+// on another thread leaves its tag on its own thread's records until that
+// thread leaves an enclosing scope (or exits), and a guard destroyed out of
+// order also ends the scopes created after it.
 
 #ifdef LUMEN_MIN_LEVEL
 #error \

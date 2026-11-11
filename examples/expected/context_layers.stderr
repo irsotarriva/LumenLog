@@ -2,9 +2,9 @@ INFO  worker started app=context_layers worker=1
 INFO  inside two scopes app=context_layers worker=1 detector=none run=7
 INFO  calibrating 128 channels app=context_layers worker=1 detector=tracker run=7
 INFO  explicit tag app=context_layers worker=1 detector=none run=8
-PROGRESS event 0/2 app=context_layers worker=1 detector=none run=7 event=
+PROGRESS event 0/2 app=context_layers worker=1 detector=none run=7
 DEBUG processing event 0 app=context_layers worker=1 detector=none run=7 event=0
-PROGRESS event 1/2 app=context_layers worker=1 detector=none run=7 event=0
+PROGRESS event 1/2 app=context_layers worker=1 detector=none run=7
 DEBUG processing event 1 app=context_layers worker=1 detector=none run=7 event=1
-PROGRESS event 2/2 app=context_layers worker=1 detector=none run=7 event=1
+PROGRESS event 2/2 app=context_layers worker=1 detector=none run=7
 INFO  main thread: no worker tag, no scope app=context_layers

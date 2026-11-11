@@ -600,8 +600,33 @@ TEST(PredicateTest, TagOnlyPredicatesBehaveTheSameWithOrWithoutLevel) {
     TagSet<16> tags;
     EXPECT_TRUE(tags.add("env", "prod"));
     const Predicate p = tag_equals("env", "prod") && !tag_exists("suppress");
-    EXPECT_EQ(p.evaluate(tags), p.evaluate(tags, LogLevel::Trace));
+    EXPECT_TRUE(p.evaluate(tags));
+    EXPECT_TRUE(p.evaluate(tags, LogLevel::Trace));
+    EXPECT_TRUE(p.evaluate(tags, LogLevel::Fatal));
+    EXPECT_TRUE(tags.add("suppress", ""));
+    EXPECT_FALSE(p.evaluate(tags));
+    EXPECT_FALSE(p.evaluate(tags, LogLevel::Trace));
+    EXPECT_FALSE(p.evaluate(tags, LogLevel::Fatal));
     EXPECT_FALSE(never().evaluate(tags));
+}
+
+TEST(PredicateTest, NonFiniteAndOutOfRangeTagValuesAreNotNumbers) {
+    for (const std::string_view value :
+         {"nan", "NaN", "-nan", "nan(xyz)", "inf", "-inf", "infinity", "-Infinity", "1e999"}) {
+        TagSet<16> tags;
+        EXPECT_TRUE(tags.add("k", value));
+        EXPECT_FALSE(tag_compare("k", CompareOp::NotEqual, 5.0).evaluate(tags)) << value;
+        EXPECT_FALSE(tag_compare("k", CompareOp::Equal, 5.0).evaluate(tags)) << value;
+        EXPECT_FALSE(tag_greater("k", 1e308).evaluate(tags)) << value;
+        EXPECT_FALSE(tag_less("k", -1e308).evaluate(tags)) << value;
+    }
+}
+
+TEST(PredicateTest, LargestFiniteTagValueIsStillANumber) {
+    TagSet<16> tags;
+    EXPECT_TRUE(tags.add("k", "1.7976931348623157e308"));
+    EXPECT_TRUE(tag_greater("k", 1e308).evaluate(tags));
+    EXPECT_TRUE(tag_compare("k", CompareOp::NotEqual, 5.0).evaluate(tags));
 }
 
 TEST(PredicateTest, LevelStillFiltersLogRecords) {

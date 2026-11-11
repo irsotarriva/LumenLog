@@ -81,6 +81,27 @@ TEST_F(ProgressTest, MovedFromHandleSendsNothingAndTheTargetContinuesTheSameBar)
     EXPECT_EQ(_states(), (States{{1, 3}, {2, 3}, {3, 3}}));
 }
 
+TEST_F(ProgressTest, MoveAssignmentCarriesTheLastSentStateAndTheIdOfTheSource) {
+    ProgressHandle source(_core, "source", 3);
+    source.update(1);
+    ProgressHandle target(_core, "target", 10);
+    target.update(5);
+    target = std::move(source);
+    source.update(2);  // NOLINT(bugprone-use-after-move): a moved-from handle must do nothing
+    target.update(1);  // the state the source sent last: not sent again
+    target.finish();
+    target.finish();
+    _core.flush();
+    const auto records = _captured->progress();
+    ASSERT_EQ(records.size(), 3U);
+    EXPECT_EQ(records[2].id, records[0].id);
+    EXPECT_EQ(records[2].label, "source");
+    EXPECT_EQ(_states(), (States{{1, 3}, {5, 10}, {3, 3}}));
+    EXPECT_EQ(target.current(), 3U);
+    EXPECT_EQ(target.total(), 3U);
+    EXPECT_TRUE(target.finished());
+}
+
 TEST_F(ProgressTest, TwoHandlesHaveDifferentIdsAndTheirOwnLabels) {
     ProgressHandle a(_core, "a", 1);
     ProgressHandle b(_core, std::string(40, 'b'), 1);

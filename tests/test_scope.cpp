@@ -146,6 +146,40 @@ TEST(ScopeDeathTest, DestroyingAScopeGuardOnAnotherThreadAssertsInDebugBuilds) {
         },
         "on a thread other than its own");
 }
+#else
+// What release builds do with the misuse the debug assertions report: the
+// frame is a copy held by its own thread, so it is never read after the
+// guard is freed.
+TEST_F(ScopeTest, GuardDestroyedOnAnotherThreadKeepsItsTagUntilAnEnclosingScopeEnds) {
+    {
+        LUMEN_SCOPE("enclosing", "1");
+        auto guard = std::make_unique<detail::ScopeGuard>(
+            "request", "a-value-long-enough-to-live-on-the-heap-0123456789");
+        std::thread other([&guard] { guard.reset(); });
+        other.join();
+        log_to(_core, "after the guard is gone");
+    }
+    log_to(_core, "after the enclosing scope");
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_EQ(tag_of(records[0].tags, "request"),
+              "a-value-long-enough-to-live-on-the-heap-0123456789");
+    EXPECT_EQ(tag_of(records[1].tags, "request"), std::nullopt);
+    EXPECT_EQ(tag_of(records[1].tags, "enclosing"), std::nullopt);
+}
+
+TEST_F(ScopeTest, GuardDestroyedOutOfOrderAlsoRemovesTheFramesPushedAfterIt) {
+    auto first = std::make_unique<detail::ScopeGuard>("a", "1");
+    auto second = std::make_unique<detail::ScopeGuard>("b", "2");
+    first.reset();
+    log_to(_core, "after the first guard");
+    second.reset();
+    log_to(_core, "after both");
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_TRUE(tags_of(records[0].tags).empty());
+    EXPECT_TRUE(tags_of(records[1].tags).empty());
+}
 #endif
 
 // LUMEN_LOOP (it drives a progress bar on the global core).
@@ -172,6 +206,59 @@ TEST_F(LoopTest, CompletedLoopSendsZeroThenOneProgressRecordPerCompletedIteratio
     }
     EXPECT_EQ(seen, (std::vector<int>{0, 1, 2}));
     EXPECT_EQ(_states("L"), (States{{0, 3}, {1, 3}, {2, 3}, {3, 3}}));
+}
+
+TEST_F(LoopTest, TotalOfOneRunsTheBodyOnceAndSendsZeroThenOne) {
+    int bodies = 0;
+    LUMEN_LOOP("L", i, 1) {
+        EXPECT_EQ(i, 0);
+        ++bodies;
+    }
+    EXPECT_EQ(bodies, 1);
+    EXPECT_EQ(_states("L"), (States{{0, 1}, {1, 1}}));
+}
+
+TEST_F(LoopTest, ProgressRecordsDoNotCarryTheLoopsOwnLabelTag) {
+    LUMEN_SCOPE("run", "7");
+    LUMEN_LOOP("L", i, 2) {
+        static_cast<void>(i);
+    }
+    core().flush();
+    const auto records = _captured->progress();
+    ASSERT_EQ(records.size(), 3U);
+    for (const ProgressRecord& r : records) {
+        EXPECT_EQ(tags_of(r.tags), (std::vector<std::pair<std::string, std::string>>{{"run", "7"}}))
+            << "progress " << r.current << "/" << r.total;
+    }
+}
+
+TEST_F(LoopTest, NestedLoopWithTheSameLabelHidesTheOuterIndexOnlyWhileItRuns) {
+    LUMEN_LOOP("L", outer, 2) {
+        LUMEN_LOOP("L", inner, 3) {
+            if (outer == 1 && inner == 2) {
+                LUMEN_LOG_INFO("inner body");
+            }
+        }
+        if (outer == 1) {
+            LUMEN_LOG_INFO("outer body");
+        }
+    }
+    core().flush();
+    const auto logs = _captured->logs();
+    ASSERT_EQ(logs.size(), 2U);
+    EXPECT_EQ(tag_of(logs[0].tags, "L"), "2");
+    EXPECT_EQ(tag_of(logs[1].tags, "L"), "1");
+    // The inner bar's records are sent between inner bodies, inside an
+    // outer body: they carry the outer index.
+    const auto progress = _captured->progress();
+    ASSERT_EQ(progress.size(), 3U + 2U * 4U);
+    const ProgressRecord& last_inner = progress[progress.size() - 2];
+    EXPECT_EQ(last_inner.total, 3U);
+    EXPECT_EQ(last_inner.current, 3U);
+    EXPECT_EQ(tag_of(last_inner.tags, "L"), "1");
+    const ProgressRecord& outer_done = progress.back();
+    EXPECT_EQ(outer_done.total, 2U);
+    EXPECT_EQ(tag_of(outer_done.tags, "L"), std::nullopt);
 }
 
 TEST_F(LoopTest, ProgressBeforeABodyCountsOnlyTheBodiesAlreadyCompleted) {
@@ -284,17 +371,18 @@ TEST_F(LoopTest, NestedLoopsEachKeepTheirOwnIterationTagAndBar) {
 // The missing braces are what this test is about.
 // NOLINTBEGIN(readability-braces-around-statements)
 TEST_F(LoopTest, ElseAfterALoopAsTheBodyOfAnIfBindsToThatIf) {
-    int else_taken = 0;
-    int bodies = 0;
-    const bool run = false;
-    if (run) LUMEN_LOOP("L", i, 2) {
-            static_cast<void>(i);
-            ++bodies;
-        }
-    else
-        ++else_taken;
-    EXPECT_EQ(bodies, 0);
-    EXPECT_EQ(else_taken, 1);
+    for (const bool run : {false, true}) {
+        int else_taken = 0;
+        int bodies = 0;
+        if (run) LUMEN_LOOP("L", i, 2) {
+                static_cast<void>(i);
+                ++bodies;
+            }
+        else
+            ++else_taken;
+        EXPECT_EQ(bodies, run ? 2 : 0) << "run=" << run;
+        EXPECT_EQ(else_taken, run ? 0 : 1) << "run=" << run;
+    }
 }
 // NOLINTEND(readability-braces-around-statements)
 

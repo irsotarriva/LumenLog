@@ -103,9 +103,10 @@ These hold for every predicate, built or parsed:
 2. **`!` is plain negation.** `!tag_equals("k", "v")` is true for a record
    that has no `k`. `tag_not_equals("k", "v")` is false for it (rule 1).
 3. **Numeric comparisons** parse the tag's value as a number: `70000`,
-   `-3.5` and `1e-6` are numbers; `+1`, ` 1` and `42abc` are not. A value
-   that is not entirely a number makes every numeric comparison false,
-   `NotEqual` included.
+   `-3.5` and `1e-6` are numbers; `+1`, ` 1`, `42abc`, `1e999`, `nan` and
+   `inf` are not (only finite numbers count). A value that is not entirely a
+   finite number makes every numeric comparison false, `NotEqual` included.
+   In a query, `-inf` and `-nan` are parse errors.
 4. **Text comparisons** compare bytes. `tag_equals("n", "42")` does not match
    the value `42.0`.
 5. **Duplicate keys.** If a record holds a key twice, the first entry is the

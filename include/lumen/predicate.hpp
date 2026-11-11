@@ -9,6 +9,8 @@
 #include <string_view>
 #include <system_error>
 
+#include "lumen/error.hpp"
+#include "lumen/level.hpp"
 #include "lumen/record.hpp"
 
 namespace lumen {
@@ -95,10 +97,11 @@ private:
 // True if the record has the tag, whatever its value (an empty value counts).
 [[nodiscard]] Predicate tag_exists(std::string_view key);
 
-// Numeric comparison: the tag's value is parsed as a number (e.g. "70000",
-// "-3.5", "1e-6"; not "+1", " 1" or "42abc") and compared with `value`. A
-// missing tag or a value that is not entirely a number makes every comparison
-// false, NotEqual included.
+// Numeric comparison: the tag's value is parsed as a finite number (e.g.
+// "70000", "-3.5", "1e-6"; not "+1", " 1", "42abc", "1e999", nor "nan",
+// "inf" and their variants) and compared with `value`. A missing tag or a
+// value that is not entirely a finite number makes every comparison false,
+// NotEqual included.
 [[nodiscard]] Predicate tag_compare(std::string_view key, CompareOp op, double value);
 [[nodiscard]] Predicate tag_less(std::string_view key, double value);
 [[nodiscard]] Predicate tag_less_equal(std::string_view key, double value);
@@ -138,7 +141,12 @@ private:
 //   key        := identifier | quoted string      (quote a key named e.g. "level")
 //   identifier := ASCII letter or '_', then ASCII letters, digits, '_' or '.'
 //   value      := number | quoted string | identifier
+//   number     := a finite number as tag_compare reads it, optionally after '+'
 //   LEVEL      := TRACE | DEBUG | INFO | WARN | ERROR | FATAL | 0..5
+//
+// A value that starts with a digit, '-', '+' or '.' must be a number:
+// "-inf", "-nan" and "1e999" are parse errors. `inf` and `nan` are bare
+// words, so `k == inf` compares text and `k < inf` is a parse error.
 //
 // Strings take single or double quotes; a backslash makes the next character
 // literal. Character classes are ASCII and do not depend on the C locale.

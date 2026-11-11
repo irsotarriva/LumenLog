@@ -2,6 +2,7 @@
 #define LUMEN_SRC_NUMBER_PARSE_HPP
 
 #include <charconv>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
@@ -39,13 +40,20 @@ namespace lumen::detail {
     return value;
 }
 
-// Parses `text` as a double; the whole string must be a number ("42abc", "",
-// " 1" and "+1" are not). Independent of the global locale.
+// Parses `text` as a finite double; the whole string must be a number
+// ("42abc", "", " 1" and "+1" are not). Non-finite spellings ("nan",
+// "nan(...)", "inf", "infinity", with or without '-') and values out of the
+// double range ("1e999") are not numbers either. Independent of the global
+// locale.
 [[nodiscard]] inline std::optional<double> parse_double(std::string_view text) {
     if (text.empty() || text.front() == '+' || ascii::is_space(text.front())) {
         return std::nullopt;
     }
-    return parse_whole_double(text);
+    const std::optional<double> value = parse_whole_double(text);
+    if (!value || !std::isfinite(*value)) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 }  // namespace lumen::detail

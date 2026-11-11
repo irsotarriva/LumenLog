@@ -4,6 +4,7 @@ add_executable(lumen_tests
   test_transport.cpp
   test_predicate.cpp
   test_predicate_parser.cpp
+  test_predicate_lexer.cpp
   test_core.cpp
   test_context.cpp
   test_progress.cpp
@@ -23,6 +24,8 @@ if(LUMEN_ENABLE_DASHBOARD)
 endif()
 
 target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
+# test_predicate_lexer.cpp tests an internal header of src/.
+target_include_directories(lumen_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_features(lumen_tests PRIVATE cxx_std_23)
 
 include(GoogleTest)
@@ -50,6 +53,16 @@ add_test(NAME LateLogging.StaticDestructorLogsAreCountedAfterShutdown
          COMMAND lumen_test_late_logging)
 set_tests_properties(LateLogging.StaticDestructorLogsAreCountedAfterShutdown
                      PROPERTIES TIMEOUT 60)
+
+# Logging from destructors that run after the calling thread's context was
+# destroyed, while the global core still runs. One process per mode.
+add_executable(lumen_test_teardown_logging teardown_logging.cpp)
+target_link_libraries(lumen_test_teardown_logging PRIVATE lumen)
+foreach(mode IN ITEMS static thread_local)
+  set(name "TeardownLogging.RecordsAfterTheThreadContextKeepExplicitAndProcessTags_${mode}")
+  add_test(NAME ${name} COMMAND lumen_test_teardown_logging ${mode})
+  set_tests_properties(${name} PROPERTIES TIMEOUT 60)
+endforeach()
 
 # The Json lines of a FileSink, parsed by a real JSON parser: Python's json
 # module, which every CI runner has. No JSON library is added to the build.

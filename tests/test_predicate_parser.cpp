@@ -78,6 +78,27 @@ TEST(PredicateParserTest, LevelNamesAreCaseInsensitiveAndNumericLevelsWork) {
     EXPECT_TRUE(eval("level == 4", none, LogLevel::Error));
 }
 
+TEST(PredicateParserTest, EveryLevelNameAndTheNumericBoundsZeroAndFiveSelectTheirLevel) {
+    const TagSet<16> none;
+    EXPECT_TRUE(eval("level == TRACE", none, LogLevel::Trace));
+    EXPECT_FALSE(eval("level == TRACE", none, LogLevel::Debug));
+    EXPECT_TRUE(eval("level == DEBUG", none, LogLevel::Debug));
+    EXPECT_TRUE(eval("level == FATAL", none, LogLevel::Fatal));
+    EXPECT_FALSE(eval("level == FATAL", none, LogLevel::Error));
+    EXPECT_TRUE(eval("level == 0", none, LogLevel::Trace));
+    EXPECT_FALSE(eval("level == 0", none, LogLevel::Debug));
+    EXPECT_TRUE(eval("level == 5", none, LogLevel::Fatal));
+    EXPECT_FALSE(eval("level == 5", none, LogLevel::Error));
+}
+
+TEST(PredicateParserTest, NumericLevelsOutsideZeroToFiveAreParseErrors) {
+    for (const std::string_view query : {"level == 6", "level == -1", "level == 1.5"}) {
+        const PredicateParseError err = parse_error(query);
+        EXPECT_EQ(err.code, LumenError::InvalidPredicate) << query;
+        EXPECT_EQ(err.position, 9U) << query;
+    }
+}
+
 // Tag comparisons.
 
 TEST(PredicateParserTest, NumericEqualityIgnoresSpelling) {
@@ -247,6 +268,43 @@ TEST(PredicateParserTest, ModerateNestingIsAccepted) {
     query += "true";
     query += std::string(32, ')');
     EXPECT_TRUE(eval(query, {}));
+}
+
+// `depth` levels of nesting: `nots` negations inside parentheses.
+std::string nested(std::size_t depth, std::size_t nots) {
+    const std::size_t parens = depth - nots;
+    return std::string(parens, '(') + std::string(nots, '!') + "true" + std::string(parens, ')');
+}
+
+TEST(PredicateParserTest, NestingOfSixtyThreeIsAcceptedAndSixtyFourIsRejected) {
+    EXPECT_TRUE(eval(nested(63, 0), {}));
+    EXPECT_FALSE(eval(nested(63, 63), {}));  // an odd number of negations
+    EXPECT_FALSE(eval(nested(63, 31), {}));
+    for (const std::size_t nots : {std::size_t{0}, std::size_t{32}, std::size_t{64}}) {
+        const PredicateParseError err = parse_error(nested(64, nots));
+        EXPECT_EQ(err.code, LumenError::InvalidPredicate) << nots;
+        EXPECT_NE(err.message.find("nested"), std::string::npos) << err.message;
+    }
+}
+
+TEST(PredicateParserTest, NonFiniteNumbersInAQueryAreRejectedAndBareInfComparesAsText) {
+    for (const std::string_view query : {"k < -inf", "k != -nan", "k < 1e999", "k < inf"}) {
+        const PredicateParseError err = parse_error(query);
+        EXPECT_EQ(err.code, LumenError::InvalidPredicate) << query;
+    }
+    EXPECT_TRUE(eval("k == inf", tags_of({{"k", "inf"}})));
+    EXPECT_FALSE(eval("k == inf", tags_of({{"k", "Infinity"}})));
+}
+
+TEST(PredicateParserTest, NonFiniteTagValuesFailEveryNumericComparison) {
+    for (const std::string_view value :
+         {"nan", "-nan", "nan(xyz)", "inf", "-inf", "infinity", "1e999"}) {
+        const auto tags = tags_of({{"k", value}});
+        EXPECT_FALSE(eval("k != 5", tags)) << value;
+        EXPECT_FALSE(eval("k > 1e308", tags)) << value;
+        EXPECT_FALSE(eval("k < -1e308", tags)) << value;
+        EXPECT_FALSE(eval("k == 0", tags)) << value;
+    }
 }
 
 // Independence from the C locale.

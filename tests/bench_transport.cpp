@@ -38,11 +38,6 @@ struct Payload {
 using Buffer = lumen::RingBuffer<Payload, lumen::log_queue_capacity>;
 using Clock = std::chrono::steady_clock;
 
-enum class PushMode : uint8_t {
-    TryPush,       // drop when full, as the logging front end does
-    PushBlocking,  // wait for room
-};
-
 struct RunResult {
     uint64_t offered = 0;
     uint64_t accepted = 0;
@@ -52,13 +47,12 @@ struct RunResult {
     double total_seconds = 0;     // until the consumer had popped everything
 };
 
-[[nodiscard]] uint64_t produce(Buffer& buffer, PushMode mode, uint64_t count) {
+// Offers `count` elements with try_push, which drops when the buffer is
+// full, as the logging front end does.
+[[nodiscard]] uint64_t produce(Buffer& buffer, uint64_t count) {
     uint64_t accepted = 0;
     for (uint64_t i = 0; i < count; ++i) {
-        if (mode == PushMode::PushBlocking) {
-            buffer.push_blocking(Payload{.value = i});
-            ++accepted;
-        } else if (buffer.try_push(Payload{.value = i})) {
+        if (buffer.try_push(Payload{.value = i})) {
             ++accepted;
         }
     }
@@ -82,7 +76,7 @@ struct RunResult {
     }
 }
 
-[[nodiscard]] RunResult run(PushMode mode, uint32_t producers, uint64_t per_producer) {
+[[nodiscard]] RunResult run(uint32_t producers, uint64_t per_producer) {
     // A new buffer per run, so that every run first-touches its slots.
     Buffer buffer;
     std::atomic<bool> start{false};
@@ -96,7 +90,7 @@ struct RunResult {
             while (!start.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }
-            accepted.fetch_add(produce(buffer, mode, per_producer), std::memory_order_relaxed);
+            accepted.fetch_add(produce(buffer, per_producer), std::memory_order_relaxed);
             const Clock::time_point now = Clock::now();
             if (finished.fetch_add(1, std::memory_order_release) + 1 == producers) {
                 producers_end = now;
@@ -124,10 +118,6 @@ struct RunResult {
     };
 }
 
-[[nodiscard]] std::string_view name(PushMode mode) {
-    return mode == PushMode::TryPush ? "try_push" : "push_blocking";
-}
-
 }  // namespace
 
 int main() {
@@ -137,20 +127,18 @@ int main() {
     constexpr uint64_t total_per_run = 2'000'000;
     std::cout << std::format("element size {} B, capacity {}, {} elements offered per run\n",
                              sizeof(Payload), Buffer::capacity(), total_per_run);
-    std::cout << std::format("{:<14}{:>4}{:>11}{:>11}{:>11}{:>16}{:>16}\n", "mode", "P", "accepted",
-                             "rejected", "delivered", "accepted/s", "delivered/s");
+    std::cout << std::format("{:>4}{:>11}{:>11}{:>11}{:>16}{:>16}\n", "P", "accepted", "rejected",
+                             "delivered", "accepted/s", "delivered/s");
 
     bool consistent = true;
-    for (const PushMode mode : {PushMode::TryPush, PushMode::PushBlocking}) {
-        for (const uint32_t producers : {1U, 2U, 4U, 8U}) {
-            const RunResult r = run(mode, producers, total_per_run / producers);
-            consistent =
-                consistent && r.delivered == r.accepted && r.accepted + r.rejected == r.offered;
-            std::cout << std::format("{:<14}{:>4}{:>11}{:>11}{:>11}{:>16.0f}{:>16.0f}\n",
-                                     name(mode), producers, r.accepted, r.rejected, r.delivered,
-                                     static_cast<double>(r.accepted) / r.producer_seconds,
-                                     static_cast<double>(r.delivered) / r.total_seconds);
-        }
+    for (const uint32_t producers : {1U, 2U, 4U, 8U}) {
+        const RunResult r = run(producers, total_per_run / producers);
+        consistent =
+            consistent && r.delivered == r.accepted && r.accepted + r.rejected == r.offered;
+        std::cout << std::format("{:>4}{:>11}{:>11}{:>11}{:>16.0f}{:>16.0f}\n", producers,
+                                 r.accepted, r.rejected, r.delivered,
+                                 static_cast<double>(r.accepted) / r.producer_seconds,
+                                 static_cast<double>(r.delivered) / r.total_seconds);
     }
     if (!consistent) {
         std::cout << "error: delivered != accepted or accepted + rejected != offered\n";

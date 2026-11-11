@@ -5,8 +5,8 @@
 
 #include "lumen/config.hpp"
 
-// Every fixed capacity in Lumen. Nothing allocates beyond these, so nothing
-// grows without bound; what does not fit is refused and reported:
+// Every fixed capacity in Lumen: how many tags and queued records there can
+// be. What does not fit is refused and reported:
 //
 //   limit               refused by                  reported as
 //   max_record_tags     .tag() on a builder;        Core::statistics().tags_dropped
@@ -19,6 +19,12 @@
 // Scopes (LUMEN_SCOPE, LUMEN_LOOP) have no limit of their own: each one adds
 // one tag, at any nesting depth, and only max_record_tags bounds how many of
 // them reach a record.
+//
+// Not bounded here: the length of a message, tag key or tag value (each is
+// copied whole, so one long string costs memory in proportion to its
+// length), the nesting depth of scopes, and the number of sinks registered
+// with a Core. The shipped sinks bound their own line queues
+// (lumen/writer_statistics.hpp).
 
 namespace lumen {
 

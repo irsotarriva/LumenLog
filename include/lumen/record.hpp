@@ -13,12 +13,14 @@
 //
 // Ownership. A record that reaches a sink owns its strings: the message (or
 // name, or label) and every tag key and value point into `storage`, one
-// immutable NUL-terminated block allocated when the record was submitted and
-// shared by every copy of the record. A sink may copy a record and keep it;
-// the views stay valid as long as any copy is alive. The strings in `source`
-// usually come from std::source_location, live for the whole program and are
-// not copied; a source given as text (a call site in another language, see
-// BasicRecordBuilder) is copied into `storage` too.
+// immutable block allocated when the record was submitted and shared by
+// every copy of the record. Each of these strings is followed by a NUL in the
+// block, so `view.data()` may be passed where a C string is expected. A sink
+// may copy a record and keep it; the views stay valid as long as any copy is
+// alive. The strings in `source` usually come from std::source_location, live
+// for the whole program and are not copied; a source given as text (a call
+// site in another language, see BasicRecordBuilder) is copied into `storage`
+// too.
 //
 // Completeness. Records are only created by Core's producers (the builders
 // in lumen/record_builder.hpp and ProgressHandle in lumen/progress.hpp). Each
@@ -37,10 +39,8 @@ struct SourceLocation {
     uint32_t line{};
 };
 
-namespace detail {
 // The array form of shared_ptr: one block for all of a record's strings.
 using RecordStorage = std::shared_ptr<const char[]>;  // NOLINT(*-avoid-c-arrays)
-}  // namespace detail
 
 struct LogRecord {
     LogLevel level{};
@@ -49,7 +49,7 @@ struct LogRecord {
     uint64_t timestamp_ns{};  // lumen::now_ns() at submission
     uint32_t thread_id{};     // lumen::this_thread_id() of the producer
     SourceLocation source{};
-    detail::RecordStorage storage;
+    RecordStorage storage;
 };
 
 struct MetricRecord {
@@ -58,7 +58,7 @@ struct MetricRecord {
     RecordTags tags{};
     uint64_t timestamp_ns{};
     uint32_t thread_id{};
-    detail::RecordStorage storage;
+    RecordStorage storage;
 };
 
 // One state of a progress bar. `current` counts completed units of work out
@@ -72,7 +72,7 @@ struct ProgressRecord {
     RecordTags tags{};
     uint64_t timestamp_ns{};
     uint32_t thread_id{};
-    detail::RecordStorage storage;
+    RecordStorage storage;
 };
 
 }  // namespace lumen

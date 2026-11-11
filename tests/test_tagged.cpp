@@ -89,6 +89,16 @@ TEST_F(TaggedTest, TaggingAKeyAgainReplacesItsValue) {
     EXPECT_EQ(pairs_of(d), (Pairs{{"detector", "new"}}));
 }
 
+TEST_F(TaggedTest, AnObjectHoldsEightKeysAndRefusesTheNinth) {
+    // The number documented in docs/usage.md, not the constant.
+    Detector d;
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_TRUE(d.lumen_tag("k" + std::to_string(i), "v")) << i;
+    }
+    EXPECT_FALSE(d.lumen_tag("k8", "v").has_value());
+    EXPECT_EQ(d.lumen_tags().size(), 8U);
+}
+
 TEST_F(TaggedTest, TagPastTheInstanceLimitFailsWithTagTableFullAndChangesNothing) {
     Detector d;
     for (std::size_t i = 0; i < max_instance_tags; ++i) {
