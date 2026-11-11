@@ -19,9 +19,12 @@ PYBIND11_MODULE(lumen_bindings, m) {
         "Errors are raised as LumenError subclasses: InvalidSinkIdError (also a LookupError), "
         "SinkBusyError, TagTableFullError, InvalidPredicateError and InvalidSinkConfigError "
         "(both also ValueErrors) and FileOpenError (also an OSError); an operating-system "
-        "error as OSError. Wrong argument types raise TypeError.\n\n"
-        "At interpreter exit the module delivers what is queued to Python sinks, then detaches "
-        "them; sinks written in C++ keep receiving records until the process ends.";
+        "error as OSError. A wrong argument type, or an int its parameter cannot hold, raises "
+        "TypeError; a tag value int outside int64 and uint64 raises OverflowError.\n\n"
+        "At interpreter exit the module stops taking records from Python, delivers what is "
+        "queued to Python sinks for at most one second, then detaches them, and reports what "
+        "they did not receive; sinks written in C++ receive every record until the process "
+        "ends.";
 
     lumen::python::register_errors(m);
     lumen::python::register_records(m);

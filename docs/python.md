@@ -103,7 +103,7 @@ METRIC loss=0.25 {'epoch': '3', 'app': 'python_example'}
 PROGRESS files 1/2
 PROGRESS files 2/2
 ERROR bad filter: invalid predicate at offset 9: expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL) [app=python_example] in main()
-INFO epoch done [epoch=3 logger=trainer app=python_example] in main()
+INFO epoch done [logger=trainer epoch=3 app=python_example] in main()
 ```
 
 On standard error (the `TerminalSink`, warnings and above):
@@ -133,13 +133,17 @@ ERROR bad filter: invalid predicate at offset 9: expected a level (TRACE, DEBUG,
   as text exactly as C++ `.tag()` writes them, so a predicate sees the same
   text whichever language logged the record. Another value type raises
   `TypeError`; an `int` outside both the int64 and the uint64 range raises
-  `OverflowError`.
+  `OverflowError`. The whole dict is read and checked before the record is
+  built, so a call that raises logs nothing. Reading an `__index__` value
+  runs Python code; a dict that this code changes raises `RuntimeError`, as
+  iterating over it in Python would.
 - **Source.** A log record carries the calling Python file, line and
   qualified function name. `class_name` is the part of the qualified name
   before the function's own (`Trainer.step` gives `Trainer`), and empty for a
   function nested in a function. `set_source_capture(False)` turns this off
   (`source_capture()` reads it); `log(..., source=(file, line, function))`
-  records a given location instead.
+  records a given location instead: two `str` and an `int` from 0 to
+  2<sup>32</sup> − 1.
 - **Level threshold.** The C++ compile-time threshold does not apply: every
   Python log call produces a record. Filter with predicates.
 
@@ -253,8 +257,19 @@ Library errors are raised as subclasses of `lumen.LumenError` (itself a
 `RuntimeError`): `InvalidSinkIdError` (also a `LookupError`),
 `SinkBusyError`, `TagTableFullError`, `InvalidPredicateError` and
 `InvalidSinkConfigError` (both also `ValueError`), `FileOpenError` (also an
-`OSError`). An operating-system error is raised as `OSError`; a wrong
-argument type as `TypeError`.
+`OSError`). An operating-system error is raised as `OSError`.
+
+Arguments, for every function and method of the module:
+
+| The argument | Raises |
+|---|---|
+| has the wrong type | `TypeError` |
+| is an `int` that its parameter cannot hold (a negative count or id, a source line of 2<sup>32</sup>, a float parameter given 2<sup>2000</sup>) | `TypeError`: no overload accepts it |
+| is a tag value that is an `int` outside both int64 and uint64 | `OverflowError` |
+| has the right type but a value the call does not take (`log()` with `FATAL`, a query that does not parse, a sink configuration out of range, more tags than a record holds for `Predicate.evaluate`, entering a `Scope` that is entered) | `ValueError`, or the library error that is one |
+| is a tags dict changed by Python code while it is read | `RuntimeError` |
+
+`tests/python/test_errors.py` checks each entry point against this table.
 
 ## Threads and the GIL
 
@@ -268,20 +283,50 @@ argument type as `TypeError`.
 - `Core.flush()` releases the GIL while it delivers, so Python sinks can run
   meanwhile. `add_sink` for a C++ sink and `remove_sink` release it too.
 - `fatal()` releases the GIL before it delivers, so Python sinks receive the
-  fatal record.
+  fatal record. Called from a Python sink's own method, it delivers to every
+  other sink and terminates; the sink that called it does not receive the
+  record (lumen/record_builder.hpp, "Fatal").
 
 ## Exit
 
 The global Core outlives the interpreter (it shuts down at C++ static
 destruction). At import the module registers an `atexit` function that runs
 while the interpreter is still whole, after every `atexit` function the
-program registers later. It refuses new Python sinks (`add_sink` raises
-`RuntimeError`), delivers everything queued so far, removes and destroys the
-Python sinks, puts back the default diagnostic handler if Python had
-replaced it, and from then on no library thread calls into Python. Sinks
-written in C++ keep receiving records until the process ends. This also
-covers an unhandled exception and `sys.exit()`. `os._exit()` and a fatal
-signal skip it, and C++ static destruction too.
+program registers later. Its waits are bounded, so exit takes at most about
+two seconds longer than it would without the module:
+
+1. It refuses new Python sinks (`add_sink` raises `RuntimeError`) and new
+   records from Python: from then on `log()`, `info()`, `metric()`,
+   `Progress.update()` and the others still check their arguments, then
+   drop the record and count it.
+2. It delivers the records queued so far, for at most one second. After
+   that, Python sinks receive nothing more; each record one of them does not
+   receive is counted. Sinks written in C++ receive every record.
+3. It waits, for at most one more second, until no Python sink callback is
+   running, then removes and destroys the Python sinks and puts back the
+   default diagnostic handler if Python had replaced it. From then on no
+   library thread calls into Python. Sinks written in C++ keep receiving
+   records until the process ends.
+
+A Ctrl-C during these waits ends the wait it arrives in. What was not
+delivered is reported once, at the end of interpreter finalisation, through
+the diagnostic handler (on stderr; not at all after
+`set_diagnostic_handler(None)`): how many records were dropped in step 1, and
+how many Python sinks did not receive from step 2 on. If a sink written in
+C++ is so slow that the delivery has not finished at the end of step 3, it
+goes on, but the Python sinks are removed without the records it has not
+reached; the report says so, without a number. Nothing is reported when
+nothing was lost.
+
+A Python sink or diagnostic handler that is still running at the end of
+step 3 (one that blocks) would make the library's shutdown wait forever.
+Then the Python sinks are left registered, the report says so, and the
+process ends at the end of finalisation with exit status 1, without C++
+static destruction.
+
+All of this also covers an unhandled exception and `sys.exit()`.
+`os._exit()` and a fatal signal skip it, and C++ static destruction too.
+The details are in `python/interpreter_exit.hpp`.
 
 `fatal()` terminates the process with `std::terminate()` (SIGABRT) after
 delivering and flushing: `finally` blocks and `atexit` functions do not run.
@@ -300,9 +345,17 @@ forwards each `logging.LogRecord` as one Lumen log record:
   whose level is not one of those four standard levels also gets the tag
   `logging.level` with its level name;
 - source: the record's `pathname`, `lineno` and `funcName`;
-- tags: `logger` with the logger's name, and every `extra` field; values that
-  are not `str`, `bool`, `int` or `float` are passed as `str(value)`. Tags
-  beyond 16 are dropped and counted (`tags_dropped`).
+- tags, in this order: `logger` with the logger's name, `logging.level`
+  (above), then every `extra` field in the order given. A `str`, `bool` or
+  `float` is passed as it is, and an `int` too if it fits in int64 or uint64;
+  anything else, a larger `int` included, as `str(value)`. An `extra` field
+  named `logger` or `logging.level` (the handler's own tags, also on a
+  record without a `logging.level` tag), or named like an earlier tag, is
+  passed with `extra.` put in front of its name (as often as it takes to be
+  new), so `extra={"logger": ...}` becomes the tag `extra.logger`. Tags
+  beyond 16 are dropped and counted
+  (`tags_dropped`); the handler's own tags come first, so they are kept.
+  `lumen_tags(record)` returns the tags a record is forwarded with.
 
 An error while forwarding goes to `logging`'s own `handleError()`.
 

@@ -4,7 +4,7 @@ import inspect
 import logging
 import unittest
 
-from logging_handler import LumenHandler, lumen_level
+from logging_handler import LumenHandler, lumen_level, lumen_tags
 from support import LumenTestCase, lumen
 
 
@@ -71,16 +71,59 @@ class LumenHandlerTest(LumenTestCase):
         self.assertTrue(message.startswith("failed\nTraceback"), message)
         self.assertIn("ValueError: bad input", message)
 
-    def test_a_failure_to_forward_goes_to_handle_error(self):
+    def test_a_record_with_ints_outside_64_bits_is_forwarded_with_their_decimal_text(self):
+        self.logger.info("ranges", extra={"huge": 2**70, "below": -(2**63) - 1,
+                                          "lowest": -(2**63), "highest": 2**64 - 1})
+        self.assertEqual(self.only_log().tags,
+                         {"logger": "lumen.test.handler", "huge": str(2**70),
+                          "below": str(-(2**63) - 1), "lowest": str(-(2**63)),
+                          "highest": str(2**64 - 1)})
+
+    def test_lumen_tags_passes_ints_within_int64_or_uint64_as_ints_and_others_as_str(self):
+        record = logging.LogRecord("n", logging.INFO, "p", 1, "m", None, None)
+        record.__dict__.update({"huge": 2**70, "below": -(2**63) - 1,
+                                "lowest": -(2**63), "highest": 2**64 - 1, "flag": True})
+        self.assertEqual(lumen_tags(record),
+                         {"logger": "n", "huge": str(2**70), "below": str(-(2**63) - 1),
+                          "lowest": -(2**63), "highest": 2**64 - 1, "flag": True})
+        self.assertIs(type(lumen_tags(record)["lowest"]), int)
+
+    def test_logger_tag_is_kept_and_later_extra_fields_dropped_past_the_record_limit(self):
+        dropped_before = lumen.core().statistics().tags_dropped
+        self.logger.info("many", extra={f"k{i}": i for i in range(20)})
+        tags = self.only_log().tags
+        self.assertEqual(tags, {"logger": "lumen.test.handler",
+                                **{f"k{i}": str(i) for i in range(15)}})
+        self.assertEqual(lumen.core().statistics().tags_dropped - dropped_before, 5)
+
+    def test_extra_fields_named_like_the_handlers_tags_are_renamed_not_overwritten(self):
+        self.logger.critical("clash", extra={"logger": "other", "logging.level": "custom",
+                                             "extra.logger": "taken"})
+        self.assertEqual(self.only_log().tags,
+                         {"logger": "lumen.test.handler", "logging.level": "CRITICAL",
+                          "extra.logger": "other", "extra.logging.level": "custom",
+                          "extra.extra.logger": "taken"})
+
+    def test_extra_field_named_logging_level_is_renamed_on_a_record_without_that_tag(self):
+        self.logger.info("no clash", extra={"logging.level": "custom"})
+        self.assertEqual(self.only_log().tags,
+                         {"logger": "lumen.test.handler", "extra.logging.level": "custom"})
+
+    def test_a_failure_to_forward_goes_to_handle_error_and_logs_nothing(self):
+        class FailingFormatter(logging.Formatter):
+            def format(self, record):
+                raise ValueError("cannot format")
+
         handled = []
         handler = LumenHandler()
+        handler.setFormatter(FailingFormatter())
         handler.handleError = handled.append
         logger = logging.getLogger("lumen.test.handler.failing")
         logger.propagate = False
         logger.addHandler(handler)
         self.addCleanup(logger.removeHandler, handler)
-        logger.warning("too big", extra={"huge": 2**70})
-        self.assertEqual(len(handled), 1)
+        logger.warning("unformattable")
+        self.assertEqual([r.getMessage() for r in handled], ["unformattable"])
         self.assertEqual(self.flushed_logs(), [])
 
 

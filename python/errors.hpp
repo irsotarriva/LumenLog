@@ -3,6 +3,7 @@
 
 #include <pybind11/pybind11.h>
 
+#include <concepts>
 #include <expected>
 #include <string_view>
 #include <system_error>
@@ -25,15 +26,15 @@ namespace lumen::python {
 [[noreturn]] void raise_error(std::error_code code, std::string_view context);
 
 // The value, or the Python exception for the error.
-template <typename T>
-[[nodiscard]] T value_or_raise(std::expected<T, std::error_code>&& result) {
+template <std::move_constructible T>
+[[nodiscard]] T value_or_raise(std::expected<T, std::error_code> result) {
     if (!result) {
         raise_error(result.error());
     }
     return std::move(*result);
 }
 
-inline void value_or_raise(std::expected<void, std::error_code>&& result) {
+inline void value_or_raise(const std::expected<void, std::error_code>& result) {
     if (!result) {
         raise_error(result.error());
     }

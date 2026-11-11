@@ -139,5 +139,6 @@ touches destroyed memory. The process context is never destroyed either.
 
 The Python module has to detach its sinks earlier, while the interpreter is
 still running: an `atexit` function (`python/interpreter_exit.cpp`) delivers
-what is queued, removes the Python sinks, restores the default diagnostic
-handler and closes a gate that every later call into Python checks.
+what is queued (to Python sinks for at most one second, see
+[Python](python.md#exit)), removes the Python sinks, restores the default
+diagnostic handler and closes a gate that every later call into Python checks.

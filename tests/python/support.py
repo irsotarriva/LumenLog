@@ -94,17 +94,24 @@ class LumenTestCase(unittest.TestCase):
         lumen.core().reset_diagnostic_handler()
 
 
+def child_command(script):
+    """The command and environment of a new interpreter that runs `script`
+    and can import the module."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    return [sys.executable, "-c", textwrap.dedent(script)], env
+
+
 def run_child(test, script, timeout=120):
     """Runs `script` in a new interpreter that can import the module.
 
     Returns the CompletedProcess. A child that does not finish within
     `timeout` seconds fails `test` (a hang must not hang the suite).
     """
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    command, env = child_command(script)
     try:
         return subprocess.run(
-            [sys.executable, "-c", textwrap.dedent(script)],
+            command,
             env=env,
             capture_output=True,
             text=True,

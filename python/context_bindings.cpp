@@ -11,7 +11,6 @@
 #include "errors.hpp"
 #include "lumen/context.hpp"
 #include "lumen/detail/scope_stack.hpp"
-#include "lumen/detail/string_scratch.hpp"
 #include "registration.hpp"
 #include "tag_values.hpp"
 
@@ -111,16 +110,14 @@ private:
 };
 
 [[nodiscard]] std::string value_text(py::handle value) {
-    detail::StringScratch scratch;
-    return std::string(tag_text(tag_value(value), scratch));
+    return tag_text(tag_value(value));
 }
 
 using SetTag = std::expected<void, std::error_code> (*)(std::string_view, std::string_view);
 
 [[nodiscard]] auto setter(SetTag set) {
     return [set](std::string_view key, py::handle value) {
-        detail::StringScratch scratch;
-        value_or_raise(set(key, tag_text(tag_value(value), scratch)));
+        value_or_raise(set(key, value_text(value)));
     };
 }
 

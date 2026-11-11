@@ -1,7 +1,9 @@
 """Producers: the log functions, log(), fatal(), metric() and progress()."""
 
 import inspect
+import os
 import signal
+import tempfile
 import unittest
 
 from support import LumenTestCase, lumen, run_child
@@ -15,6 +17,28 @@ class _Index:
 
     def __index__(self):
         return self.value
+
+
+class _Clearing:
+    """A tag value whose __index__ empties the dict it is in."""
+
+    def __init__(self, tags):
+        self.tags = tags
+
+    def __index__(self):
+        self.tags.clear()
+        return 1
+
+
+class _Growing:
+    """A tag value whose __index__ adds an entry to the dict it is in."""
+
+    def __init__(self, tags):
+        self.tags = tags
+
+    def __index__(self):
+        self.tags["added"] = 2
+        return 1
 
 
 class LevelFunctionTest(LumenTestCase):
@@ -117,6 +141,28 @@ class TagArgumentTest(LumenTestCase):
         with self.assertRaises(TypeError):
             lumen.info("bad", tags=[("k", "v")])
 
+    def test_dict_emptied_by_a_tag_values_index_raises_runtime_error_and_logs_nothing(self):
+        # The entries read before the value are freed by its __index__ unless
+        # the module holds references to them. Built at run time, so that the
+        # dict holds the only reference to them.
+        tags = {"".join(["key_", "a" * 40]): "".join(["value_", "b" * 40])}
+        tags["clearing"] = _Clearing(tags)
+        with self.assertRaisesRegex(RuntimeError, "changed while it was read"):
+            lumen.info("mutated", tags=tags)
+        tags = {"".join(["key_", "a" * 40]): "".join(["value_", "b" * 40])}
+        tags["clearing"] = _Clearing(tags)
+        with self.assertRaisesRegex(RuntimeError, "changed while it was read"):
+            lumen.metric("mutated", 1.0, tags=tags)
+        lumen.core().flush()
+        self.assertEqual((self.capture.logs, self.capture.metrics), ([], []))
+
+    def test_tag_value_whose_index_adds_an_entry_raises_runtime_error(self):
+        tags = {"first": 1}
+        tags["growing"] = _Growing(tags)
+        with self.assertRaisesRegex(RuntimeError, "changed while it was read"):
+            lumen.info("mutated", tags=tags)
+        self.assertEqual(self.flushed_logs(), [])
+
     def test_tags_are_keyword_only(self):
         with self.assertRaises(TypeError):
             lumen.info("bad", {"k": "v"})
@@ -205,6 +251,56 @@ class FatalTest(unittest.TestCase):
         self.assertEqual(result.returncode, -signal.SIGABRT, result.stderr)
         self.assertEqual(result.stdout.splitlines(),
                          ["INFO before {}", "FATAL the end {'code': '7'}"])
+
+    def test_fatal_while_the_dispatch_thread_waits_for_the_gil_delivers_everything_and_aborts(self):
+        # The dispatch thread holds the Core's delivery lock while it waits
+        # for the GIL to call the sink; fatal() needs that lock, so it must
+        # not keep the GIL while it waits, or neither thread can go on.
+        result = run_child(self, """
+            import lumen_bindings as lumen
+            def on_log(record):
+                print(record.message, flush=True)
+            lumen.core().add_sink(lumen.CallbackSink(on_log=on_log))
+            for i in range(1000):
+                lumen.info(f"record {i}")
+            lumen.fatal("the end")
+        """, timeout=60)
+        self.assertEqual(result.returncode, -signal.SIGABRT, result.stderr)
+        self.assertEqual(result.stdout.splitlines(),
+                         [f"record {i}" for i in range(1000)] + ["the end"])
+
+    def test_fatal_from_a_python_sink_callback_aborts_and_every_other_sink_receives_it(self):
+        # fatal() runs on the dispatch thread here, inside a callback, with
+        # the GIL. The expected lines follow lumen/record_builder.hpp
+        # ("Fatal"): the sink whose callback is running is skipped, and the
+        # pass that was delivering "trigger" does not go on to the other
+        # sinks; a change to that rule in the Core changes these lines.
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "fatal.log")
+            result = run_child(self, """
+                import lumen_bindings as lumen
+                def calling(record):
+                    print(f"calling: {record.level.name} {record.message}", flush=True)
+                    if record.message == "trigger":
+                        lumen.fatal("from a sink")
+                def other(record):
+                    print(f"other: {record.level.name} {record.message}", flush=True)
+                lumen.core().add_sink(lumen.CallbackSink(on_log=calling))
+                lumen.core().add_sink(lumen.CallbackSink(on_log=other))
+                config = lumen.FileConfig(PATH, format=lumen.FileFormat.KeyValue)
+                lumen.core().add_sink(lumen.FileSink(config))
+                lumen.info("trigger")
+                lumen.core().flush()
+                print("not reached", flush=True)
+            """.replace("PATH", repr(path)), timeout=60)
+            with open(path, encoding="utf-8") as f:
+                written = f.read().splitlines()
+        self.assertEqual(result.returncode, -signal.SIGABRT, result.stderr)
+        self.assertEqual(result.stdout.splitlines(),
+                         ["calling: INFO trigger", "other: FATAL from a sink"])
+        self.assertEqual(len(written), 1, written)
+        self.assertIn('msg="from a sink"', written[0])
+        self.assertIn("level=FATAL", written[0])
 
 
 if __name__ == "__main__":

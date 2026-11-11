@@ -2,6 +2,7 @@
 
 #include <pybind11/pybind11.h>
 
+#include <concepts>
 #include <string>
 #include <utility>
 
@@ -15,9 +16,13 @@ namespace py = pybind11;
 namespace lumen::python {
 namespace {
 
+template <typename R>
+concept SinkRecord =
+    std::same_as<R, LogRecord> || std::same_as<R, MetricRecord> || std::same_as<R, ProgressRecord>;
+
 // Records are passed to Python as copies. A copy shares the record's string
 // storage, so a sink may keep it after the callback returns.
-template <typename R>
+template <SinkRecord R>
 [[nodiscard]] py::object record_copy(const R& record) {
     return py::cast(record, py::return_value_policy::copy);
 }
@@ -32,17 +37,19 @@ public:
         call_override_("on_progress", record);
     }
     void flush() override {
-        _call_python([this] {
+        // A flush that is refused (the interpreter is exiting) has nothing to
+        // report: no record is lost by it.
+        static_cast<void>(_call_python([this] {
             if (const py::function f = py::get_override(static_cast<const Sink*>(this), "flush")) {
                 f();
             }
-        });
+        }));
     }
 
 private:
-    template <typename R>
+    template <SinkRecord R>
     void call_override_(const char* name, const R& record) {
-        _call_python([this, name, &record] {
+        _deliver([this, name, &record] {
             if (const py::function f = py::get_override(static_cast<const Sink*>(this), name)) {
                 f(record_copy(record));
             }
@@ -64,19 +71,22 @@ public:
     // (released without a reference count change), since touching them would
     // abort.
     ~CallbackSink() override {
-        const PythonCall admission;
+        const PythonCall admission(PythonCallKind::Other);
         if (!admission.admitted()) {
-            static_cast<void>(on_log_.release());
-            static_cast<void>(on_metric_.release());
-            static_cast<void>(on_progress_.release());
-            static_cast<void>(flush_.release());
+            abandon_callables_();
             return;
         }
-        const py::gil_scoped_acquire gil;
-        on_log_ = py::object();
-        on_metric_ = py::object();
-        on_progress_ = py::object();
-        flush_ = py::object();
+        try {
+            const py::gil_scoped_acquire gil;
+            on_log_ = py::object();
+            on_metric_ = py::object();
+            on_progress_ = py::object();
+            flush_ = py::object();
+        } catch (...) {
+            // pybind11 throws when it cannot take the GIL; the callables are
+            // then left alone, as after exit.
+            abandon_callables_();
+        }
     }
 
     CallbackSink(const CallbackSink&) = delete;
@@ -89,11 +99,19 @@ public:
     void on_progress(const ProgressRecord& record) override { call_(on_progress_, record); }
     void flush() override {
         if (flush_) {
-            _call_python([this] { flush_(); });
+            // A refused flush loses no record, so it is not counted.
+            static_cast<void>(_call_python([this] { flush_(); }));
         }
     }
 
 private:
+    void abandon_callables_() noexcept {
+        static_cast<void>(on_log_.release());
+        static_cast<void>(on_metric_.release());
+        static_cast<void>(on_progress_.release());
+        static_cast<void>(flush_.release());
+    }
+
     // None becomes an empty object, so a callback that is not set costs no GIL.
     [[nodiscard]] static py::object checked_(py::object callable, const char* name) {
         if (callable.is_none()) {
@@ -105,10 +123,10 @@ private:
         return callable;
     }
 
-    template <typename R>
+    template <SinkRecord R>
     void call_(const py::object& callable, const R& record) {
         if (callable) {
-            _call_python([&callable, &record] { callable(record_copy(record)); });
+            _deliver([&callable, &record] { callable(record_copy(record)); });
         }
     }
 

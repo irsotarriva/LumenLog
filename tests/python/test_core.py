@@ -152,6 +152,16 @@ class PredicateTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             lumen.always().evaluate({f"k{i}": i for i in range(17)})
 
+    def test_tags_dict_emptied_by_a_values_index_raises_runtime_error(self):
+        class Clearing:
+            def __index__(self):
+                tags.clear()
+                return 1
+
+        tags = {"".join(["key_", "a" * 40]): "".join(["value_", "b" * 40]), "n": Clearing()}
+        with self.assertRaisesRegex(RuntimeError, "changed while it was read"):
+            lumen.tag_exists("n").evaluate(tags)
+
 
 if __name__ == "__main__":
     unittest.main()

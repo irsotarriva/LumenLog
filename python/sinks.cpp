@@ -110,7 +110,7 @@ void register_configs(py::module_& m) {
 }
 
 [[nodiscard]] std::unique_ptr<FileSink> create_file_sink(FileSink::Config config) {
-    std::string path = config.path.string();
+    const std::string path = config.path.string();
     auto created = FileSink::create(std::move(config));
     if (!created) {
         raise_error(created.error(), path);
