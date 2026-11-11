@@ -1,9 +1,12 @@
 add_executable(lumen_tests
   test_record.cpp
+  test_record_builder.cpp
   test_transport.cpp
   test_predicate.cpp
   test_predicate_parser.cpp
-  test_dispatch.cpp
+  test_core.cpp
+  test_context.cpp
+  test_progress.cpp
   test_macros.cpp
   test_scope.cpp
   test_tagged.cpp
@@ -11,7 +14,7 @@ add_executable(lumen_tests
   test_dashboard.cpp
   test_latex.cpp
   test_error.cpp
-  test_reflection.cpp
+  test_class_name.cpp
 )
 
 if(LUMEN_ENABLE_DASHBOARD)
@@ -22,7 +25,30 @@ target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_tests PRIVATE cxx_std_23)
 
 include(GoogleTest)
-gtest_discover_tests(lumen_tests)
+# A deadlock shows up as a timeout rather than a hung run.
+gtest_discover_tests(lumen_tests PROPERTIES TIMEOUT 120)
+
+# The logging macros at other compile-time thresholds. Each target builds
+# test_elision.cpp at one level and prefixes its tests with the level's name.
+foreach(level_pair IN ITEMS "Trace;0" "Info;2" "Error;4")
+  list(GET level_pair 0 level_name)
+  list(GET level_pair 1 level_value)
+  string(TOLOWER "${level_name}" level_lower)
+  set(target "lumen_tests_elision_${level_lower}")
+  add_executable(${target} test_elision.cpp)
+  target_compile_definitions(${target} PRIVATE LUMEN_TEST_EXPECTED_MIN_LEVEL=${level_value})
+  target_link_libraries(${target} PRIVATE lumen GTest::gtest GTest::gtest_main)
+  gtest_discover_tests(${target} TEST_PREFIX "MinLevel${level_name}." PROPERTIES TIMEOUT 120)
+endforeach()
+
+# Logging from a static destructor after the global core has shut down. The
+# verdict is the process's exit status, so it runs as its own process.
+add_executable(lumen_test_late_logging late_logging.cpp)
+target_link_libraries(lumen_test_late_logging PRIVATE lumen)
+add_test(NAME LateLogging.StaticDestructorLogsAreCountedAfterShutdown
+         COMMAND lumen_test_late_logging)
+set_tests_properties(LateLogging.StaticDestructorLogsAreCountedAfterShutdown
+                     PROPERTIES TIMEOUT 60)
 
 # Ring buffer throughput. Built with the tests so that it keeps compiling, but
 # not registered with ctest: it prints measurements and has nothing to pass or

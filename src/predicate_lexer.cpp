@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ascii.hpp"
-#include "lumen/detail/error.hpp"
+#include "lumen/error.hpp"
 #include "number_parse.hpp"
 
 namespace lumen::detail {

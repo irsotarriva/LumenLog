@@ -14,7 +14,7 @@
 #include <thread>
 #include <unordered_map>
 
-#include "lumen/detail/error.hpp"
+#include "lumen/error.hpp"
 
 #ifdef LUMEN_ENABLE_DASHBOARD
 #include <ftxui/dom/elements.hpp>

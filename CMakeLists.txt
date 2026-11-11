@@ -66,6 +66,7 @@ add_library(lumen
   src/predicate_parser.cpp
   src/context.cpp
   src/tagged.cpp
+  src/progress.cpp
   src/error.cpp
 )
 add_library(lumen::lumen ALIAS lumen)

@@ -45,44 +45,36 @@ struct PySink : Sink, py::trampoline_self_life_support {
 };
 
 void py_log_info(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::Info, msg,
-                  std::source_location::current());
+    RecordBuilder(core(), LogLevel::Info, std::source_location::current(), msg);
 }
 
 void py_log_warn(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::Warn, msg,
-                  std::source_location::current());
+    RecordBuilder(core(), LogLevel::Warn, std::source_location::current(), msg);
 }
 
 void py_log_error(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::Error, msg,
-                  std::source_location::current());
+    RecordBuilder(core(), LogLevel::Error, std::source_location::current(), msg);
 }
 
 void py_log_debug(std::string msg) {
-    RecordBuilder(core().log_buffer(), LogLevel::Debug, msg,
-                  std::source_location::current());
+    RecordBuilder(core(), LogLevel::Debug, std::source_location::current(), msg);
 }
 
 void py_log_fatal(std::string msg) {
-    {
-        RecordBuilder(core().log_buffer(), LogLevel::Fatal, msg,
-                      std::source_location::current());
-    }
-    {
-        py::gil_scoped_release release;  // Python sinks need the GIL to drain
-        core().flush();
-    }
+    // Python sinks need the GIL while the fatal record is delivered. The
+    // builder's destructor delivers it, flushes the sinks and terminates.
+    py::gil_scoped_release release;
+    RecordBuilder(core(), LogLevel::Fatal, std::source_location::current(), msg);
     std::terminate();
 }
 
 void py_metric(std::string name, double value) {
-    MetricBuilder(core().metric_buffer(), name, value);
+    MetricBuilder(core(), name, value);
 }
 
 struct PyProgressHandle {
     explicit PyProgressHandle(std::string label, uint64_t total)
-        : handle_(core().progress_buffer(), label, total) {}
+        : handle_(core(), label, total) {}
 
     void update(uint64_t current) { handle_.update(current); }
     void tick() { handle_.tick(); }
@@ -95,8 +87,7 @@ private:
 class PyProgressHandleWrapper {
 public:
     PyProgressHandleWrapper(std::string label, uint64_t total)
-        : handle_(std::make_unique<ProgressHandle>(
-              core().progress_buffer(), label, total)) {}
+        : handle_(std::make_unique<ProgressHandle>(core(), label, total)) {}
 
     PyProgressHandleWrapper(PyProgressHandleWrapper&&) noexcept = default;
     PyProgressHandleWrapper& operator=(PyProgressHandleWrapper&&) noexcept = default;
@@ -339,29 +330,49 @@ PYBIND11_MODULE(lumen_bindings, m) {
     py::class_<Core, std::unique_ptr<Core, py::nodelete>>(m, "Core")
         .def("add_sink",
              [](Core& c, std::unique_ptr<Sink> sink, Predicate pred) -> SinkId {
-                 return c.add_sink(std::move(sink), std::move(pred));
+                 auto added = c.add_sink(std::move(sink), std::move(pred));
+                 if (!added) throw py::value_error(added.error().message());
+                 return *added;
              },
              py::arg("sink"), py::arg("predicate"))
         .def("remove_sink",
              [](Core& c, SinkId id) -> std::unique_ptr<Sink> {
-                 auto result = c.remove_sink(id);
-                 if (result.has_value()) {
-                     return std::move(*result);
+                 std::unique_ptr<Sink> removed;
+                 {
+                     // remove_sink waits for a running callback of this sink,
+                     // which may need the GIL.
+                     py::gil_scoped_release release;
+                     auto result = c.remove_sink(id);
+                     if (result.has_value()) removed = std::move(*result);
                  }
-                 return nullptr;
+                 return removed;
              },
              py::arg("id"))
         .def("flush", &Core::flush, py::call_guard<py::gil_scoped_release>())
-        .def("set_process_tag", &Core::set_process_tag,
+        .def("set_process_tag",
+             [](Core&, std::string_view key, std::string_view value) {
+                 return set_process_tag(key, value).has_value();
+             },
              py::arg("key"), py::arg("value"))
-        .def("set_thread_tag", &Core::set_thread_tag,
+        .def("set_thread_tag",
+             [](Core&, std::string_view key, std::string_view value) {
+                 return set_thread_tag(key, value).has_value();
+             },
              py::arg("key"), py::arg("value"))
         .def("emit_log",
-             [](Core& c, LogRecord rec) { c.emit(std::move(rec)); })
+             [](Core& c, const LogRecord& rec) {
+                 RecordBuilder builder(c, rec.level, std::source_location::current(), rec.message);
+                 for (const auto& e : rec.tags) builder.tag(e.key, e.value);
+             })
         .def("emit_metric",
-             [](Core& c, MetricRecord rec) { c.emit(std::move(rec)); })
+             [](Core& c, const MetricRecord& rec) {
+                 MetricBuilder builder(c, rec.name, rec.value);
+                 for (const auto& e : rec.tags) builder.tag(e.key, e.value);
+             })
         .def("emit_progress",
-             [](Core& c, ProgressRecord rec) { c.emit(std::move(rec)); });
+             [](Core& c, const ProgressRecord& rec) {
+                 ProgressHandle(c, rec.label, rec.total).update(rec.current);
+             });
 
     m.def("core", &core, py::return_value_policy::reference);
 
@@ -390,9 +401,15 @@ PYBIND11_MODULE(lumen_bindings, m) {
           },
           py::arg("label"), py::arg("total"),
           "Create a progress handle");
-    m.def("set_process_tag", &set_process_tag,
+    m.def("set_process_tag",
+          [](std::string_view key, std::string_view value) {
+              return set_process_tag(key, value).has_value();
+          },
           py::arg("key"), py::arg("value"));
-    m.def("set_thread_tag", &set_thread_tag,
+    m.def("set_thread_tag",
+          [](std::string_view key, std::string_view value) {
+              return set_thread_tag(key, value).has_value();
+          },
           py::arg("key"), py::arg("value"));
     m.def("flush", []() { core().flush(); }, py::call_guard<py::gil_scoped_release>());
     m.def("now_ns", &now_ns, "Current time in nanoseconds since epoch");

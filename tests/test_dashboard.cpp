@@ -8,6 +8,8 @@
 
 #include "lumen/core.hpp"
 #include "lumen/predicate.hpp"
+#include "lumen/progress.hpp"
+#include "lumen/record_builder.hpp"
 #include "lumen/sink.hpp"
 
 namespace lumen {
@@ -38,7 +40,7 @@ protected:
     }
 
     SinkId register_sink(std::unique_ptr<Sink> sink, Predicate pred) {
-        SinkId id = core().add_sink(std::move(sink), std::move(pred));
+        SinkId id = core().add_sink(std::move(sink), std::move(pred)).value();
         ids_.push_back(id);
         return id;
     }
@@ -78,9 +80,9 @@ TEST_F(DashboardTest, DashboardRendersMetricsDoesNotThrow) {
     auto sink = std::make_unique<TerminalSink>(cfg);
     register_sink(std::move(sink), always());
 
-    core().emit(MetricRecord{.name = "loss", .value = 0.42, .timestamp_ns = 0});
-    core().emit(MetricRecord{.name = "loss", .value = 0.38, .timestamp_ns = 0});
-    core().emit(MetricRecord{.name = "accuracy", .value = 0.91, .timestamp_ns = 0});
+    lumen::metric("loss", 0.42);
+    lumen::metric("loss", 0.38);
+    lumen::metric("accuracy", 0.91);
 
     EXPECT_NO_THROW(wait_flush());
 }
@@ -92,8 +94,7 @@ TEST_F(DashboardTest, DashboardRendersProgressDoesNotThrow) {
     auto sink = std::make_unique<TerminalSink>(cfg);
     register_sink(std::move(sink), always());
 
-    core().emit(ProgressRecord{
-        .id = 1, .label = "upload", .current = 50, .total = 100, .timestamp_ns = 0});
+    lumen::progress("upload", 100).update(50);
 
     EXPECT_NO_THROW(wait_flush());
 }
@@ -106,10 +107,10 @@ TEST_F(DashboardTest, DashboardUpdatesOnDispatch) {
     auto sink = std::make_unique<TerminalSink>(cfg);
     register_sink(std::move(sink), always());
 
-    core().emit(MetricRecord{.name = "loss", .value = 0.5, .timestamp_ns = 0});
+    lumen::metric("loss", 0.5);
     wait_flush();
 
-    core().emit(MetricRecord{.name = "loss", .value = 0.3, .timestamp_ns = 0});
+    lumen::metric("loss", 0.3);
     wait_flush();
 
     SUCCEED();
@@ -122,8 +123,7 @@ TEST_F(DashboardTest, DashboardProgressCompletionRemovesBar) {
     auto sink = std::make_unique<TerminalSink>(cfg);
     register_sink(std::move(sink), always());
 
-    core().emit(ProgressRecord{
-        .id = 1, .label = "task", .current = 100, .total = 100, .timestamp_ns = 0});
+    lumen::progress("task", 100).finish();
 
     EXPECT_NO_THROW(wait_flush());
 }
