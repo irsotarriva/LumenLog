@@ -116,6 +116,13 @@ TEST(TerminalSizeTest, IsUnknownWhenStandardErrorIsNotATerminal) {
     EXPECT_FALSE(OutputStream(nullptr).terminal_size().has_value());
     EXPECT_FALSE(resolve_color(ColorMode::Auto, OutputStream(nullptr)));
 }
+
+TEST(TerminalSizeTest, IsUnknownForACallersStreamEvenWhenStandardErrorIsATerminal) {
+    const test::StandardErrorOnPty pty(37, 9);
+    const OutputStream callers(std::make_shared<std::ostringstream>());
+    EXPECT_FALSE(callers.is_terminal());
+    EXPECT_FALSE(callers.terminal_size().has_value());
+}
 #endif
 
 }  // namespace

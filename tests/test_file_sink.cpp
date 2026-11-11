@@ -4,15 +4,18 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -192,6 +195,40 @@ public:
 private:
     int reader_ = -1;
 };
+
+TEST_F(FileSinkTest, AfterAFatalRecordFlushWaitsForANamedPipeNobodyReadsOnlyUntilTheTimeout) {
+    NamedPipe pipe(_path("pipe"), true);
+    FileSink::Config config = _config("pipe");
+    config.format = FileFormat::Text;
+    std::unique_ptr<FileSink> sink = _sink(std::move(config));
+    ASSERT_NE(sink, nullptr);
+    // Far more than a pipe holds, so the sink's writer blocks in write(2).
+    const std::string long_message(1000, 'x');
+    for (uint32_t i = 0; i < 1000; ++i) {
+        sink->on_log(log_record(long_message));
+    }
+    sink->on_log(log_record("the end", LogLevel::Fatal));
+    const auto start = std::chrono::steady_clock::now();
+    std::future<void> flushed = std::async(std::launch::async, [&sink] { sink->flush(); });
+    const std::future_status status =
+        flushed.wait_for(fatal_flush_timeout + std::chrono::seconds(5));
+    const auto waited = std::chrono::steady_clock::now() - start;
+    // Unblock the writer whatever happened above, so that the flush (if it
+    // is still waiting) and the sink's destructor can end.
+    std::atomic<bool> sink_gone{false};
+    std::thread drain([&] {
+        while (!sink_gone.load()) {
+            static_cast<void>(pipe.read_all());  // the content is not checked here
+            std::this_thread::yield();
+        }
+    });
+    flushed.get();
+    sink.reset();
+    sink_gone = true;
+    drain.join();
+    EXPECT_EQ(status, std::future_status::ready) << "flush waited for the blocked pipe";
+    EXPECT_GE(waited, fatal_flush_timeout);
+}
 
 TEST_F(FileSinkTest, CreateOnANamedPipeWithoutAReaderFailsAtOnceAndSaysWhy) {
     const NamedPipe pipe(_path("pipe"), false);

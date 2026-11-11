@@ -10,6 +10,7 @@
 
 #include "lumen/error.hpp"
 #include "predicate_lexer.hpp"
+#include "test_support.hpp"
 
 namespace lumen {
 namespace {
@@ -154,6 +155,15 @@ TEST(PredicateLexerTest, LexicalErrorsGiveTheirPositionAndMessage) {
         EXPECT_EQ(err.position, c.position) << c.query;
         EXPECT_NE(err.message.find(c.message_part), std::string::npos)
             << c.query << ": " << err.message;
+    }
+}
+
+TEST(PredicateLexerTest, UnterminatedStringOrTrailingBackslashIsNotReadPastTheView) {
+    for (const std::string_view query : {"a == 'open", "a == 'open\\"}) {
+        const test::ExactBuffer exact(query);
+        const PredicateParseError err = first_error(exact.view());
+        EXPECT_EQ(err.position, 5U) << query;
+        EXPECT_NE(err.message.find("unterminated"), std::string::npos) << err.message;
     }
 }
 

@@ -13,6 +13,7 @@
 
 #include "lumen/error.hpp"
 #include "sink_test_support.hpp"
+#include "test_support.hpp"
 #include "time_format.hpp"
 
 namespace lumen::detail {
@@ -85,6 +86,15 @@ TEST(TimeFormatTest, ANulCharacterAnywhereInThePatternIsRefused) {
         const std::optional<std::error_code> error = refusal(pattern);
         ASSERT_TRUE(error.has_value()) << pattern.size();
         EXPECT_EQ(error.value_or(std::error_code{}), LumenError::InvalidSinkConfig);
+    }
+}
+
+TEST(TimeFormatTest, APercentAtTheEndOfThePatternIsRefusedWithoutReadingPastIt) {
+    for (const std::string_view pattern : {"%", "%H:%"}) {
+        const test::ExactBuffer exact(pattern);
+        const std::optional<std::error_code> error = refusal(exact.view());
+        ASSERT_TRUE(error.has_value()) << pattern;
+        EXPECT_EQ(error.value_or(std::error_code{}), LumenError::InvalidSinkConfig) << pattern;
     }
 }
 
