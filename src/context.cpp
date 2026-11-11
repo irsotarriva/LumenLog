@@ -9,6 +9,7 @@
 #include <expected>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -165,7 +166,7 @@ private:
 [[nodiscard]] ThreadContext* this_thread_context() {
     if (live_context == nullptr && !context_destroyed) {
         // The single owner of this thread's ThreadContext.
-        thread_local ThreadContextOwner owner;
+        thread_local const ThreadContextOwner owner;
         static_cast<void>(owner);
     }
     return live_context;
@@ -203,12 +204,12 @@ private:
 [[nodiscard]] uint32_t add_frames(RecordTags& tags, const ThreadContext& context) {
     uint32_t dropped = 0;
     const std::span instances(context.instances.slots.data(), context.instances.count);
-    for (auto it = instances.rbegin(); it != instances.rend(); ++it) {
-        dropped += add_layer(tags, instance_tags(**it));
+    for (const Tagged* const object : std::views::reverse(instances)) {
+        dropped += add_layer(tags, instance_tags(*object));
     }
     const std::span scopes(context.scopes.slots.data(), context.scopes.count);
-    for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
-        dropped += add_tag(tags, it->key, it->value);
+    for (const OwnedTag& scope : std::views::reverse(scopes)) {
+        dropped += add_tag(tags, scope.key, scope.value);
     }
     return dropped;
 }

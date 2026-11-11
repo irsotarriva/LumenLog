@@ -61,6 +61,8 @@ struct ThrowsWhenFormatted {
 }  // namespace
 }  // namespace lumen
 
+// std::format calls parse() and format() on a formatter object.
+// NOLINTBEGIN(readability-convert-member-functions-to-static)
 template <>
 struct std::formatter<lumen::ThrowsWhenFormatted> {
     constexpr auto parse(std::format_parse_context& context) { return context.begin(); }
@@ -72,6 +74,7 @@ struct std::formatter<lumen::ThrowsWhenFormatted> {
         throw 42;  // NOLINT(hicpp-exception-baseclass): what a careless user formatter may do
     }
 };
+// NOLINTEND(readability-convert-member-functions-to-static)
 
 namespace lumen {
 namespace {
@@ -119,16 +122,21 @@ TEST_F(RecordBuilderTest, NonNullCStringMessageAndTagValueAreLoggedVerbatim) {
     EXPECT_EQ(tag_of(record.tags, "value"), "v");
 }
 
+// The byte just past `view`. For a record's strings this stays inside the
+// record's storage, which holds a NUL after every string (lumen/record.hpp);
+// string_view's operator[] does not allow the index size().
+[[nodiscard]] char char_after(std::string_view view) {
+    return view.data()[view.size()];  // NOLINT(readability-simplify-subscript-expr)
+}
+
 TEST_F(RecordBuilderTest, EveryStringOfADeliveredRecordIsFollowedByANul) {
     log_to(_core, "message").tag("key", "value").tag("empty", "");
     const LogRecord record = _only_log();
-    // Reading one past each view stays inside the record's storage, which
-    // holds a NUL after every string (lumen/record.hpp).
-    EXPECT_EQ(record.message.data()[record.message.size()], '\0');
+    EXPECT_EQ(char_after(record.message), '\0');
     ASSERT_EQ(record.tags.count(), 2U);
     for (const auto& tag : record.tags) {
-        EXPECT_EQ(tag.key.data()[tag.key.size()], '\0') << tag.key;
-        EXPECT_EQ(tag.value.data()[tag.value.size()], '\0') << tag.key;
+        EXPECT_EQ(char_after(tag.key), '\0') << tag.key;
+        EXPECT_EQ(char_after(tag.value), '\0') << tag.key;
     }
 }
 

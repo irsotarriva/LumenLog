@@ -54,6 +54,7 @@ PredicateParseError first_error(std::string_view query) {
 
 std::vector<TokenKind> kinds_of(const std::vector<Token>& tokens) {
     std::vector<TokenKind> out;
+    out.reserve(tokens.size());
     for (const Token& t : tokens) {
         out.push_back(t.kind);
     }
