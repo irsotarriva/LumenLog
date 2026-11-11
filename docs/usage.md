@@ -6,7 +6,7 @@ reference: `lumen/macros.hpp` (statements, scopes, loops),
 `lumen/record_builder.hpp` (tags, fatal), `lumen/progress.hpp`,
 `lumen/context.hpp` and `lumen/tagged.hpp`.
 
-The fragments on this page are compiled by ctest as function bodies, with
+The fragments on this page are compiled by the build as function bodies, with
 `#include "lumen/lumen.hpp"` and declarations of the made-up functions they
 call (`read_energy`, `process`, ...).
 
@@ -24,7 +24,8 @@ LUMEN_LOG_WARN("threshold crossed").tag("detector", "calorimeter").tag("channel"
 - `LUMEN_LOG_TRACE`, `LUMEN_LOG_DEBUG`, `LUMEN_LOG_INFO`, `LUMEN_LOG_WARN`
   and `LUMEN_LOG_ERROR` end in a `lumen::RecordBuilder` expression, so
   `.tag()` calls can follow. Each is one statement, safe as the body of an
-  `if` without braces, with or without `else`. `LUMEN_LOG_FATAL` is described [below](#fatal).
+  `if` without braces, with or without `else`. `LUMEN_LOG_FATAL` is
+  described [below](#fatal).
 - `LOG_TRACE` … `LOG_FATAL` are the same macros under short names. Define
   `LUMEN_NO_SHORT_MACROS` before including Lumen to keep those names free for
   another library.
@@ -67,7 +68,8 @@ if constexpr (lumen::level_compiled_in(lumen::LogLevel::Trace)) {
 }
 ```
 
-`LUMEN_MIN_LEVEL` is passed to every target that links `lumen::lumen`. Do not
+When it is not `DEBUG`, `LUMEN_MIN_LEVEL_VALUE` is defined for every target
+that links `lumen::lumen`, so the library and its users agree. Do not
 define `LUMEN_MIN_LEVEL` in your own code: `lumen/macros.hpp` stops with an
 error, because the CMake option of that name takes a level name, not a number.
 There is no run-time level setting: use a [predicate](predicates.md) on each

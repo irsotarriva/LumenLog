@@ -30,8 +30,8 @@ struct PredicateAccess;
 // expression tree of conditions on a record's level and tags, joined by
 // `&&`, `||` and `!`:
 //
-//   add_sink(std::make_unique<TerminalSink>(),
-//            level_at_least(LogLevel::Warn) && tag_equals("subsystem", "cooling"));
+//   core.add_sink(std::move(sink),
+//                 level_at_least(LogLevel::Warn) && tag_equals("subsystem", "cooling"));
 //
 // The tree is not compiled to another form: evaluation walks it. Nodes are
 // shared, never copied, so copying a Predicate or combining two costs one

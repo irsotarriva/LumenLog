@@ -130,6 +130,9 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
+This needs FTXUI for the dashboard, from vcpkg or installed; without it, add
+`-DLUMEN_ENABLE_DASHBOARD=OFF` to the first command (see below).
+
 The presets are `debug`, `tsan` (ThreadSanitizer), `release` and `ci` (Debug,
 ASan + UBSan, warnings as errors). Each one builds in `build/<preset>`.
 
@@ -224,7 +227,7 @@ every target that links `lumen::lumen`.
 Optional bridge headers turn values held by Eigen, OpenMP, ROOT and libtorch
 objects into metric records: matrix norms and solver convergence, OpenMP work
 balance, TTree sizes, training loss, gradient norm and learning rate. They
-hook nothing; your code calls them where it has the values. Each header is
+hook nothing; your code calls them where it has the values. Each is
 header-only and empty unless its framework is available.
 
 <!-- check: requires=torch prelude=bridge_torch wrap=body -->
@@ -248,8 +251,9 @@ error and the CI status of each bridge.
 
 ## Limits and guarantees
 
-Every number below is a named constant in `lumen/limits.hpp` or a field of a
-sink's `Config`.
+The numbers below are the constants of `lumen/limits.hpp` and the defaults of
+the sinks' `Config`, except the builder's buffer
+(`lumen/detail/string_scratch.hpp`).
 
 - **Tags.** A record holds at most 16 tags (`max_record_tags`): the explicit
   `.tag()` calls first, then context, highest layer first. A tag that does not
@@ -272,9 +276,9 @@ sink's `Config`.
   its copy of the process tags after they changed, and makes a system call
   only when the dispatch thread is asleep. Submission allocates one block on
   the heap for the record's strings; a statement whose strings exceed the
-  builder's 512-byte stack buffer allocates more. Sink callbacks run on one thread at a time, never
-  concurrently with each other; they must not block (see
-  [Sinks](docs/sinks.md#the-contract)).
+  builder's 512-byte stack buffer allocates more. Sink callbacks run on one
+  thread at a time, never concurrently with each other; they must not block
+  (see [Sinks](docs/sinks.md#the-contract)).
 - **Order.** Records of one type reach a sink in the order they were queued.
   Records of different types are not ordered with each other.
 - **Flush.** `Core::flush()` delivers every record submitted before the call,
@@ -315,9 +319,11 @@ sink's `Config`.
 | [Headers](docs/api.md) | Which header declares what |
 | [Design](docs/design.md) | How the library works inside, for maintainers |
 
-Every C++ and Python block in these pages is compiled or run by ctest
-(`Docs.Check` and the `Docs.*` tests; `tests/docs/check_docs.py` states the
-rules).
+Every C++ block in these pages is compiled by the build (a bridge block only
+when its framework is found), and the complete programs among them are run by
+ctest. Python blocks are run when the module is built. Quoted examples and
+outputs must equal the files they quote. `Docs.Check` verifies this, and
+`tests/docs/check_docs.py` states the rules.
 
 ## License
 
