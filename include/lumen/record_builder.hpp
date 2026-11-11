@@ -72,8 +72,7 @@ public:
     BasicRecordBuilder(Core& core, LogLevel level, const SourceLocation& source,
                        std::string_view message)
         requires std::same_as<R, LogRecord>
-        : core_(&core)
-        , source_strings_(Core::SourceStrings::Copied) {
+        : core_(&core), source_strings_(Core::SourceStrings::Copied) {
         record_.level = level;
         record_.source.file = scratch_.store(source.file);
         record_.source.function = scratch_.store(source.function);

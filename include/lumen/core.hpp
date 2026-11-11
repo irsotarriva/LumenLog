@@ -164,7 +164,10 @@ private:
     // copied. Copied: they were given as text (a call site in another
     // language) and are copied into the record's storage with its other
     // strings.
-    enum class SourceStrings : uint8_t { Static, Copied };
+    enum class SourceStrings : uint8_t {
+        Static,
+        Copied
+    };
 
     // The one way records enter: stamps, merges context, owns the strings,
     // queues. `tags_dropped` counts explicit tags the builder could not hold.
