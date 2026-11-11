@@ -245,14 +245,27 @@ model->train();  // MetricRecord: "loss", "grad_norm", "lr" emitted automaticall
 ```python
 import lumen_bindings as lumen
 
-lumen.info("analysis starting")
-lumen.metric("loss", 0.0314)
+class Printer(lumen.Sink):
+    def on_log(self, record):
+        print(record.level.name, record.message, record.tags, record.source.line)
+
+lumen.core().add_sink(Printer(), lumen.level_at_least(lumen.LogLevel.INFO))
+
+lumen.set_process_tag("experiment", "my_experiment")
+with lumen.scope("phase", "init"):
+    lumen.info("analysis starting", tags={"run": 42})
+lumen.metric("loss", 0.0314, tags={"epoch": 3})
 
 bar = lumen.progress("training", 1000)
-bar.tick()
-
-lumen.core().add_sink(lumen.TerminalSink(), lumen.level_at_least("INFO"))
+for i in range(1000):
+    bar.tick()
 ```
+
+Records logged from Python carry the calling file, line and function as their
+source. `logging_handler.LumenHandler` forwards the standard `logging` module.
+Python sinks are detached automatically at interpreter exit. Errors are raised
+as `lumen.LumenError` subclasses (`InvalidSinkIdError`, `SinkBusyError`,
+`TagTableFullError`, `InvalidPredicateError`).
 
 ---
 
