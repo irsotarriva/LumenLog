@@ -6,11 +6,13 @@
 //                         routing.jsonl to `directory` (default: the
 //                         system's temporary directory)
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -24,12 +26,12 @@ namespace {
 template <typename S>
     requires std::derived_from<S, lumen::Sink>
 [[nodiscard]] std::expected<const S*, std::error_code> add(
-    std::expected<std::unique_ptr<S>, std::error_code> created, lumen::Predicate predicate) {
+    std::expected<std::unique_ptr<S>, std::error_code> created, const lumen::Predicate& predicate) {
     if (!created) {
         return std::unexpected(created.error());
     }
     const S* const sink = created->get();  // non-owning
-    if (auto id = lumen::core().add_sink(std::move(*created), std::move(predicate)); !id) {
+    if (auto id = lumen::core().add_sink(std::move(*created), predicate); !id) {
         return std::unexpected(id.error());
     }
     return sink;
@@ -40,8 +42,8 @@ template <typename S>
 [[nodiscard]] std::expected<std::unique_ptr<lumen::FileSink>, std::error_code> fresh_file(
     const std::filesystem::path& path, lumen::FileFormat format) {
     std::error_code removed;
-    std::filesystem::remove(path, removed);
-    if (removed) {
+    // false without an error when there was no file, which is fine
+    if (!std::filesystem::remove(path, removed) && removed) {
         return std::unexpected(removed);
     }
     lumen::FileSink::Config config;
@@ -112,12 +114,11 @@ struct Sinks {
 
     // Hot channels and errors as JSON, with the filter given as text, as it
     // would come from a configuration file or a command-line flag.
-    auto query = lumen::parse_predicate("temperature > 300 || level >= ERROR");
+    const auto query = lumen::parse_predicate("temperature > 300 || level >= ERROR");
     if (!query) {
         return std::unexpected(query.error().code);
     }
-    const auto json =
-        add(fresh_file(directory / "routing.jsonl", lumen::FileFormat::Json), std::move(*query));
+    const auto json = add(fresh_file(directory / "routing.jsonl", lumen::FileFormat::Json), *query);
     if (!json) {
         return std::unexpected(json.error());
     }
@@ -127,8 +128,9 @@ struct Sinks {
 }  // namespace
 
 int main(int argc, char** argv) {
+    const std::span<char*> args(argv, static_cast<std::size_t>(argc));
     const std::filesystem::path directory =
-        argc > 1 ? std::filesystem::path(argv[1]) : std::filesystem::temp_directory_path();
+        args.size() > 1 ? std::filesystem::path(args[1]) : std::filesystem::temp_directory_path();
     const auto sinks = set_up_sinks(directory);
     if (!sinks) {
         std::cerr << "cannot set up the sinks: " << sinks.error().message() << '\n';

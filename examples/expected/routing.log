@@ -1,3 +1,3 @@
-<time> INFO  tracker aligned detector=tracker [t<id>] (<src>/examples/routing.cpp:138)
-<time> WARN  channel noisy detector=tracker channel=17 [t<id>] (<src>/examples/routing.cpp:139)
+<time> INFO  tracker aligned detector=tracker [t<id>] (<src>/examples/routing.cpp:140)
+<time> WARN  channel noisy detector=tracker channel=17 [t<id>] (<src>/examples/routing.cpp:141)
 <time> METRIC hits=1024 detector=tracker [t<id>]

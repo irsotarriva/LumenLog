@@ -28,14 +28,17 @@ if (sink) {
 | Function | True for a record that ... |
 |---|---|
 | `always()`, `never()` | every record; no record |
-| `level_at_least(l)` | is a log record with level ≥ `l` |
-| `level_equals(l)` | is a log record with level `l` |
-| `level_compare(op, l)` | is a log record with `level op l`; `op` is a `CompareOp`: `Equal`, `NotEqual`, `Less`, `LessEqual`, `Greater`, `GreaterEqual` |
+| `level_at_least(l)` | has a level ≥ `l` |
+| `level_equals(l)` | has the level `l` |
+| `level_compare(op, l)` | has a level with `level op l`; `op` is a `CompareOp`: `Equal`, `NotEqual`, `Less`, `LessEqual`, `Greater`, `GreaterEqual` |
 | `tag_equals(k, v)` | has tag `k` with exactly the text `v` (byte for byte) |
 | `tag_not_equals(k, v)` | has tag `k` with a text other than `v` |
 | `tag_exists(k)` | has tag `k`, whatever its value (an empty value counts) |
 | `tag_compare(k, op, x)` | has tag `k` whose value is a number `n` with `n op x` |
 | `tag_less`, `tag_less_equal`, `tag_greater`, `tag_greater_equal` | `tag_compare` with that operator |
+
+Only log records have a level. For metrics and progress records the level
+conditions are ignored ([rule 6](#the-rules)).
 
 `a && b`, `a || b` and `!a` combine predicates. A default-constructed
 `Predicate` matches every record, and `add_sink` uses `always()` when no

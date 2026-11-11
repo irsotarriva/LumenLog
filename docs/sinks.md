@@ -140,17 +140,31 @@ standard error, standard error is a terminal, `NO_COLOR` is unset or empty,
 coloured: `ESC[<colour>m` before it, `ESC[0m` after it, the padding outside.
 `colored()` tells what was decided.
 
-To write to a stream of your own:
+To write to a stream of your own (ctest runs this program):
 
-<!-- check: prelude=common wrap=body -->
+<!-- check: prelude=common -->
 ```cpp
-auto stream = std::make_shared<std::ostringstream>();
-lumen::TerminalSink::Config config;
-config.output = stream;
-config.time_format = "%Y-%m-%dT%H:%M:%S.%NZ";
-config.time_zone = lumen::TimeZone::Utc;
-config.show_source = true;
-auto sink = lumen::TerminalSink::create(std::move(config));
+int main() {
+    auto stream = std::make_shared<std::ostringstream>();
+    lumen::TerminalSink::Config config;
+    config.output = stream;
+    config.time_format = "%Y-%m-%dT%H:%M:%S.%NZ";
+    config.time_zone = lumen::TimeZone::Utc;
+    config.show_source = true;
+    auto sink = lumen::TerminalSink::create(std::move(config));
+    if (!sink) {
+        std::cerr << "terminal sink: " << sink.error().message() << '\n';
+        return 1;
+    }
+    lumen::Core core;
+    if (const auto id = core.add_sink(std::move(*sink)); !id) {
+        return 1;
+    }
+    lumen::RecordBuilder(core, lumen::LogLevel::Info, std::source_location::current(), "hello");
+    core.flush();
+    // The line is "<date>T<time>.<nanoseconds>Z INFO  hello (<file>:<line>)".
+    return stream->str().find("Z INFO  hello (") != std::string::npos ? 0 : 1;
+}
 ```
 
 ## FileSink
@@ -165,8 +179,8 @@ directory.
 
 <!-- check: output=examples/expected/routing.log -->
 ```text
-<time> INFO  tracker aligned detector=tracker [t<id>] (<src>/examples/routing.cpp:138)
-<time> WARN  channel noisy detector=tracker channel=17 [t<id>] (<src>/examples/routing.cpp:139)
+<time> INFO  tracker aligned detector=tracker [t<id>] (<src>/examples/routing.cpp:140)
+<time> WARN  channel noisy detector=tracker channel=17 [t<id>] (<src>/examples/routing.cpp:141)
 <time> METRIC hits=1024 detector=tracker [t<id>]
 ```
 
@@ -179,8 +193,8 @@ is ambiguous: use `KeyValue` or `Json` for files a program reads.
 
 <!-- check: output=examples/expected/routing.logfmt -->
 ```text
-time=<time> kind=log level=INFO msg="tracker aligned" file=<src>/examples/routing.cpp line=138 function="int main(int, char**)" thread=<id> tags.detector=tracker
-time=<time> kind=log level=WARN msg="channel noisy" file=<src>/examples/routing.cpp line=139 function="int main(int, char**)" thread=<id> tags.detector=tracker tags.channel=17
+time=<time> kind=log level=INFO msg="tracker aligned" file=<src>/examples/routing.cpp line=140 function="int main(int, char**)" thread=<id> tags.detector=tracker
+time=<time> kind=log level=WARN msg="channel noisy" file=<src>/examples/routing.cpp line=141 function="int main(int, char**)" thread=<id> tags.detector=tracker tags.channel=17
 time=<time> kind=metric name=hits value=1024 thread=<id> tags.detector=tracker
 ```
 
@@ -194,8 +208,8 @@ current total thread`. A key or value that is empty or contains a space, `=`,
 
 <!-- check: output=examples/expected/routing.jsonl -->
 ```json
-{"type":"log","ts":<ns>,"level":"INFO","msg":"channel hot","file":"<src>/examples/routing.cpp","line":140,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter","temperature":"312.5"}}
-{"type":"log","ts":<ns>,"level":"ERROR","msg":"readout lost","file":"<src>/examples/routing.cpp","line":141,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter"}}
+{"type":"log","ts":<ns>,"level":"INFO","msg":"channel hot","file":"<src>/examples/routing.cpp","line":142,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter","temperature":"312.5"}}
+{"type":"log","ts":<ns>,"level":"ERROR","msg":"readout lost","file":"<src>/examples/routing.cpp","line":143,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter"}}
 ```
 
 | Key | Records | Value |
@@ -251,17 +265,18 @@ flight, above the most recent log lines in their level's colour.
 - It exists only in a library built with `LUMEN_ENABLE_DASHBOARD=ON`, which
   needs FTXUI. Without it, `lumen/dashboard_sink.hpp` still declares the
   class, but a program that uses it does not link. FTXUI is not available on
-  every machine that builds Lumen; the CI jobs that use vcpkg compile it.
+  every machine that builds Lumen; the CI jobs that use vcpkg compile it,
+  except the Windows job, which turns the dashboard off.
 - The destination must be a terminal: `create` fails with
   `LumenError::NotATerminal` otherwise, unless `Config::assume_terminal` is
   set. It also fails with `LumenError::InvalidSinkConfig` for an invalid
   `time_format` or a `refresh_interval` below 1 ms.
 - `create` switches the terminal to its alternate screen and hides the
   cursor; the destructor restores both, and what was on the screen before
-  comes back. While the sink exists it is the only writer to the terminal.
+  comes back. While the sink exists nothing else may write to that terminal.
 - `on_*` only updates the model under a mutex; a thread owned by the sink
   draws at most one frame per `refresh_interval` (default 100 ms), and only
-  when something changed. `flush()` asks for a frame and returns when it has
+  when something changed or a progress bar may have expired. `flush()` asks for a frame and returns when it has
   been written. `frames_written()` and `frames_failed()` count frames.
 - After a fatal record, `flush()` stops drawing, restores the terminal and
   writes the log lines it holds, the fatal one last, as plain text to the
@@ -332,8 +347,8 @@ namespace {
     switch (level) {
         case lumen::LogLevel::Trace: return "TRACE";
         case lumen::LogLevel::Debug: return "DEBUG";
-        case lumen::LogLevel::Info: return "INFO";
-        case lumen::LogLevel::Warn: return "WARN";
+        case lumen::LogLevel::Info:  return "INFO";
+        case lumen::LogLevel::Warn:  return "WARN";
         case lumen::LogLevel::Error: return "ERROR";
         case lumen::LogLevel::Fatal: return "FATAL";
     }

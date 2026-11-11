@@ -1,8 +1,8 @@
 # Lumen
 
 Lumen is a C++23 library that records log messages, metrics and progress bars
-as structured records carrying key/value tags. A logging statement queues its
-record without taking a lock; one background thread delivers it to sinks
+as structured records carrying key/value tags. A logging statement pushes its
+record onto a lock-free queue; one background thread delivers it to sinks
 (terminal, files, a terminal dashboard, or your own), and each sink receives
 only the records that its predicate on level and tags accepts.
 
@@ -85,7 +85,7 @@ The `epoch` tag is on the metric record but not on the line: a terminal sink
 shows only the tags named in `inline_tags`. Log, metric and progress lines can
 come out in a different order from run to run; within one type the order is
 the order of the statements. The level name is coloured when standard error is
-a terminal.
+a terminal (the exact rule is in [Sinks](docs/sinks.md#terminalsink)).
 
 This program is `examples/quick_start.cpp`. ctest builds it, runs it and
 compares its output with the text above (test `Example.QuickStart`). The other
@@ -197,7 +197,8 @@ need.
 | `LUMEN_REQUIRED_BRIDGE_FRAMEWORKS` | empty | Bridge frameworks whose tests must be built (`Eigen3;OpenMP;Torch;ROOT`); configuring fails if one is missing |
 
 `LUMEN_MIN_LEVEL` and the capacities change what the public headers compile
-to, so they are passed to every target that links `lumen::lumen`.
+to, so when they differ from the default they are passed as definitions to
+every target that links `lumen::lumen`.
 
 ## What is in the library
 
@@ -269,9 +270,9 @@ sink's `Config`.
   `statistics().lines_dropped`; the first drop is reported once.
 - **Threads.** Any thread may log. A producer takes no lock, except to refresh
   its copy of the process tags after they changed, and makes a system call
-  only when the dispatch thread is asleep. It allocates one block on the heap
-  per record for the record's strings, more if a string is longer than the
-  builder's 512-byte buffer. Sink callbacks run on one thread at a time, never
+  only when the dispatch thread is asleep. Submission allocates one block on
+  the heap for the record's strings; a statement whose strings exceed the
+  builder's 512-byte stack buffer allocates more. Sink callbacks run on one thread at a time, never
   concurrently with each other; they must not block (see
   [Sinks](docs/sinks.md#the-contract)).
 - **Order.** Records of one type reach a sink in the order they were queued.
@@ -289,7 +290,8 @@ sink's `Config`.
   be lost without being counted: stop your threads first.
 - **`LUMEN_LOG_FATAL`** delivers every record queued before it, then the fatal
   record, flushes every sink and calls `std::terminate()`, which aborts the
-  process. Destructors and `atexit` functions do not run.
+  process unless you installed another terminate handler. Destructors and
+  `atexit` functions do not run.
 - **Compile-time level.** Statements below `LUMEN_MIN_LEVEL` (default
   `DEBUG`, so `LUMEN_LOG_TRACE` is removed by default) are discarded at
   compile time: they produce no code and their arguments are not evaluated.

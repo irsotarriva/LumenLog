@@ -31,8 +31,8 @@ namespace {
     switch (level) {
         case lumen::LogLevel::Trace: return "TRACE";
         case lumen::LogLevel::Debug: return "DEBUG";
-        case lumen::LogLevel::Info: return "INFO";
-        case lumen::LogLevel::Warn: return "WARN";
+        case lumen::LogLevel::Info:  return "INFO";
+        case lumen::LogLevel::Warn:  return "WARN";
         case lumen::LogLevel::Error: return "ERROR";
         case lumen::LogLevel::Fatal: return "FATAL";
     }

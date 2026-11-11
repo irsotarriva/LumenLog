@@ -21,10 +21,10 @@ LUMEN_LOG_WARN("threshold crossed").tag("detector", "calorimeter").tag("channel"
 
 - With one argument the text is the message, as it is. With more, the first
   is a `std::format` string, checked at compile time against the arguments.
-- There are five statements that return a builder: `LUMEN_LOG_TRACE`,
-  `LUMEN_LOG_DEBUG`, `LUMEN_LOG_INFO`, `LUMEN_LOG_WARN`, `LUMEN_LOG_ERROR`.
-  Each is one statement, safe as the body of an `if` without braces, with or
-  without `else`. `LUMEN_LOG_FATAL` is described [below](#fatal).
+- `LUMEN_LOG_TRACE`, `LUMEN_LOG_DEBUG`, `LUMEN_LOG_INFO`, `LUMEN_LOG_WARN`
+  and `LUMEN_LOG_ERROR` end in a `lumen::RecordBuilder` expression, so
+  `.tag()` calls can follow. Each is one statement, safe as the body of an
+  `if` without braces, with or without `else`. `LUMEN_LOG_FATAL` is described [below](#fatal).
 - `LOG_TRACE` … `LOG_FATAL` are the same macros under short names. Define
   `LUMEN_NO_SHORT_MACROS` before including Lumen to keep those names free for
   another library.
@@ -33,7 +33,9 @@ LUMEN_LOG_WARN("threshold crossed").tag("detector", "calorimeter").tag("channel"
   Unix epoch), its thread number (`lumen::this_thread_id()`: 1 for the first
   thread that asks, then 2, ...) and its context tags.
 - The source location is recorded from `std::source_location`: file, line,
-  function, and the innermost enclosing class (`""` for a free function).
+  function, and the innermost enclosing class. The class is read from the
+  function's signature text, so a free function in a namespace gets the
+  namespace's name, and a free function at global scope gets `""`.
 
 ### Tags
 
