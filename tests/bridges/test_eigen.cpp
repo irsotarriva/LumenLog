@@ -103,7 +103,7 @@ TEST_F(EigenBridgeTest, MatrixSummaryNormOfTinyNonzeroCoefficientsIsNonzero) {
 TEST_F(EigenBridgeTest,
        MatrixSummaryNormBeyondTheLargestDoubleIsInfiniteWithNoNonFiniteCoefficient) {
     constexpr double max = std::numeric_limits<double>::max();
-    Eigen::Vector2d v(max, max);
+    const Eigen::Vector2d v(max, max);
     emit_matrix_summary("beyond", v, _core);
 
     const auto metrics = _metrics();
