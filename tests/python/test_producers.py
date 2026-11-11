@@ -271,10 +271,10 @@ class FatalTest(unittest.TestCase):
 
     def test_fatal_from_a_python_sink_callback_aborts_and_every_other_sink_receives_it(self):
         # fatal() runs on the dispatch thread here, inside a callback, with
-        # the GIL. The expected lines follow lumen/record_builder.hpp
-        # ("Fatal"): the sink whose callback is running is skipped, and the
-        # pass that was delivering "trigger" does not go on to the other
-        # sinks; a change to that rule in the Core changes these lines.
+        # the GIL. The expected lines follow lumen/core.hpp ("Fatal
+        # records"): the sink whose callback is running receives nothing
+        # more, and the other sinks first receive the record that was being
+        # delivered, "trigger", and then the fatal record.
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "fatal.log")
             result = run_child(self, """
@@ -297,10 +297,12 @@ class FatalTest(unittest.TestCase):
                 written = f.read().splitlines()
         self.assertEqual(result.returncode, -signal.SIGABRT, result.stderr)
         self.assertEqual(result.stdout.splitlines(),
-                         ["calling: INFO trigger", "other: FATAL from a sink"])
-        self.assertEqual(len(written), 1, written)
-        self.assertIn('msg="from a sink"', written[0])
-        self.assertIn("level=FATAL", written[0])
+                         ["calling: INFO trigger", "other: INFO trigger",
+                          "other: FATAL from a sink"])
+        self.assertEqual(len(written), 2, written)
+        self.assertIn('msg=trigger', written[0])
+        self.assertIn('msg="from a sink"', written[1])
+        self.assertIn("level=FATAL", written[1])
 
 
 if __name__ == "__main__":

@@ -283,9 +283,10 @@ Arguments, for every function and method of the module:
 - `Core.flush()` releases the GIL while it delivers, so Python sinks can run
   meanwhile. `add_sink` for a C++ sink and `remove_sink` release it too.
 - `fatal()` releases the GIL before it delivers, so Python sinks receive the
-  fatal record. Called from a Python sink's own method, it delivers to every
-  other sink and terminates; the sink that called it does not receive the
-  record (lumen/record_builder.hpp, "Fatal").
+  fatal record. Called from a Python sink's own method, the other sinks first
+  receive the record that sink was being given, then the fatal record, and
+  the process terminates; the sink that called it receives nothing more
+  (lumen/core.hpp, "Fatal records").
 
 ## Exit
 
