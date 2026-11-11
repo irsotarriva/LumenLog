@@ -48,13 +48,27 @@
         "LUMEN_SANITIZER": "address",
         "LUMEN_WARNINGS_AS_ERRORS": "ON"
       }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Debug, GCC line and branch coverage (gcovr), no sanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LUMEN_SANITIZER": "none",
+        "CMAKE_CXX_FLAGS": "--coverage -fprofile-update=atomic",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
+        "CMAKE_SHARED_LINKER_FLAGS": "--coverage",
+        "CMAKE_MODULE_LINKER_FLAGS": "--coverage"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug", "configuration": "Debug" },
     { "name": "tsan", "configurePreset": "tsan", "configuration": "Debug" },
     { "name": "release", "configurePreset": "release", "configuration": "Release" },
-    { "name": "ci", "configurePreset": "ci", "configuration": "Debug" }
+    { "name": "ci", "configurePreset": "ci", "configuration": "Debug" },
+    { "name": "coverage", "configurePreset": "coverage", "configuration": "Debug" }
   ],
   "testPresets": [
     {
@@ -63,9 +77,32 @@
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error" }
     },
-    { "name": "debug", "inherits": "base", "configurePreset": "debug", "configuration": "Debug" },
-    { "name": "tsan", "inherits": "base", "configurePreset": "tsan", "configuration": "Debug" },
-    { "name": "release", "inherits": "base", "configurePreset": "release", "configuration": "Release" },
-    { "name": "ci", "inherits": "base", "configurePreset": "ci", "configuration": "Debug" }
+    {
+      "name": "default-selection",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Every test except those that build Lumen with non-default settings",
+      "filter": { "exclude": { "label": "^build-settings$" } }
+    },
+    { "name": "debug", "inherits": "default-selection", "configurePreset": "debug", "configuration": "Debug" },
+    { "name": "tsan", "inherits": "default-selection", "configurePreset": "tsan", "configuration": "Debug" },
+    { "name": "release", "inherits": "default-selection", "configurePreset": "release", "configuration": "Release" },
+    { "name": "ci", "inherits": "default-selection", "configurePreset": "ci", "configuration": "Debug" },
+    {
+      "name": "build-settings",
+      "displayName": "Lumen built and consumed with non-default settings (slow)",
+      "inherits": "base",
+      "configurePreset": "release",
+      "configuration": "Release",
+      "filter": { "include": { "label": "^build-settings$" } }
+    },
+    {
+      "name": "coverage",
+      "displayName": "The tests that measure the library's own code",
+      "inherits": "base",
+      "configurePreset": "coverage",
+      "configuration": "Debug",
+      "filter": { "exclude": { "label": "^(build-settings|consumer)$" } }
+    }
   ]
 }
