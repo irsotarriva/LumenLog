@@ -3,7 +3,9 @@
 The public headers are the API reference: each one states, next to every
 declaration, what it does, on which thread and with which errors. This page
 says where to look. `lumen/lumen.hpp` includes every header in the first
-table; the others are included on their own.
+table, and through them `lumen/terminal_style.hpp`,
+`lumen/writer_statistics.hpp` and `lumen/config.hpp`; the dashboard and
+bridge headers of the second table are included on their own.
 
 <!-- check: header-table -->
 | Header | Declares |
