@@ -32,10 +32,6 @@ set(lumen_docs_libs_eigen Eigen3::Eigen)
 set(lumen_docs_libs_openmp OpenMP::OpenMP_CXX)
 set(lumen_docs_libs_torch ${TORCH_LIBRARIES})
 set(lumen_docs_libs_root ROOT::Tree ROOT::RIO ROOT::Core)
-set(lumen_docs_names_eigen Eigen)
-set(lumen_docs_names_openmp OpenMp)
-set(lumen_docs_names_torch Torch)
-set(lumen_docs_names_root Root)
 
 set(lumen_docs_objects "")
 foreach(key IN ITEMS eigen openmp torch root)
@@ -78,22 +74,27 @@ if(lumen_docs_objects)
     "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/stand_ins")
 endif()
 
+# The bridge blocks of a framework that was not found are not compiled
+# (tests/bridges/frameworks.cmake reports which).
 foreach(key IN ITEMS eigen openmp torch root)
-  if(NOT lumen_docs_objects_${key})
-    continue()
-  endif()
-  set(test_name "Docs.Bridge${lumen_docs_names_${key}}Blocks.SkippedFrameworkNotFound")
-  if(lumen_bridge_${key}_found)
+  if(lumen_docs_objects_${key} AND lumen_bridge_${key}_found)
     add_library(lumen_docs_blocks_${key} OBJECT ${lumen_docs_objects_${key}})
     target_link_libraries(lumen_docs_blocks_${key} PRIVATE lumen ${lumen_docs_libs_${key}})
     target_include_directories(lumen_docs_blocks_${key} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  else()
-    add_test(NAME ${test_name}
-             COMMAND lumen_bridge_framework_not_found "${lumen_bridge_${key}_skip_reason}")
-    set_tests_properties(${test_name} PROPERTIES SKIP_RETURN_CODE 77 LABELS docs)
   endif()
 endforeach()
 
 add_test(NAME Docs.Check
   COMMAND Python3::Interpreter "${lumen_docs_script}" check "${PROJECT_SOURCE_DIR}" "${lumen_docs_out}")
 set_tests_properties(Docs.Check PROPERTIES TIMEOUT 120 LABELS docs)
+
+# The checking scripts themselves. -B: no bytecode cache in the source tree.
+foreach(tool_pair IN ITEMS "CheckDocs;test_check_docs" "CppIndex;test_cpp_index"
+                           "CompareOutput;test_compare_output")
+  list(GET tool_pair 0 tool_name)
+  list(GET tool_pair 1 tool_module)
+  add_test(NAME Docs.Tools.${tool_name}
+    COMMAND Python3::Interpreter -B -m unittest -v ${tool_module}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+  set_tests_properties(Docs.Tools.${tool_name} PROPERTIES TIMEOUT 120 LABELS docs)
+endforeach()

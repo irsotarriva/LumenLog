@@ -18,6 +18,13 @@ replaced by placeholders:
 Paths under the source directory are compared with forward slashes whatever
 the platform writes.
 
+Line endings are compared exactly, before any masking. Every line, the last
+one included, must end with one newline: "\n" in the files the program
+writes (Lumen opens them in binary mode), and on standard output and
+standard error the newline of the platform's C runtime in text mode, "\n"
+except on Windows, where it is "\r\n". So a stray "\r", a CRLF line on
+Linux, an LF line on Windows and a missing final newline all fail.
+
 Records of different types are not delivered in time order with each other
 (lumen/core.hpp, "Order"), so the lines are compared per record type: the
 metric lines in order, the progress lines in order, and all other lines in
@@ -88,11 +95,18 @@ def kind(line: str) -> str:
     return "other"
 
 
+def lines_of(text: str) -> list[str]:
+    """The lines of `text`, split at "\n" only (the line endings were checked
+    before, so no other character counts as one)."""
+    lines = text.split("\n")
+    return lines[:-1] if lines[-1] == "" else lines
+
+
 def compare(what: str, actual: str, expected: str) -> list[str]:
     """Problems found comparing `actual` (already masked) with `expected`."""
     problems = []
-    actual_lines = actual.splitlines()
-    expected_lines = expected.splitlines()
+    actual_lines = lines_of(actual)
+    expected_lines = lines_of(expected)
     for k in ("other", "metric", "progress"):
         a = [line for line in actual_lines if kind(line) == k]
         e = [line for line in expected_lines if kind(line) == k]
@@ -104,7 +118,59 @@ def compare(what: str, actual: str, expected: str) -> list[str]:
     return problems
 
 
-def main() -> int:
+# The newline the C runtime writes to a standard stream in text mode.
+STREAM_NEWLINE = "\r\n" if sys.platform == "win32" else "\n"
+FILE_NEWLINE = "\n"
+
+
+def line_ending_problems(what: str, text: str, newline: str) -> list[str]:
+    """Problems with the line endings of `text`, whose lines must each end
+    with `newline` and contain no other carriage return or line feed."""
+    if not text:
+        return []
+    problems = []
+    if not text.endswith(newline):
+        problems.append(f"{what}: the last line does not end with {newline!r}")
+    for number, line in enumerate(text.split(newline), start=1):
+        if "\r" in line or "\n" in line:
+            problems.append(f"{what}: line {number} has a line ending other than {newline!r}: {line!r}")
+            break
+    return problems
+
+
+def decoded(what: str, data: bytes, newline: str) -> tuple[str, list[str]]:
+    """`data` as text with "\n" line endings, and the problems found in its
+    encoding and line endings."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return data.decode("utf-8", errors="replace"), [f"{what}: not UTF-8 ({e})"]
+    problems = line_ending_problems(what, text, newline)
+    return (text.replace(newline, "\n") if not problems else text), problems
+
+
+def expected_text(path: Path) -> str:
+    """An expected file, with its line endings read as "\n" whatever the
+    checkout made of them."""
+    return mask_functions(path.read_text(encoding="utf-8"))
+
+
+def stream_problems(name: str, data: bytes, expected: Path | None, source_dir: str) -> list[str]:
+    text, problems = decoded(name, data, STREAM_NEWLINE)
+    actual = mask(text, source_dir)
+    if expected is None:
+        return problems + ([f"{name}: expected nothing, got:\n{actual}"] if actual else [])
+    return problems + compare(name, actual, expected_text(expected))
+
+
+def file_problems(produced: Path, expected: Path, source_dir: str) -> list[str]:
+    if not produced.exists():
+        return [f"{produced}: the program did not write this file"]
+    text, problems = decoded(str(produced), produced.read_bytes(), FILE_NEWLINE)
+    return problems + compare(str(produced), mask(text, source_dir), expected_text(expected))
+
+
+def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--source-dir", default="")
     parser.add_argument("--expect-stdout", type=Path)
@@ -117,44 +183,37 @@ def main() -> int:
         help="a file the program writes, and the file it must match",
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- program [arguments]")
-    args = parser.parse_args()
-    command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    if not command:
+    args = parser.parse_args(argv)
+    args.command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not args.command:
         parser.error("no program to run")
+    args.expect_file = [tuple(Path(p) for p in pair.split("=", 1)) for pair in args.expect_file]
+    return args
 
-    produced_files = []
-    for pair in args.expect_file:
-        produced, _, expected = pair.partition("=")
-        produced_files.append((Path(produced), Path(expected)))
-        Path(produced).unlink(missing_ok=True)
 
-    run = subprocess.run(command, capture_output=True, text=True, timeout=120)
+def run_and_compare(args: argparse.Namespace) -> list[str]:
+    for produced, _ in args.expect_file:
+        produced.unlink(missing_ok=True)
+    run = subprocess.run(args.command, capture_output=True, timeout=120)
     problems = []
     if run.returncode != 0:
-        problems.append(f"exit status {run.returncode}\nstdout:\n{run.stdout}\nstderr:\n{run.stderr}")
+        problems.append(f"exit status {run.returncode}\nstdout:\n{run.stdout!r}\nstderr:\n{run.stderr!r}")
+    problems += stream_problems("stdout", run.stdout, args.expect_stdout, args.source_dir)
+    problems += stream_problems("stderr", run.stderr, args.expect_stderr, args.source_dir)
+    for produced, expected in args.expect_file:
+        problems += file_problems(produced, expected, args.source_dir)
+    return problems
 
-    streams = [("stdout", run.stdout, args.expect_stdout), ("stderr", run.stderr, args.expect_stderr)]
-    for name, text, expected in streams:
-        actual = mask(text, args.source_dir)
-        if expected is None:
-            if actual:
-                problems.append(f"{name}: expected nothing, got:\n{actual}")
-            continue
-        problems += compare(name, actual, mask_functions(expected.read_text(encoding="utf-8")))
 
-    for produced, expected in produced_files:
-        if not produced.exists():
-            problems.append(f"{produced}: the program did not write this file")
-            continue
-        actual = mask(produced.read_text(encoding="utf-8"), args.source_dir)
-        problems += compare(str(produced), actual, mask_functions(expected.read_text(encoding="utf-8")))
-
+def main(argv: list[str]) -> int:
+    args = parse_arguments(argv)
+    problems = run_and_compare(args)
     for problem in problems:
         print(problem, file=sys.stderr)
     if not problems:
-        print("output matches: " + " ".join(command))
+        print("output matches: " + " ".join(args.command))
     return 1 if problems else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
