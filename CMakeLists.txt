@@ -10,7 +10,8 @@ endif()
 if(NOT DEFINED LUMEN_ENABLE_DASHBOARD OR LUMEN_ENABLE_DASHBOARD)
   list(APPEND VCPKG_MANIFEST_FEATURES "dashboard")
 endif()
-if(LUMEN_ENABLE_PYTHON)
+# A pybind11 named with pybind11_DIR (for instance pip's) is used instead.
+if(LUMEN_ENABLE_PYTHON AND NOT DEFINED pybind11_DIR)
   list(APPEND VCPKG_MANIFEST_FEATURES "python")
 endif()
 
@@ -26,13 +27,7 @@ include(GNUInstallDirs)
 # Options. When Lumen is built inside another project (add_subdirectory or
 # FetchContent), the developer-only settings default to off so that nothing is
 # forced on the parent build.
-# vcpkg.json does not install FTXUI on Windows, hence the platform default.
-if(WIN32)
-  set(lumen_dashboard_default OFF)
-else()
-  set(lumen_dashboard_default ON)
-endif()
-option(LUMEN_ENABLE_DASHBOARD "Build the FTXUI terminal dashboard" ${lumen_dashboard_default})
+include(cmake/dashboard_option.cmake)
 option(LUMEN_ENABLE_PYTHON "Build the pybind11 Python module" OFF)
 option(LUMEN_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 option(LUMEN_BUILD_EXAMPLES "Build the examples" ${PROJECT_IS_TOP_LEVEL})
@@ -106,9 +101,9 @@ endif()
 include(cmake/build_settings.cmake)
 
 # The dashboard sink is the only code that needs FTXUI; its state model
-# (src/dashboard_model.cpp, above) is built either way.
+# (src/dashboard_model.cpp, above) is built either way. FTXUI was looked for
+# in cmake/dashboard_option.cmake.
 if(LUMEN_ENABLE_DASHBOARD)
-  find_package(ftxui CONFIG REQUIRED)
   target_sources(lumen PRIVATE src/dashboard_sink.cpp src/dashboard_frame.cpp)
   target_link_libraries(lumen PRIVATE ftxui::dom ftxui::screen)
 endif()

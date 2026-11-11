@@ -8,19 +8,22 @@ GCC 13, CMake 3.28, GoogleTest and Python 3 installed and no vcpkg:
 ```sh
 git clone https://github.com/irsotarriva/LumenLog.git
 cd LumenLog
-cmake --preset debug -DLUMEN_ENABLE_DASHBOARD=OFF
+cmake --preset debug
 cmake --build --preset debug
 ctest --preset debug
 ```
 
-`-DLUMEN_ENABLE_DASHBOARD=OFF` is needed when FTXUI is not installed. With
-vcpkg (`VCPKG_ROOT` set), leave it out and vcpkg installs FTXUI and
-GoogleTest.
+The dashboard is built when FTXUI is found and left out otherwise; the
+configure output says which. With vcpkg (`VCPKG_ROOT` set), vcpkg installs
+FTXUI and GoogleTest.
 
 The `debug` preset builds with AddressSanitizer and UBSan. The test suite
-includes the examples (`Example.*`), the documentation checks (`Docs.*`) and a
-test that installs Lumen and builds a small project against it
-(`Consumer.FindPackageAndAddSubdirectory`, the slowest one).
+includes the examples (`Example.*`), the documentation checks (`Docs.*`) and
+tests that install Lumen and build a small project against it
+(`Consumer.*`; `Consumer.FindPackageAndAddSubdirectory` is the slowest one).
+The tests that build Lumen with non-default settings are left out of the
+`debug`, `tsan`, `release` and `ci` test presets; run them with
+`ctest --preset build-settings` after building the `release` preset.
 
 To build only the library, without tests (no GoogleTest or Python needed):
 
@@ -52,10 +55,12 @@ add_executable(my_program main.cpp)
 target_link_libraries(my_program PRIVATE lumen::lumen)
 ```
 
-`lumen::lumen` brings the include directory, the C++23 requirement and the
-definitions that `LUMEN_MIN_LEVEL` and the queue capacities set. Inside
-another project, Lumen's tests, examples and install rules are off and its
-warnings are not errors.
+`lumen::lumen` brings the include directories and the C++23 requirement;
+`LUMEN_MIN_LEVEL` and the queue capacities reach the code through the
+generated header `lumen/config.hpp`, not through definitions. Inside another
+project, Lumen's tests, examples and install rules are off, its warnings are
+not errors, no sanitizer is added, and the dashboard is built only if FTXUI
+is found (configuring does not fail without it).
 
 `main.cpp` can be as short as this; ctest builds and runs it:
 
@@ -101,6 +106,13 @@ find_package(lumen 0.1 CONFIG REQUIRED)
 
 configured with `-DCMAKE_PREFIX_PATH=$HOME/opt/lumen`. An installed Lumen
 built with the dashboard needs FTXUI to be findable by the consumer too.
+
+A build that does not use CMake needs the install's `include` directory and
+its library (`lib/liblumen.a`, plus the threads library). The installed
+`lumen/config.hpp` holds the settings the library was built with, so such a
+build sees the same level threshold and queue capacities; defining another
+`LUMEN_LOG_CAPACITY` (or metric or progress capacity) stops the compilation
+with an error.
 
 ## 3. Next
 
