@@ -15,6 +15,7 @@ pybind11_add_module(lumen_bindings
     tag_values.cpp
     caller_source.cpp
     python_sinks.cpp
+    python_diagnostics.cpp
     sinks.cpp
     interpreter_exit.cpp
     core_bindings.cpp
@@ -51,6 +52,9 @@ if(LUMEN_BUILD_TESTS)
                                           "PYTHONMALLOC=set:malloc")
       else()
         set(lumen_sanitizer_runtime libtsan.so)
+        # The fork tests start threads in the child of a multithreaded fork,
+        # which ThreadSanitizer refuses by default.
+        list(APPEND lumen_python_test_env "TSAN_OPTIONS=set:die_after_fork=0")
       endif()
       execute_process(
         COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=${lumen_sanitizer_runtime}

@@ -22,6 +22,8 @@ add_executable(lumen_tests
   test_dashboard_model.cpp
   test_error.cpp
   test_class_name.cpp
+  test_fork_handlers.cpp
+  test_portable_error.cpp
 )
 
 if(LUMEN_ENABLE_DASHBOARD)
@@ -45,8 +47,11 @@ else()
 endif()
 
 include(GoogleTest)
-# A deadlock shows up as a timeout rather than a hung run.
-gtest_discover_tests(lumen_tests PROPERTIES TIMEOUT 120)
+# A deadlock shows up as a timeout rather than a hung run. ThreadSanitizer
+# refuses to start threads in the child of a multithreaded fork unless told
+# otherwise; the fork tests (test_fork_handlers.cpp and others) need it to.
+gtest_discover_tests(lumen_tests PROPERTIES TIMEOUT 120
+                     ENVIRONMENT "TSAN_OPTIONS=die_after_fork=0")
 
 # The logging macros at other compile-time thresholds. Each target builds
 # test_elision.cpp at one level and prefixes its tests with the level's name.
@@ -128,7 +133,7 @@ if(UNIX)
   add_executable(lumen_blocked_stderr blocked_stderr.cpp)
   target_link_libraries(lumen_blocked_stderr PRIVATE lumen)
   if(Python3_Interpreter_FOUND)
-    foreach(mode IN ITEMS deliver fatal)
+    foreach(mode IN ITEMS deliver fatal fatal-handler)
       add_test(NAME BlockedStderr.${mode}
                COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/check_blocked_stderr.py"
                        $<TARGET_FILE:lumen_blocked_stderr> ${mode})

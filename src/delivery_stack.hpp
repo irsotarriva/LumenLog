@@ -52,6 +52,9 @@ private:
 // for it.
 [[nodiscard]] DeliveryFrame* delivery_frame_for(const Delivery& owner) noexcept;
 
+// The calling thread's innermost frame, or null outside any delivery.
+[[nodiscard]] DeliveryFrame* innermost_delivery_frame() noexcept;
+
 }  // namespace lumen::detail
 
 #endif

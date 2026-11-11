@@ -19,16 +19,16 @@
 //   1. refuses further Python sinks (add_python_sink raises RuntimeError) and
 //      further records from Python: from here on the producers (log(),
 //      metric(), Progress, ...) drop their record and count it;
-//   2. delivers every record queued so far (Core::flush, on a thread of its
-//      own), for at most exit_delivery_limit. Then Python sinks stop
-//      receiving records: a record that reaches one after that is counted as
-//      not delivered. Sinks written in C++ still receive everything;
-//   3. waits, for at most exit_callback_limit, until that flush has finished
-//      and no thread is inside a call into Python. If only the flush is
-//      still going (a sink written in C++ is slow), it goes on on its own
-//      thread until the end of interpreter finalisation, which waits for it,
-//      but the Python sinks are removed before it reaches the records it has
-//      not reached yet; the report says so, without a number;
+//   2. has every record queued so far delivered (Core::flush_for, which the
+//      dispatch thread carries out), waiting at most exit_delivery_limit.
+//      Then Python sinks stop receiving records: a record that reaches one
+//      after that is counted as not delivered. Sinks written in C++ still
+//      receive everything;
+//   3. waits, for at most exit_callback_limit, until no thread is inside a
+//      call into Python. If the delivery of step 2 has not finished (a sink
+//      written in C++ is slow), the dispatch thread goes on with it, but the
+//      Python sinks are removed before it reaches the records still queued;
+//      the report gives their number;
 //   4. removes every Python sink from core() and destroys it, with the GIL;
 //   5. puts back the default diagnostic handler if Python had replaced it;
 //   6. closes the gate PythonCall checks, so that no C++ thread calls into
@@ -40,26 +40,43 @@
 // been reached. So the hook returns within exit_delivery_limit +
 // exit_callback_limit (and one look for signals, 50 ms, more).
 //
-// If a Python callback is still running at the end of step 3 (a sink or
-// diagnostic handler that blocks), step 4 and the wait of step 6 are skipped,
-// and so is the library's own shutdown at static destruction, which would
-// wait for that callback forever: the process ends at the end of interpreter
-// finalisation with std::_Exit(EXIT_FAILURE), after flushing the C++
-// standard streams. The same happens if a call is still running at the end
-// of step 6.
+// A Python call still running at the end of step 3 (a sink or diagnostic
+// handler that blocks) is never waited for again; step 4 and the wait of
+// step 6 are skipped, and the Python sinks stay registered.
+//   - If every such call is a sink callback, it holds the Core's delivery
+//     lock, and the library's own shutdown at static destruction gives up at
+//     once instead of waiting for it (the hook sets core()'s shutdown
+//     timeout to 0): it reports the records still queued, and neither calls
+//     nor destroys the sinks. The process ends with its own exit status.
+//   - Otherwise (a Python diagnostic handler that blocks, which a sink's
+//     writer thread or the dispatch thread may be waiting for), the library's
+//     shutdown could still wait for it, so the process ends at the end of
+//     interpreter finalisation with std::_Exit(EXIT_FAILURE), after flushing
+//     the C++ standard streams, without C++ static destruction.
 //
 // What was not delivered is reported at the end of interpreter finalisation
 // (Py_AtExit), once, through the diagnostic handler the module installed last
 // (after step 5 the default one, writing to stderr, unless Python set None,
 // which discards the report): the number of records refused in step 1, the
 // number not delivered to Python sinks from step 2 on (and whether a wait was
-// interrupted), an unfinished flush (step 3), and a callback still running.
-// Nothing is reported when nothing was lost.
+// interrupted), the records still queued when the Python sinks were removed
+// (step 3), and a call still running. Nothing is reported when nothing was
+// lost.
 //
 // After the hook no C++ thread calls into Python again; sinks written in C++
 // keep working until static destruction. This also covers an unhandled
 // exception and sys.exit(), which run atexit functions too. os._exit() and a
 // fatal signal skip both atexit and C++ static destruction, so neither runs.
+//
+// fork(). The module registers os.register_at_fork hooks. In the child, the
+// calls into Python that were running belonged to threads of the parent, so
+// they are no longer counted. A child made by multiprocessing (fork start
+// method) clears the atexit functions and leaves through os._exit(), so in
+// such a child the hook is run by multiprocessing's own exit handling
+// instead (a multiprocessing.util.Finalize of exit priority -100, so after
+// the finalizers of multiprocessing's queues and pools): records the child
+// produced are delivered before it exits. A child of a bare os.fork() runs the hook at
+// its own exit like any process, unless it leaves through os._exit().
 
 namespace lumen::python {
 

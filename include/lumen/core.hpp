@@ -1,6 +1,7 @@
 #ifndef LUMEN_CORE_HPP
 #define LUMEN_CORE_HPP
 
+#include <chrono>
 #include <concepts>
 #include <cstdint>
 #include <expected>
@@ -32,15 +33,19 @@
 //     asleep. The memory allocator may make one (to grow a thread's heap).
 //   - Sink callbacks (on_log, on_metric, on_progress, flush): one thread at a
 //     time. Usually the dispatch thread; flush() delivers on its caller's
-//     thread instead. A sink is never called concurrently with itself or with
-//     another sink of the same Core.
+//     thread instead (flush_for asks the dispatch thread), and fatal records
+//     and shutdown deliver on the thread that raises or runs them. A sink is
+//     never called concurrently with itself or with another sink of the same
+//     Core.
 //   - If the dispatch thread cannot be started (the system refuses a new
 //     thread), the constructor does not throw. The Core reports it through
 //     the diagnostic handler and then delivers each record on the thread
 //     that submits it, right after queuing it, under the same lock that
 //     serialises delivery (so submission takes that lock). A record a sink
 //     submits from inside its callback waits for the next submission or
-//     flush(). Everything else is unchanged.
+//     flush(), and flush_for delivers on its caller's thread as flush() does,
+//     without its time limit and without the cycle check. Everything else is
+//     unchanged.
 //   - add_sink, remove_sink, sink_exception_count, statistics: any thread,
 //     including from inside a sink callback. No lock is held while a sink
 //     callback runs, so these never wait for one, with the single exception
@@ -65,8 +70,15 @@
 //
 // Fatal records (LogLevel::Fatal, see BasicRecordBuilder) are not queued: the
 // thread that raises one delivers, on its own stack, everything queued
-// before it, then the fatal record, flushes every sink and calls
-// std::terminate(). Raised from inside a sink callback, the record whose
+// before it, then the fatal record, flushes every sink and ends the process
+// with SIGABRT: by std::abort() if the terminate handler is still the one
+// installed before main (the C++ library's default, which would first write
+// a message to standard error and never return when standard error blocks),
+// otherwise by std::terminate(), which calls the program's handler. If the
+// delivery lock is held by a thread that makes no progress (a sink callback
+// that does not return) for the shutdown timeout, the fatal record is not
+// delivered: this is reported and the process ends all the same. Raised from
+// inside a sink callback, the record whose
 // callback is running is first handed to the sinks that had not received it
 // yet; the sink whose callback raised the fatal record receives nothing more
 // (it is in the middle of a call). When several threads raise fatal records
@@ -117,6 +129,51 @@
 // dropped_after_shutdown, or, if its push lands after the final delivery
 // pass, stays in the queue undelivered and uncounted. Stop producer threads
 // before shutdown to avoid it.
+//
+// Shutdown that gives up. Shutdown waits for the dispatch thread to return,
+// and for the delivery lock, only while delivery makes progress: if no
+// record is delivered and no sink flushed for the shutdown timeout
+// (set_shutdown_timeout, default_shutdown_timeout), a callback does not
+// return, and shutdown abandons the Core instead of waiting forever. It
+// reports through the diagnostic handler how many records were still queued
+// (statistics().<kind>.queued); those are not delivered, the sinks are
+// neither flushed nor destroyed, the dispatch thread is left to end with the
+// process, and flush() calls waiting on another thread return
+// (LumenError::CoreShutDown). A Core you own that is abandoned in its
+// destructor is not freed: its thread may still return from the callback and
+// use it. A callback on the shutting-down thread itself (a sink's flush() in
+// the final pass) is not bounded.
+//
+// fork() (Linux and macOS). The library registers pthread_atfork handlers.
+//   - Records queued in the parent when it forks are delivered by the
+//     parent; the child's copies are discarded and not counted again. Fatal
+//     records and diagnostic lines pending in the parent are the parent's.
+//   - In the child, a Core goes on: its locks are usable, and its dispatch
+//     thread is started again by the first record, flush or flush_for there.
+//     The shipped sinks start their writer threads again likewise; lines
+//     queued in the parent's sink are written by the parent. A DashboardSink
+//     draws only in the parent: in the child it takes records and does
+//     nothing else (the terminal belongs to the parent). Statistics continue
+//     from the parent's values.
+//   - Sinks of your own that hold threads or locks must handle fork
+//     themselves.
+//   - A child that ends with _exit() (or exec) loses the records it queued
+//     and the dispatch thread had not delivered, as with any buffered
+//     output; exit() and a return from main shut the global core down as in
+//     any process.
+//   - fork() from inside a sink callback: the child goes on with the
+//     delivery that callback belongs to on the same thread, so the record
+//     that callback received is offered to the sinks after it in both
+//     processes.
+// What this relies on. Strictly, the child of a multithreaded process may
+// only call async-signal-safe functions until it calls exec. Lumen's child
+// handler only stores to memory, re-initialises locks and condition
+// variables that no thread of the child uses, and frees memory; the threads
+// are started later, at the first use. That freeing memory and starting
+// threads work in the child is what glibc and macOS provide, and what every
+// language runtime that forks (Python's multiprocessing among them) relies
+// on too. Locks of other libraries held by other threads at the fork are
+// their business.
 
 namespace lumen {
 
@@ -131,8 +188,13 @@ using SinkId = uint64_t;
 //
 // Calls. One Core calls its handler with one line at a time, in the order the
 // lines were reported, never on two threads at once and never nested. The
-// call happens on a thread that delivers records (the dispatch thread, or a
-// thread inside flush()). A line reported while the handler is already
+// call happens on the thread that found the problem: one that delivers
+// records (the dispatch thread, a thread inside flush(), a thread that
+// raised a fatal record), the thread constructing the Core (a dispatch
+// thread that could not be started; in a fork child, the thread whose first
+// use starts it again), or the thread shutting the Core down (the losses of
+// the final pass, a shutdown that gave up). A line reported while the
+// handler is already
 // running is queued, and the thread running the handler passes it on after
 // the current call returns; so the handler may log, flush or replace itself,
 // and a reporting thread does not wait for a handler busy elsewhere. No Core
@@ -143,10 +205,15 @@ using SinkId = uint64_t;
 // line and what was thrown are written to std::cerr; the process and the
 // thread that delivers records go on.
 
+// How long shutdown and a fatal record wait for a thread that delivers
+// records and makes no progress (see "Shutdown that gives up").
+inline constexpr std::chrono::milliseconds default_shutdown_timeout{5000};
+
 struct QueueStatistics {
     uint64_t accepted = 0;                // queued for delivery (for logs, fatal records included)
     uint64_t dropped_queue_full = 0;      // refused: the queue was full
     uint64_t dropped_after_shutdown = 0;  // submitted after the Core shut down
+    uint64_t queued = 0;                  // accepted and not yet handed to the sinks
 };
 
 // Counters since the Core was created. Each value is exact when read while
@@ -209,27 +276,45 @@ public:
     // continues with the next sink.
     [[nodiscard]] std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id) const;
 
-    // Delivers every record submitted before the call, then calls flush() on
-    // every sink, and returns when all of that is done. Delivery happens on
-    // the calling thread (serialised with the dispatch thread).
+    // Both deliver every record submitted before the call, then call flush()
+    // on every sink, and return when all of that is done.
     //
-    // From inside a sink callback of this Core it does nothing and returns at
-    // once: the calling thread is the one delivering, and cannot wait for
-    // itself. The same holds when the callback belongs to another Core that
-    // this Core's delivery called into (a sink of A flushes B, a sink of B
-    // flushes A). The records stay queued and are delivered when the current
-    // pass continues. After shutdown it does nothing.
+    // flush() does the work on the calling thread (serialised with the
+    // dispatch thread), and waits without a limit for the delivery lock and
+    // for the sinks. flush_for() has the dispatch thread do it and waits at
+    // most `timeout`, so a caller that stops waiting is never left inside a
+    // sink callback (without a dispatch thread, see Threads above, it works
+    // as flush() does).
     //
-    // Sinks of two Cores that flush each other from their callbacks on two
-    // different threads at the same moment deadlock, as any two locks taken
-    // in opposite orders do: each thread holds its own Core's delivery and
-    // waits for the other's. Do not build such a cycle.
+    // flush_for reports why it did not flush; flush() returns in the same
+    // cases, without saying why:
+    //   - LumenError::FlushTimedOut (flush_for only): the time ran out (a
+    //     slow or blocked sink). The flush is still made later; giving up
+    //     loses nothing.
+    //   - LumenError::SinkBusy, at once, from inside a sink callback of this
+    //     Core (directly, or through a callback of another Core): the
+    //     calling thread is the one delivering and cannot wait for itself.
+    //     The records stay queued and are delivered when the current pass
+    //     continues.
+    //   - LumenError::SinkBusy, within about 5 ms, when waiting would never
+    //     end because of a cycle between Cores: a callback of Core A flushes
+    //     Core B while B's delivering thread, in a callback of its own,
+    //     flushes A (directly, or through further Cores). Each flush in the
+    //     cycle may fail this way; none waits forever.
+    //   - LumenError::CoreShutDown: the Core has shut down, or gave up its
+    //     shutdown while this waited.
+    [[nodiscard]] std::expected<void, std::error_code> flush_for(std::chrono::milliseconds timeout);
     void flush();
 
     [[nodiscard]] CoreStatistics statistics() const noexcept;
 
     // Replaces the diagnostic handler; an empty one silences diagnostics.
     void set_diagnostic_handler(DiagnosticHandler handler);
+
+    // How long shutdown and a fatal record wait for a delivering thread that
+    // makes no progress before giving up (see "Shutdown that gives up");
+    // default_shutdown_timeout to start with. Any thread.
+    void set_shutdown_timeout(std::chrono::milliseconds timeout) noexcept;
 
 private:
     template <BuiltRecord R>

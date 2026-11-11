@@ -24,6 +24,7 @@
 
 #include "errors.hpp"
 #include "lumen/detail/immortal.hpp"
+#include "lumen/error.hpp"
 #include "registration.hpp"
 
 namespace py = pybind11;
@@ -39,60 +40,18 @@ using Clock = std::chrono::steady_clock;
 inline constexpr std::chrono::milliseconds exit_poll_interval{1};
 inline constexpr std::chrono::milliseconds exit_signal_interval{50};
 
+// The exit priority of the hook in a multiprocessing child (see "fork()" in
+// the header): below the finalizers multiprocessing registers itself.
+inline constexpr int32_t multiprocessing_exit_priority = -100;
+
 // What the exit hook found, for the report at the end of finalisation.
 struct ExitOutcome {
-    bool interrupted = false;       // a wait ended because of a signal
-    bool flush_unfinished = false;  // when the Python sinks were removed
+    bool interrupted = false;  // a wait ended because of a signal
+    // Records still queued when the Python sinks were removed, if the
+    // delivery of step 2 had not finished.
+    std::optional<uint64_t> queued_at_detach;
     bool callback_still_running = false;
-};
-
-// Core::flush() on a thread of its own, so that the exit hook can stop
-// waiting for it. finish() waits for it. If the flush has not finished when
-// this is destroyed (a Python callback it delivers to does not return), the
-// thread is detached: joining it would wait for that callback.
-class BackgroundFlush {
-public:
-    explicit BackgroundFlush(Core& core) : done_(std::make_shared<std::atomic<bool>>(false)) {
-        try {
-            // std::thread, not std::jthread: Apple's libc++ lacks it.
-            thread_ = std::thread([&core, done = done_] {
-                core.flush();
-                done->store(true, std::memory_order_release);
-            });
-        } catch (const std::system_error&) {
-            // No thread could be created: flush here, without the time
-            // limit, rather than not at all.
-            const py::gil_scoped_release release;
-            core.flush();
-            done_->store(true, std::memory_order_release);
-        }
-    }
-    ~BackgroundFlush() {
-        if (!thread_.joinable()) {
-            return;
-        }
-        if (done()) {
-            thread_.join();
-        } else {
-            thread_.detach();
-        }
-    }
-    BackgroundFlush(const BackgroundFlush&) = delete;
-    BackgroundFlush& operator=(const BackgroundFlush&) = delete;
-    BackgroundFlush(BackgroundFlush&&) = delete;
-    BackgroundFlush& operator=(BackgroundFlush&&) = delete;
-
-    [[nodiscard]] bool done() const noexcept { return done_->load(std::memory_order_acquire); }
-
-    void finish() {
-        if (thread_.joinable()) {
-            thread_.join();
-        }
-    }
-
-private:
-    std::shared_ptr<std::atomic<bool>> done_;  // shared with the thread, which may outlive this
-    std::thread thread_;
+    bool other_call_still_running = false;  // a call that is not a sink callback
 };
 
 // Everything the exit hook coordinates. One instance for the process, never
@@ -108,18 +67,18 @@ struct ExitState {
     std::vector<SinkId> python_sinks;  // guarded by mutex
     bool python_diagnostics = false;   // guarded by mutex
     DiagnosticHandler diagnostics =
-        stderr_diagnostics();  // guarded by mutex: the one installed last
-    ExitOutcome outcome;       // guarded by mutex
-    // The exit hook's flush, finished at the end of finalisation: once Python
-    // sinks are no longer called it only delivers to sinks written in C++,
-    // which must not still run when C++ static destruction begins.
-    std::unique_ptr<BackgroundFlush> exit_flush;  // guarded by mutex
+        stderr_diagnostics();                     // guarded by mutex: the one installed last
+    ExitOutcome outcome;                          // guarded by mutex
     std::atomic<bool> records_open{true};         // see admit_python_record
     std::atomic<bool> sink_callbacks_open{true};  // see PythonCall
     std::atomic<bool> gate_open{true};            // see PythonCall
     std::atomic<uint64_t> calls_in_python{0};
+    std::atomic<uint64_t> other_calls_in_python{0};  // those of kind Other
     std::atomic<uint64_t> records_refused{0};
     std::atomic<uint64_t> records_undelivered{0};
+    // `mutex`, held from the os.register_at_fork "before" hook to "after";
+    // touched only by the thread that forks, with the GIL held.
+    std::optional<std::unique_lock<std::mutex>> fork_lock;
 };
 
 [[nodiscard]] ExitState& exit_state() {
@@ -148,8 +107,19 @@ enum class WaitResult : uint8_t {
     Interrupted
 };
 
-// Waits until `done()` or `deadline`. Called with the GIL held, on the main
-// thread (atexit functions run there); `done` is called without the GIL.
+// Called with the GIL held, on the main thread (atexit functions run there),
+// between two waits without the GIL: whether a signal arrived (Ctrl-C).
+[[nodiscard]] bool interrupted_now() {
+    if (PyErr_CheckSignals() == 0) {
+        return false;
+    }
+    // The interpreter is already exiting: the interruption is honoured by
+    // waiting no longer, so the exception itself is not needed.
+    PyErr_Clear();
+    return true;
+}
+
+// Waits until `done()` or `deadline`; `done` is called without the GIL.
 template <std::predicate F>
 [[nodiscard]] WaitResult wait_until(F done, Clock::time_point deadline) {
     while (true) {
@@ -167,11 +137,33 @@ template <std::predicate F>
         if (Clock::now() >= deadline) {
             return WaitResult::TimedOut;
         }
-        if (PyErr_CheckSignals() != 0) {
-            // The interpreter is already exiting: the interruption is
-            // honoured by waiting no longer, so the exception itself is not
-            // needed.
-            PyErr_Clear();
+        if (interrupted_now()) {
+            return WaitResult::Interrupted;
+        }
+    }
+}
+
+// Step 2: Core::flush_for in slices, looking for signals between them. A
+// later slice asks for a flush again, which the dispatch thread joins to the
+// one in progress. Any outcome but a timeout (done, or a Core that has shut
+// down) leaves nothing to wait for.
+[[nodiscard]] WaitResult flush_until(Core& c, Clock::time_point deadline) {
+    while (true) {
+        std::expected<void, std::error_code> flushed;
+        {
+            const py::gil_scoped_release release;
+            const auto left =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+            flushed =
+                c.flush_for(std::clamp(left, std::chrono::milliseconds{0}, exit_signal_interval));
+        }
+        if (flushed || flushed.error() != make_error_code(LumenError::FlushTimedOut)) {
+            return WaitResult::Done;
+        }
+        if (Clock::now() >= deadline) {
+            return WaitResult::TimedOut;
+        }
+        if (interrupted_now()) {
             return WaitResult::Interrupted;
         }
     }
@@ -244,22 +236,30 @@ private:
     return state.calls_in_python.load(std::memory_order_seq_cst) == 0;
 }
 
+[[nodiscard]] uint64_t queued_records(const Core& c) noexcept {
+    const CoreStatistics statistics = c.statistics();
+    return statistics.logs.queued + statistics.metrics.queued + statistics.progress.queued;
+}
+
 // Steps 2 and 3 of the header. Returns whether no Python callback is running
-// any more. If the flush has not finished by then (a sink written in C++ is
-// slow), it goes on on its own thread until the end of finalisation; but the
-// Python sinks are removed before it reaches the records it has not reached
-// yet.
-[[nodiscard]] bool flush_within_limits(ExitState& state, const BackgroundFlush& flush,
-                                       ExitOutcome& outcome) {
+// any more. Once Python sinks are no longer called, they refuse each record
+// at once, so in step 3 the delivery usually finishes quickly: every record
+// has then reached each Python sink, received or counted as not.
+[[nodiscard]] bool flush_within_limits(ExitState& state, Core& c, ExitOutcome& outcome) {
     const ShortSwitchInterval faster_hand_over;
-    const WaitResult delivered =
-        wait_until([&flush] { return flush.done(); }, Clock::now() + exit_delivery_limit);
+    WaitResult delivered = flush_until(c, Clock::now() + exit_delivery_limit);
     outcome.interrupted = delivered == WaitResult::Interrupted;
     state.sink_callbacks_open.store(false, std::memory_order_seq_cst);
-    const WaitResult finished = wait_until([&] { return flush.done() && no_call_in_python(state); },
-                                           Clock::now() + exit_callback_limit);
+    const Clock::time_point deadline = Clock::now() + exit_callback_limit;
+    if (delivered == WaitResult::TimedOut) {
+        delivered = flush_until(c, deadline);
+        outcome.interrupted = outcome.interrupted || delivered == WaitResult::Interrupted;
+    }
+    const WaitResult finished = wait_until([&state] { return no_call_in_python(state); }, deadline);
     outcome.interrupted = outcome.interrupted || finished == WaitResult::Interrupted;
-    outcome.flush_unfinished = !flush.done();
+    if (delivered != WaitResult::Done) {
+        outcome.queued_at_detach = queued_records(c);
+    }
     return no_call_in_python(state);
 }
 
@@ -279,23 +279,37 @@ void remove_python_sinks(Core& c, const std::vector<SinkId>& sinks) {
     }
 }
 
+// A call into Python that never returns: see the header. If only sink
+// callbacks are stuck, each holds core()'s delivery lock, and its shutdown
+// can give up at once instead of waiting for them.
+void leave_stuck_calls_behind(ExitState& state, Core& c, ExitOutcome& outcome) {
+    outcome.callback_still_running = true;
+    outcome.other_call_still_running =
+        state.other_calls_in_python.load(std::memory_order_seq_cst) != 0;
+    if (!outcome.other_call_still_running) {
+        c.set_shutdown_timeout(std::chrono::milliseconds{0});
+    }
+}
+
 // Steps 1 to 6 of the header. Runs on the thread that finalises the
-// interpreter, with the GIL held.
+// interpreter, with the GIL held; in a multiprocessing child, possibly a
+// second time, which does nothing.
 void detach_from_python() {
     ExitState& state = exit_state();
     std::vector<SinkId> sinks;
     bool reset_diagnostics = false;
     {
         const std::scoped_lock lock(state.mutex);
-        state.exit_hook_ran = true;
+        if (std::exchange(state.exit_hook_ran, true)) {
+            return;
+        }
         state.records_open.store(false, std::memory_order_seq_cst);
         sinks = std::exchange(state.python_sinks, {});
         reset_diagnostics = std::exchange(state.python_diagnostics, false);
     }
     Core& c = core();
     ExitOutcome outcome;
-    auto flush = std::make_unique<BackgroundFlush>(c);
-    bool idle = flush_within_limits(state, *flush, outcome);
+    bool idle = flush_within_limits(state, c, outcome);
     const Clock::time_point deadline = Clock::now() + exit_callback_limit;
     if (idle) {
         remove_python_sinks(c, sinks);
@@ -311,14 +325,11 @@ void detach_from_python() {
         idle = last == WaitResult::Done;
         outcome.interrupted = outcome.interrupted || last == WaitResult::Interrupted;
     }
-    outcome.callback_still_running = !idle;
+    if (!idle) {
+        leave_stuck_calls_behind(state, c, outcome);
+    }
     const std::scoped_lock lock(state.mutex);
     state.outcome = outcome;
-    if (idle) {
-        state.exit_flush = std::move(flush);
-    }
-    // Otherwise `flush` may be blocked behind the Python call that is still
-    // running; it is detached here, and the process ends without waiting.
 }
 
 // The lines of the exit report; none when nothing was lost.
@@ -338,43 +349,40 @@ void detach_from_python() {
             undelivered, exit_delivery_limit.count(),
             outcome.interrupted ? ", or the wait for them was interrupted" : ""));
     }
-    if (outcome.flush_unfinished && !outcome.callback_still_running) {
+    if (outcome.queued_at_detach && !outcome.callback_still_running) {
         lines.push_back(std::format(
             "lumen: the delivery of the records queued at interpreter exit had not finished {} "
-            "ms later; Python sinks were detached without the records it had not reached (how "
-            "many is not known); sinks written in C++ still receive them",
-            (exit_delivery_limit + exit_callback_limit).count()));
+            "ms later; Python sinks were detached with {} record(s) still queued, which sinks "
+            "written in C++ still receive",
+            (exit_delivery_limit + exit_callback_limit).count(), *outcome.queued_at_detach));
     }
-    if (outcome.callback_still_running) {
+    if (outcome.other_call_still_running) {
         lines.push_back(std::format(
-            "lumen: a Python sink or diagnostic handler was still running when the interpreter "
-            "exited, and records queued behind it were not delivered; the process ends now with "
-            "status {}, without C++ static destruction, because the library's shutdown would "
-            "wait for that call forever",
+            "lumen: a Python diagnostic handler was still running when the interpreter exited; "
+            "the process ends now with status {}, without C++ static destruction, because the "
+            "library's shutdown could wait for that call forever",
             EXIT_FAILURE));
+    } else if (outcome.callback_still_running) {
+        lines.emplace_back(
+            "lumen: a Python sink was still running when the interpreter exited; the library's "
+            "shutdown leaves it and the records queued behind it");
     }
     return lines;
 }
 
 // Runs at the very end of Py_FinalizeEx (Py_AtExit), when no Python code can
-// run any more: waits for the exit hook's flush to finish delivering to sinks
-// written in C++, reports what the hook could not deliver, and ends the
-// process if a Python callback never returned.
+// run any more: reports what the hook could not deliver, and ends the
+// process if a Python call that is not a sink callback never returned.
 void report_at_end_of_finalisation() noexcept {
     ExitState& state = exit_state();
     ExitOutcome outcome;
     DiagnosticHandler handler;
-    std::unique_ptr<BackgroundFlush> flush;
     {
         const std::scoped_lock lock(state.mutex);
         outcome = state.outcome;
         handler = state.diagnostics;
-        flush = std::move(state.exit_flush);
     }
     try {
-        if (flush) {
-            flush->finish();
-        }
         const std::vector<std::string> lines =
             exit_report(outcome, state.records_refused.load(std::memory_order_relaxed),
                         state.records_undelivered.load(std::memory_order_relaxed));
@@ -389,7 +397,7 @@ void report_at_end_of_finalisation() noexcept {
         std::cerr << "lumen: the report of records lost at interpreter exit could not be "
                      "written\n";
     }
-    if (outcome.callback_still_running) {
+    if (outcome.other_call_still_running) {
         std::cout.flush();
         std::cerr.flush();
         static_cast<void>(std::fflush(nullptr));  // what fails to flush now is lost anyway
@@ -401,6 +409,63 @@ void report_at_end_of_finalisation() noexcept {
     return state.gate_open.load(std::memory_order_seq_cst) &&
            (kind != PythonCallKind::SinkCallback ||
             state.sink_callbacks_open.load(std::memory_order_seq_cst));
+}
+
+void count_call(ExitState& state, PythonCallKind kind, bool entering) noexcept {
+    if (entering) {
+        state.calls_in_python.fetch_add(1, std::memory_order_seq_cst);
+        if (kind == PythonCallKind::Other) {
+            state.other_calls_in_python.fetch_add(1, std::memory_order_seq_cst);
+        }
+        return;
+    }
+    if (kind == PythonCallKind::Other) {
+        state.other_calls_in_python.fetch_sub(1, std::memory_order_seq_cst);
+    }
+    state.calls_in_python.fetch_sub(1, std::memory_order_seq_cst);
+}
+
+// os.register_at_fork hooks, called with the GIL held on the forking thread.
+void lock_before_fork() {
+    ExitState& state = exit_state();
+    state.fork_lock.emplace(state.mutex);
+}
+
+void unlock_after_fork_in_parent() {
+    exit_state().fork_lock.reset();
+}
+
+// In a multiprocessing child (see "fork()" in the header): from inside
+// multiprocessing's own after-fork handling, which first clears the
+// finalizers, registers the exit hook as one.
+void run_hook_at_multiprocessing_exit(const py::object& hook) {
+    py::module_::import("multiprocessing.util")
+        .attr("Finalize")(py::none(), hook,
+                          py::arg("exitpriority") = multiprocessing_exit_priority);
+}
+
+void reset_in_fork_child() {
+    ExitState& state = exit_state();
+    // The calls counted were made by threads of the parent.
+    state.calls_in_python.store(0, std::memory_order_seq_cst);
+    state.other_calls_in_python.store(0, std::memory_order_seq_cst);
+    state.fork_lock.reset();
+    const py::dict modules = py::module_::import("sys").attr("modules");
+    if (modules.contains("multiprocessing.util")) {
+        const py::object hook = py::module_::import(module_name).attr("_detach_from_python");
+        modules["multiprocessing.util"].attr("register_after_fork")(
+            hook, py::cpp_function(&run_hook_at_multiprocessing_exit));
+    }
+}
+
+void register_fork_hooks(py::module_& m, const py::object& hook) {
+    // multiprocessing's after-fork registry refers to `hook` weakly; the
+    // module attribute keeps it alive.
+    m.attr("_detach_from_python") = hook;
+    py::module_::import("os").attr("register_at_fork")(
+        py::arg("before") = py::cpp_function(&lock_before_fork),
+        py::arg("after_in_parent") = py::cpp_function(&unlock_after_fork_in_parent),
+        py::arg("after_in_child") = py::cpp_function(&reset_in_fork_child));
 }
 
 }  // namespace
@@ -420,10 +485,10 @@ PythonCall::PythonCall(PythonCallKind kind) noexcept : kind_(kind) {
     if (!kind_admitted(state, kind)) {
         return;
     }
-    state.calls_in_python.fetch_add(1, std::memory_order_seq_cst);
+    count_call(state, kind, true);
     admitted_ = kind_admitted(state, kind) && interpreter_can_run_code();
     if (!admitted_) {
-        state.calls_in_python.fetch_sub(1, std::memory_order_seq_cst);
+        count_call(state, kind, false);
     }
 }
 
@@ -433,7 +498,7 @@ bool PythonCall::still_admitted() const noexcept {
 
 PythonCall::~PythonCall() {
     if (admitted_) {
-        exit_state().calls_in_python.fetch_sub(1, std::memory_order_seq_cst);
+        count_call(exit_state(), kind_, false);
     }
 }
 
@@ -491,9 +556,11 @@ void set_diagnostic_handler(Core& core, const DiagnosticHandler& handler, bool c
     state.python_diagnostics = calls_python;
 }
 
-void register_interpreter_exit(py::module_& /*m*/) {
-    py::module_::import("atexit").attr("register")(
-        py::cpp_function(&detach_from_python, py::name("_lumen_detach_from_python")));
+void register_interpreter_exit(py::module_& m) {
+    const py::object hook =
+        py::cpp_function(&detach_from_python, py::name("_lumen_detach_from_python"));
+    py::module_::import("atexit").attr("register")(hook);
+    register_fork_hooks(m, hook);
     if (Py_AtExit(&report_at_end_of_finalisation) != 0) {
         PyErr_SetString(PyExc_RuntimeError,
                         "lumen: cannot register its end-of-exit report (Py_AtExit is full)");

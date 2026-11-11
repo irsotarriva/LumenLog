@@ -19,6 +19,7 @@ std::string LumenErrorCategory::message(int ev) const {
         case LumenError::IoError:           return "write to the sink's destination failed";
         case LumenError::NotATerminal:      return "destination is not a terminal";
         case LumenError::CoreShutDown:      return "the core has shut down";
+        case LumenError::FlushTimedOut:     return "the flush did not finish in time";
     }
     return "unknown lumen error";
 }

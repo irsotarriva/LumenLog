@@ -20,6 +20,10 @@ DeliveryScope::~DeliveryScope() {
     tls_innermost_delivery = frame_.outer;
 }
 
+DeliveryFrame* innermost_delivery_frame() noexcept {
+    return tls_innermost_delivery;
+}
+
 DeliveryFrame* delivery_frame_for(const Delivery& owner) noexcept {
     for (DeliveryFrame* frame = tls_innermost_delivery; frame != nullptr; frame = frame->outer) {
         if (frame->owner == &owner) {

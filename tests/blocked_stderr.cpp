@@ -7,7 +7,14 @@
 //                            counting sink received, then ends itself with
 //                            SIGKILL (see end_now)
 //   blocked_stderr fatal     fills the pipe, then LUMEN_LOG_FATAL: the
-//                            process must terminate rather than hang
+//                            process must end with SIGABRT rather than hang
+//                            (the C++ library's default terminate handler,
+//                            which would write to the blocked pipe, is not
+//                            called)
+//   blocked_stderr fatal-handler
+//                            as fatal, with a terminate handler of the
+//                            program's own, which must still run: it prints
+//                            a line on stdout and aborts
 #include <unistd.h>
 
 #include <chrono>
@@ -86,8 +93,9 @@ inline constexpr std::size_t large_size = 4000;
 int main(int argc, char** argv) {
     const std::span<char*> raw_args(argv, static_cast<std::size_t>(argc));
     const std::vector<std::string_view> args(raw_args.begin(), raw_args.end());
-    if (args.size() != 2 || (args.at(1) != "deliver" && args.at(1) != "fatal")) {
-        std::cout << "usage: blocked_stderr deliver|fatal\n";
+    if (args.size() != 2 ||
+        (args.at(1) != "deliver" && args.at(1) != "fatal" && args.at(1) != "fatal-handler")) {
+        std::cout << "usage: blocked_stderr deliver|fatal|fatal-handler\n";
         return 2;
     }
     lumen::TerminalSink::Config config;
@@ -105,12 +113,15 @@ int main(int argc, char** argv) {
     if (args.at(1) == "deliver") {
         return deliver(*received);
     }
-    // The C++ library's default terminate handler prints a message to standard
-    // error, which blocks here like everything else on it; that is the
-    // handler's business, not the sinks'. This one ends the process at once,
-    // so the test sees whether the sinks let the fatal path reach
-    // std::terminate.
-    std::set_terminate([] { end_now(); });
+    if (args.at(1) == "fatal-handler") {
+        std::set_terminate([] {
+            std::cout << "terminate handler\n" << std::flush;
+            // Not std::abort(): ThreadSanitizer's abort() flushes the C
+            // streams first, and standard error blocks here.
+            static_cast<void>(std::raise(SIGABRT));
+            std::abort();
+        });
+    }
     const std::string large(large_size, 'x');
     for (uint32_t i = 0; i < 100; ++i) {
         LUMEN_LOG_INFO("{}", large);

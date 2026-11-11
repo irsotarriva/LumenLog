@@ -2,10 +2,15 @@
 // shutdown and fatal records. Every test here runs against its own Core.
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <expected>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -917,6 +922,333 @@ TEST(CoreFatalDeathTest, SinkReceivingAFatalRaisedByAnotherSinkCannotRemoveItAnd
             core.flush();
         },
         "remove_sink: sink is busy in a callback on this thread");
+}
+
+// Bounded flush.
+
+// Records on which thread its flush() runs.
+class FlushThreadSink : public Sink {
+public:
+    explicit FlushThreadSink(std::shared_ptr<std::atomic<std::thread::id>> flushed_on)
+        : flushed_on_(std::move(flushed_on)) {}
+    void flush() override { flushed_on_->store(std::this_thread::get_id()); }
+
+private:
+    std::shared_ptr<std::atomic<std::thread::id>> flushed_on_;
+};
+
+TEST_F(CoreFlushTest, FlushForDeliversEverythingAndFlushesTheSinksOnTheDispatchThread) {
+    auto flushed_on = std::make_shared<std::atomic<std::thread::id>>();
+    ASSERT_TRUE(_core.add_sink(std::make_unique<FlushThreadSink>(flushed_on)));
+    for (int i = 0; i < 500; ++i) {
+        log_to(_core, "record");
+    }
+    const std::size_t flushes_before = _captured->flushes();
+
+    const std::expected<void, std::error_code> flushed = _core.flush_for(generous_timeout);
+
+    EXPECT_TRUE(flushed.has_value());
+    EXPECT_EQ(_captured->logs().size(), 500U);
+    EXPECT_EQ(_captured->flushes(), flushes_before + 1);
+    EXPECT_NE(flushed_on->load(), std::thread::id{});
+    EXPECT_NE(flushed_on->load(), std::this_thread::get_id());
+}
+
+TEST_F(CoreFlushTest, FlushForBehindABlockedCallbackTimesOutAndTheFlushIsMadeOnceItReturns) {
+    auto gate = std::make_shared<Gate>();
+    auto received = std::make_shared<std::atomic<uint64_t>>(0);
+    ASSERT_TRUE(_core.add_sink(std::make_unique<GateSink>(gate, received)));
+    log_to(_core, "blocks");
+    ASSERT_TRUE(gate->wait_until_entered(1));
+    const std::size_t flushes_before = _captured->flushes();
+
+    const std::expected<void, std::error_code> flushed =
+        _core.flush_for(std::chrono::milliseconds{50});
+
+    ASSERT_FALSE(flushed.has_value());
+    EXPECT_EQ(flushed.error(), LumenError::FlushTimedOut);
+    EXPECT_EQ(_captured->flushes(), flushes_before);
+    gate->open();
+    _core.flush();
+    // The request that timed out was served too, before or with this flush.
+    EXPECT_GE(_captured->flushes(), flushes_before + 1);
+    EXPECT_EQ(received->load(), 1U);
+}
+
+TEST_F(CoreFlushTest, FlushForFromInsideACallbackOfTheSameCoreFailsWithSinkBusy) {
+    auto result = std::make_shared<std::error_code>();
+    Core& core = _core;
+    ASSERT_TRUE(_core.add_sink(callback_sink([&core, result](const LogRecord& /*record*/) {
+        const std::expected<void, std::error_code> flushed = core.flush_for(generous_timeout);
+        *result = flushed ? std::error_code{} : flushed.error();
+    })));
+    log_to(_core, "trigger");
+    _core.flush();
+
+    EXPECT_EQ(*result, LumenError::SinkBusy);
+}
+
+// Flushes its Core from its destructor, which runs at that Core's shutdown.
+class FlushesWhenDestroyed : public Sink {
+public:
+    FlushesWhenDestroyed(Core& core, std::shared_ptr<std::error_code> result)
+        : core_(core), result_(std::move(result)) {}
+    ~FlushesWhenDestroyed() override {
+        const std::expected<void, std::error_code> flushed = core_.flush_for(generous_timeout);
+        *result_ = flushed ? std::error_code{} : flushed.error();
+    }
+    FlushesWhenDestroyed(const FlushesWhenDestroyed&) = delete;
+    FlushesWhenDestroyed& operator=(const FlushesWhenDestroyed&) = delete;
+    FlushesWhenDestroyed(FlushesWhenDestroyed&&) = delete;
+    FlushesWhenDestroyed& operator=(FlushesWhenDestroyed&&) = delete;
+    void flush() override {}
+
+private:
+    Core& core_;
+    std::shared_ptr<std::error_code> result_;
+};
+
+TEST(CoreShutdownTest, FlushForAfterShutdownFailsWithCoreShutDown) {
+    const test::CleanContext context;
+    auto result = std::make_shared<std::error_code>();
+    {
+        Core core([](std::string_view /*line*/) {});
+        ASSERT_TRUE(core.add_sink(std::make_unique<FlushesWhenDestroyed>(core, result)));
+    }
+    EXPECT_EQ(*result, LumenError::CoreShutDown);
+}
+
+// Two Cores whose dispatch threads, each inside a callback, flush the other
+// Core: each callback waits until both have started, then flushes the other
+// Core with the given function and records what it returned.
+class CrossFlush {
+public:
+    using Flush = std::error_code (*)(Core& other);
+
+    explicit CrossFlush(Flush flush) {
+        add_flusher_(first_, second_, 0, flush);
+        add_flusher_(second_, first_, 1, flush);
+    }
+
+    // Starts both and waits for both flushes to return; false if they did not.
+    [[nodiscard]] bool run() {
+        log_to(first_, "cross");
+        log_to(second_, "cross");
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, generous_timeout, [this] { return returned_ == 2; });
+    }
+
+    [[nodiscard]] std::array<std::error_code, 2> results() {
+        const std::scoped_lock lock(mutex_);
+        return results_;
+    }
+
+private:
+    void add_flusher_(Core& own, Core& other, std::size_t slot, Flush flush) {
+        EXPECT_TRUE(own.add_sink(callback_sink([this, &other, slot, flush](const LogRecord& r) {
+            if (r.message != "cross") {
+                return;
+            }
+            arrive_and_wait_();
+            const std::error_code result = flush(other);
+            const std::scoped_lock lock(mutex_);
+            results_.at(slot) = result;
+            ++returned_;
+            changed_.notify_all();
+        })));
+    }
+
+    void arrive_and_wait_() {
+        std::unique_lock lock(mutex_);
+        ++arrived_;
+        changed_.notify_all();
+        changed_.wait(lock, [this] { return arrived_ == 2; });
+    }
+
+    const test::CleanContext context_;
+    std::mutex mutex_;
+    std::condition_variable changed_;           // waits on mutex_
+    uint32_t arrived_ = 0;                      // guarded by mutex_
+    uint32_t returned_ = 0;                     // guarded by mutex_
+    std::array<std::error_code, 2> results_{};  // guarded by mutex_
+    // Last: destroyed first, while the members their callbacks use exist.
+    Core first_{[](std::string_view /*line*/) {}};
+    Core second_{[](std::string_view /*line*/) {}};
+};
+
+TEST(CrossFlushTest, FlushForBetweenTwoDispatchThreadsReturnsSinkBusyInsteadOfDeadlocking) {
+    CrossFlush cross([](Core& other) {
+        const std::expected<void, std::error_code> flushed = other.flush_for(generous_timeout);
+        return flushed ? std::error_code{} : flushed.error();
+    });
+
+    ASSERT_TRUE(cross.run());
+    const std::array<std::error_code, 2> results = cross.results();
+    // At least one sees the cycle; the other then either sees it too or is
+    // served once the first returns from its callback.
+    EXPECT_TRUE(results[0] == LumenError::SinkBusy || results[1] == LumenError::SinkBusy);
+    for (const std::error_code& result : results) {
+        EXPECT_TRUE(!result || result == LumenError::SinkBusy) << result.message();
+    }
+}
+
+TEST(CrossFlushTest, FlushBetweenTwoDispatchThreadsReturnsInsteadOfDeadlocking) {
+    CrossFlush cross([](Core& other) {
+        other.flush();
+        return std::error_code{};
+    });
+
+    EXPECT_TRUE(cross.run());
+}
+
+TEST_F(CoreStatisticsTest, QueuedCountsRecordsAcceptedAndNotYetHandedToTheSinks) {
+    auto gate = std::make_shared<Gate>();
+    auto received = std::make_shared<std::atomic<uint64_t>>(0);
+    ASSERT_TRUE(_core.add_sink(std::make_unique<GateSink>(gate, received)));
+    log_to(_core, "blocks");
+    ASSERT_TRUE(gate->wait_until_entered(1));
+    for (int i = 0; i < 5; ++i) {
+        log_to(_core, "queued");
+    }
+    metric_to(_core, "queued", 1.0);
+
+    const CoreStatistics blocked = _core.statistics();
+    gate->open();
+    _core.flush();
+    const CoreStatistics delivered = _core.statistics();
+
+    EXPECT_EQ(blocked.logs.queued, 5U);
+    EXPECT_EQ(blocked.metrics.queued, 1U);
+    EXPECT_EQ(delivered.logs.queued, 0U);
+    EXPECT_EQ(delivered.metrics.queued, 0U);
+}
+
+// Bounded shutdown.
+
+// Lines a Core reports, from any thread.
+struct ReportedLines {
+    std::mutex mutex;
+    std::vector<std::string> lines;  // guarded by mutex
+
+    [[nodiscard]] std::vector<std::string> copy() {
+        const std::scoped_lock lock(mutex);
+        return lines;
+    }
+};
+
+[[nodiscard]] std::unique_ptr<Core> core_reporting_to(const std::shared_ptr<ReportedLines>& to) {
+    return std::make_unique<Core>([to](std::string_view line) {
+        const std::scoped_lock lock(to->mutex);
+        to->lines.emplace_back(line);
+    });
+}
+
+TEST(CoreShutdownTest, ShutdownGivesUpOnACallbackThatDoesNotReturnAndReportsTheQueuedCount) {
+    const test::CleanContext context;
+    auto reported = std::make_shared<ReportedLines>();
+    auto gate = std::make_shared<Gate>();
+    auto received = std::make_shared<std::atomic<uint64_t>>(0);
+    std::unique_ptr<Core> core = core_reporting_to(reported);
+    ASSERT_TRUE(core->add_sink(std::make_unique<GateSink>(gate, received)));
+    core->set_shutdown_timeout(std::chrono::milliseconds{100});
+    log_to(*core, "blocks");
+    ASSERT_TRUE(gate->wait_until_entered(1));
+    for (int i = 0; i < 3; ++i) {
+        log_to(*core, "queued behind it");
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    core.reset();
+    const auto took = std::chrono::steady_clock::now() - start;
+    const uint64_t received_by_then = received->load();
+    // The abandoned dispatch thread delivers the rest and ends once released;
+    // the abandoned Core stays allocated for it.
+    gate->open();
+
+    EXPECT_GE(took, std::chrono::milliseconds{100});
+    EXPECT_LT(took, generous_timeout);
+    EXPECT_EQ(received_by_then, 0U);
+    const std::vector<std::string> lines = reported->copy();
+    ASSERT_EQ(lines.size(), 1U);
+    EXPECT_NE(lines.front().find("shutdown gave up after 100 ms"), std::string::npos);
+    EXPECT_NE(lines.front().find("3 queued record(s) were not delivered"), std::string::npos);
+}
+
+// Takes `delay` over each record.
+class SlowSink : public Sink {
+public:
+    SlowSink(std::chrono::milliseconds delay, std::shared_ptr<std::atomic<uint64_t>> received)
+        : delay_(delay), received_(std::move(received)) {}
+    void on_log(const LogRecord& /*record*/) override {
+        std::this_thread::sleep_for(delay_);
+        received_->fetch_add(1);
+    }
+    void flush() override {}
+
+private:
+    std::chrono::milliseconds delay_;
+    std::shared_ptr<std::atomic<uint64_t>> received_;
+};
+
+TEST(CoreShutdownTest, ShutdownWaitsLongerThanItsTimeoutForASinkThatKeepsMakingProgress) {
+    const test::CleanContext context;
+    auto reported = std::make_shared<ReportedLines>();
+    auto received = std::make_shared<std::atomic<uint64_t>>(0);
+    {
+        std::unique_ptr<Core> core = core_reporting_to(reported);
+        ASSERT_TRUE(
+            core->add_sink(std::make_unique<SlowSink>(std::chrono::milliseconds{20}, received)));
+        core->set_shutdown_timeout(std::chrono::milliseconds{250});
+        for (int i = 0; i < 25; ++i) {
+            log_to(*core, "slow");
+        }
+    }
+    EXPECT_EQ(received->load(), 25U);
+    EXPECT_TRUE(reported->copy().empty());
+}
+
+TEST(CoreFatalDeathTest, FatalWithTheDefaultTerminateHandlerAbortsWithoutTheHandlersMessage) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT(
+        {
+            Core core;
+            EXPECT_TRUE(core.add_sink(std::make_unique<StderrSink>()));
+            log_to(core, "boom", LogLevel::Fatal);
+        },
+        testing::KilledBySignal(SIGABRT), "^delivered:boom\nflushed\n$");
+}
+
+TEST(CoreFatalDeathTest, FatalCallsTheProgramsOwnTerminateHandler) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT(
+        {
+            std::set_terminate([] {
+                std::cerr << "the program's handler\n" << std::flush;
+                std::abort();
+            });
+            Core core;
+            EXPECT_TRUE(core.add_sink(std::make_unique<StderrSink>()));
+            log_to(core, "boom", LogLevel::Fatal);
+        },
+        testing::KilledBySignal(SIGABRT), "flushed\nthe program's handler\n$");
+}
+
+TEST(CoreFatalDeathTest, FatalWhileACallbackNeverReturnsEndsTheProcessAfterTheShutdownTimeout) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT(
+        {
+            Core core;
+            auto gate = std::make_shared<Gate>();
+            auto received = std::make_shared<std::atomic<uint64_t>>(0);
+            EXPECT_TRUE(core.add_sink(std::make_unique<GateSink>(gate, received)));
+            core.set_shutdown_timeout(std::chrono::milliseconds{50});
+            log_to(core, "blocks");
+            EXPECT_TRUE(gate->wait_until_entered(1));
+            log_to(core, "boom", LogLevel::Fatal);
+        },
+        testing::KilledBySignal(SIGABRT),
+        "lumen: a fatal record was not delivered: the thread delivering records made no "
+        "progress for 50 ms");
 }
 
 }  // namespace

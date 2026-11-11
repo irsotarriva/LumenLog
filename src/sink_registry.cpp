@@ -81,9 +81,22 @@ uint64_t SinkRegistry::version() const noexcept {
     return version_.load(std::memory_order_acquire);
 }
 
-RegistrySnapshot SinkRegistry::snapshot() const {
+std::shared_ptr<const Registry> SinkRegistry::refresh(std::shared_ptr<const Registry>& held,
+                                                      uint64_t& version) const {
     const std::scoped_lock lock(mutex_);
-    return RegistrySnapshot{sinks_, version_.load(std::memory_order_relaxed)};
+    std::shared_ptr<const Registry> replaced = std::exchange(held, sinks_);
+    version = version_.load(std::memory_order_relaxed);
+    return replaced;
+}
+
+std::unique_lock<std::mutex> SinkRegistry::lock_for_fork() {
+    return std::unique_lock(mutex_);
+}
+
+void SinkRegistry::clear_busy_in_fork_child() noexcept {
+    for (const std::shared_ptr<SinkEntry>& entry : *sinks_) {
+        entry->busy.store(false, std::memory_order_relaxed);
+    }
 }
 
 void SinkRegistry::replace_(std::shared_ptr<const Registry> next) {

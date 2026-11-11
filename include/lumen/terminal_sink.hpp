@@ -90,8 +90,9 @@ public:
 
     // Fails with LumenError::InvalidSinkConfig if time_format is not a valid
     // pattern or max_queued_lines is 0, and with the error std::thread
-    // reports (std::errc::resource_unavailable_try_again when the system is
-    // out of threads) if the writer thread cannot be started.
+    // reports, as a std::generic_category code on every standard library
+    // (std::errc::resource_unavailable_try_again when the system is out of
+    // threads), if the writer thread cannot be started.
     [[nodiscard]] static std::expected<std::unique_ptr<TerminalSink>, std::error_code> create(
         Config config);
 

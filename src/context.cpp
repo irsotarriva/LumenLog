@@ -9,6 +9,7 @@
 #include <expected>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -17,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "fork_handlers.hpp"
 #include "lumen/context.hpp"
 #include "lumen/detail/immortal.hpp"
 #include "lumen/detail/tag_table.hpp"
@@ -54,6 +56,15 @@ struct ProcessContext {
     std::shared_ptr<const TagTable> tags =
         std::make_shared<const TagTable>(max_process_tags);  // guarded by mutex
     std::atomic<uint64_t> version{1};                        // written under mutex, read without it
+    // `mutex`, held by the fork handlers from prepare to parent or child
+    // (src/fork_handlers.hpp), so that a child does not inherit it locked by
+    // a thread of the parent; touched only by the thread that forks.
+    std::optional<std::unique_lock<std::mutex>> fork_lock;
+    const ForkRegistration fork{ForkHandlers{
+        .prepare = [this] { fork_lock.emplace(mutex); },
+        .parent = [this] { fork_lock.reset(); },
+        .child = [this] { fork_lock.reset(); },
+    }};
 };
 
 // Never destroyed: a record submitted during static destruction still reads it.

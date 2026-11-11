@@ -67,6 +67,15 @@ void DiagnosticReporter::set_handler(DiagnosticHandler handler) {
     // `previous` is released here, without the lock.
 }
 
+std::unique_lock<std::mutex> DiagnosticReporter::lock_for_fork() {
+    return std::unique_lock(mutex_);
+}
+
+void DiagnosticReporter::reset_in_fork_child() noexcept {
+    pending_.clear();
+    draining_ = false;
+}
+
 void DiagnosticReporter::drain_() {
     while (true) {
         std::string line;

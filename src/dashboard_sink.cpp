@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <exception>
 #include <format>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
@@ -25,11 +26,14 @@
 #endif
 
 #include "dashboard_frame.hpp"
+#include "fork_handlers.hpp"
 #include "lumen/detail/immortal.hpp"
 #include "lumen/error.hpp"
 #include "lumen/thread_clock.hpp"
+#include "portable_error.hpp"
 #include "record_format.hpp"
 #include "terminal_output.hpp"
+#include "termination.hpp"
 #include "time_format.hpp"
 
 namespace lumen {
@@ -182,13 +186,41 @@ struct DashboardSink::Impl {
     // std::thread rather than std::jthread: Apple's libc++ has no jthread.
     std::thread thread;
 
+    // Held by the fork handlers from prepare to parent or child; touched
+    // only by the thread that forks.
+    std::optional<std::unique_lock<std::mutex>> fork_lock;
+    // Last: its handlers use the members above.
+    const detail::ForkRegistration fork{detail::ForkHandlers{
+        .prepare = [this] { fork_lock.emplace(mutex); },
+        .parent = [this] { fork_lock.reset(); },
+        .child = [this] { after_fork_in_child_(); },
+    }};
+
 private:
+    // In a fork child the terminal belongs to the parent and the drawing
+    // thread does not exist: the sink stops drawing for good, as if stopped
+    // and restored, without writing anything. Runs with `mutex` held by this
+    // thread (the prepare handler); the condition variables and the thread
+    // handle belong to the parent's threads and are re-initialised.
+    void after_fork_in_child_() noexcept {
+        std::construct_at(&wake_cv);
+        std::construct_at(&frame_cv);
+        std::construct_at(&thread);
+        stopping = true;
+        finished = true;
+        frames_done = frames_requested;
+        if (!restored.exchange(true, std::memory_order_acq_rel) && output.is_standard_error()) {
+            dashboards_on_standard_error.fetch_sub(1, std::memory_order_relaxed);
+        }
+        fork_lock.reset();
+    }
+
     // Starts the drawing thread; start() calls it once.
     [[nodiscard]] std::expected<void, std::error_code> start_() noexcept {
         try {
             thread = std::thread([this] { run_(); });
         } catch (const std::system_error& e) {
-            return std::unexpected(e.code());
+            return std::unexpected(detail::portable_error(e.code()));
         } catch (const std::bad_alloc&) {
             return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
         }
@@ -336,6 +368,10 @@ namespace {
 // The dashboards alive in the process, for the ways out on which no
 // destructor of theirs runs (see "The terminal" in lumen/dashboard_sink.hpp).
 // While the list is not empty, Lumen's terminate handler is installed.
+//
+// Lock order: the list's mutex before a dashboard's (restore_all_). The fork
+// handlers take them in registration order, so the list registers before
+// the first dashboard (create() asks for the instance first).
 class LiveDashboards {
 public:
     // Never destroyed: an exit function or the terminate handler may run
@@ -362,16 +398,11 @@ public:
 
 private:
     // Lumen's terminate handler: restores every live dashboard, then hands
-    // over to the handler installed before it.
+    // over to the handler installed before it (src/termination.hpp).
     [[noreturn]] static void restore_then_terminate_() noexcept {
         LiveDashboards& live = instance();
         live.restore_all_(true);
-        const std::terminate_handler previous =
-            live.previous_terminate_.load(std::memory_order_relaxed);
-        if (previous != nullptr) {
-            previous();
-        }
-        std::abort();
+        detail::hand_over_terminate(live.previous_terminate_.load(std::memory_order_relaxed));
     }
 
     static void restore_at_exit_() noexcept { instance().restore_all_(false); }
@@ -409,12 +440,22 @@ private:
     bool exit_functions_registered_ = false;  // guarded by mutex_
     // Written under mutex_; read by the terminate handler without it.
     std::atomic<std::terminate_handler> previous_terminate_{nullptr};
+    // mutex_, held by the fork handlers from prepare to parent or child;
+    // touched only by the thread that forks.
+    std::optional<std::unique_lock<std::mutex>> fork_lock_;
+    // Last: its handlers use the members above.
+    const detail::ForkRegistration fork_{detail::ForkHandlers{
+        .prepare = [this] { fork_lock_.emplace(mutex_); },
+        .parent = [this] { fork_lock_.reset(); },
+        .child = [this] { fork_lock_.reset(); },
+    }};
 };
 
 }  // namespace
 
 std::expected<std::unique_ptr<DashboardSink>, std::error_code> DashboardSink::create(
     Config config) {
+    LiveDashboards& live = LiveDashboards::instance();  // first: see its lock order
     if (config.refresh_interval < std::chrono::milliseconds{1}) {
         return std::unexpected(make_error_code(LumenError::InvalidSinkConfig));
     }
@@ -442,12 +483,12 @@ std::expected<std::unique_ptr<DashboardSink>, std::error_code> DashboardSink::cr
         std::move(output), DashboardModel(config.limits, std::move(config.metrics)),
         std::move(style), frame, config.refresh_interval, std::move(config.diagnostics));
     try {
-        LiveDashboards::instance().add(*impl);
+        live.add(*impl);
     } catch (const std::bad_alloc&) {
         return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
     }
     if (const std::expected<void, std::error_code> started = impl->start(); !started) {
-        LiveDashboards::instance().remove(*impl);
+        live.remove(*impl);
         return std::unexpected(started.error());
     }
     return std::make_unique<DashboardSink>(ConstructionKey{}, std::move(impl));

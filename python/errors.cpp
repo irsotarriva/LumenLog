@@ -34,6 +34,7 @@ py::object add_exception(py::module_& m, const char* name, const char* doc, py::
         case LumenError::InvalidPredicate:  return "InvalidPredicateError";
         case LumenError::InvalidSinkConfig: return "InvalidSinkConfigError";
         case LumenError::FileOpenFailed:    return "FileOpenError";
+        case LumenError::FlushTimedOut:     return "FlushTimedOutError";
         case LumenError::None:
         case LumenError::NullSink:
         case LumenError::IoError:
@@ -56,8 +57,12 @@ void register_errors(py::module_& m) {
                   "Core.sink_exception_count).",
                   py::make_tuple(base, py::handle(PyExc_LookupError)));
     add_exception(m, "SinkBusyError",
-                  "Core.remove_sink was called from inside a callback of the sink being removed.",
+                  "Core.remove_sink was called from inside a callback of the sink being removed, "
+                  "or Core.flush_for from inside a sink callback of the same Core.",
                   py::make_tuple(base));
+    add_exception(m, "FlushTimedOutError",
+                  "Core.flush_for: the time limit passed before the flush was done.",
+                  py::make_tuple(base, py::handle(PyExc_TimeoutError)));
     add_exception(m, "TagTableFullError",
                   "set_thread_tag or set_process_tag with a new key on a table that already "
                   "holds its maximum number of keys; the table is unchanged.",

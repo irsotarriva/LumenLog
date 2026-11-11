@@ -132,9 +132,10 @@ public:
     // be opened for appending, after passing one line with the cause, as the
     // platform words it, to config.diagnostics on the calling thread
     // ("lumen: FileSink: cannot open <path>: No such file or directory");
-    // and with the error std::thread reports
-    // (std::errc::resource_unavailable_try_again when the system is out of
-    // threads) if the writer thread cannot be started.
+    // and with the error std::thread reports, as a std::generic_category code
+    // on every standard library (std::errc::resource_unavailable_try_again
+    // when the system is out of threads), if the writer thread cannot be
+    // started.
     [[nodiscard]] static std::expected<std::unique_ptr<FileSink>, std::error_code> create(
         Config config);
 

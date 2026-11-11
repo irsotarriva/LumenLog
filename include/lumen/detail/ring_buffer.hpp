@@ -150,6 +150,23 @@ public:
 
     [[nodiscard]] static constexpr uint64_t capacity() noexcept { return N; }
 
+    // In a process made by fork(), where no other thread uses the buffer:
+    // destroys the stored elements, leaves the storage of positions still
+    // being written alone (their producer was a thread of the parent and
+    // does not exist here), and empties the buffer at its head position.
+    void discard_in_fork_child() noexcept {
+        const uint64_t head = head_.load(std::memory_order_relaxed);
+        for (uint64_t pos = tail_.load(std::memory_order_relaxed); pos != head; ++pos) {
+            if ((*sequence_)[index_of_(pos)].load(std::memory_order_relaxed) == stored_(pos)) {
+                std::destroy_at(slot_(pos));
+            }
+        }
+        for (uint64_t pos = head; pos != head + N; ++pos) {
+            (*sequence_)[index_of_(pos)].store(free_for_(pos), std::memory_order_relaxed);
+        }
+        tail_.store(head, std::memory_order_release);
+    }
+
 private:
     // Storage for one element whose lifetime is managed by hand: the empty
     // constructor and destructor neither create nor destroy `value`.
