@@ -36,7 +36,10 @@ using RecordTags = TagSet<max_record_tags>;
 struct SourceLocation {
     std::string_view file;
     std::string_view function;
-    std::string_view class_name;  // innermost enclosing class, "" for a free function
+    // The innermost enclosing class, read from the text of `function`: ""
+    // for a free function at global scope, the namespace's name for a free
+    // function in a namespace (see detail::extract_class_name).
+    std::string_view class_name;
     uint32_t line{};
 };
 
