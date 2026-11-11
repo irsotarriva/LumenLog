@@ -53,6 +53,7 @@ class SinkChurnTest(unittest.TestCase):
         result = run_child(self, """
             import sys
             import threading
+            import time
             import lumen_bindings as lumen
 
             # Every add/remove gives the GIL away and waits to get it back;
@@ -63,10 +64,14 @@ class SinkChurnTest(unittest.TestCase):
             lumen.core().add_sink(lumen.CallbackSink(on_log=received.append))
             stop = threading.Event()
 
+            # Paced: every record costs the dispatch thread a GIL hand-over,
+            # and a producer that outruns the Python sink only fills the
+            # queue, which flush() then has to drain.
             def produce():
                 n = 0
                 while not stop.is_set():
                     lumen.info("load")
+                    time.sleep(0.0001)
                     n += 1
                     if n % 64 == 0:
                         received.clear()
