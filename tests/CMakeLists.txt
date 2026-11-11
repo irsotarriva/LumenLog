@@ -10,15 +10,16 @@ add_executable(lumen_tests
   test_macros.cpp
   test_scope.cpp
   test_tagged.cpp
-  test_sinks.cpp
-  test_dashboard.cpp
-  test_latex.cpp
+  test_record_format.cpp
+  test_terminal_sink.cpp
+  test_file_sink.cpp
+  test_dashboard_model.cpp
   test_error.cpp
   test_class_name.cpp
 )
 
 if(LUMEN_ENABLE_DASHBOARD)
-  target_compile_definitions(lumen_tests PRIVATE LUMEN_ENABLE_DASHBOARD)
+  target_sources(lumen_tests PRIVATE test_dashboard_sink.cpp)
 endif()
 
 target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
@@ -49,6 +50,21 @@ add_test(NAME LateLogging.StaticDestructorLogsAreCountedAfterShutdown
          COMMAND lumen_test_late_logging)
 set_tests_properties(LateLogging.StaticDestructorLogsAreCountedAfterShutdown
                      PROPERTIES TIMEOUT 60)
+
+# The Json lines of a FileSink, parsed by a real JSON parser: Python's json
+# module, which every CI runner has. No JSON library is added to the build.
+add_executable(lumen_json_sample json_sample.cpp)
+target_link_libraries(lumen_json_sample PRIVATE lumen)
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME JsonOutput.EveryLineParsesStrictlyWithPythonAndHoldsTheExpectedValues
+           COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/check_json_lines.py"
+                   $<TARGET_FILE:lumen_json_sample>)
+  set_tests_properties(JsonOutput.EveryLineParsesStrictlyWithPythonAndHoldsTheExpectedValues
+                       PROPERTIES TIMEOUT 60)
+else()
+  message(STATUS "Lumen: no Python 3 interpreter; the Json output check is not registered")
+endif()
 
 # Ring buffer throughput. Built with the tests so that it keeps compiling, but
 # not registered with ctest: it prints measurements and has nothing to pass or
