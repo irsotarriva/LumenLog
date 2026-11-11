@@ -128,6 +128,72 @@ class OptionsTableTest(unittest.TestCase):
         self.assertEqual(check_docs.option_problems({"LUMEN_A": "on if found"}, {"LUMEN_A": "${x}"}), [])
 
 
+class TestNamesTest(unittest.TestCase):
+    def test_a_test_that_does_not_exist_is_rejected_and_existing_ones_pass(self):
+        errors = name_errors("`Example.QuickStartt` `Docs.Nothing.*`")
+        self.assertEqual(len(errors), 2, errors)
+        self.assertEqual(name_errors("`Example.QuickStart` `Docs.Python.*` "
+                                     "`CompileCheck.Bridge<Name>WithFramework` "
+                                     "`ContextTest.ProcessTagReachesRecordsFromEveryThread`"), [])
+
+    def test_a_dotted_name_whose_first_part_is_no_test_suite_is_not_checked(self):
+        self.assertEqual(name_errors("`Core.flush` `Trainer.step`"), [])
+
+
+WORKFLOW = """\
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-a
+            os: x
+          - name: linux-b
+    steps:
+      - name: Not a job
+  extra:
+    name: bridges (${{ matrix.framework }})
+    strategy:
+      matrix:
+        include:
+          - framework: torch
+            required: x
+          - os: y
+            framework: root
+  lint:
+    name: lint (clang-format)
+"""
+
+
+class TablesTest(unittest.TestCase):
+    def test_ci_job_names_expand_the_matrix_and_skip_step_names(self):
+        self.assertEqual(check_docs.ci_job_names(WORKFLOW),
+                         {"linux-a", "linux-b", "bridges (torch)", "bridges (root)", "lint (clang-format)"})
+
+    def test_a_ci_table_with_a_missing_and_an_unknown_job_has_two_problems(self):
+        listed = set(check_docs.first_column(["| Job | x |", "|---|---|", "| `linux-a` | y |",
+                                              "| `linux-c` | y |"]))
+        self.assertEqual(check_docs.set_problems("CI job", listed, {"linux-a", "linux-b"}),
+                         ["the CI job table lacks linux-b",
+                          "the CI job table lists linux-c, which does not exist"])
+
+    def test_a_file_is_covered_by_its_path_its_stem_or_its_directory(self):
+        entries = ["src/core.cpp", "src/line_writer.*", "python/"]
+        for path in ("src/core.cpp", "src/line_writer.hpp", "python/module.cpp"):
+            self.assertTrue(check_docs.covered(path, entries), path)
+        for path in ("src/core.hpp", "src/line_writer_extra.cpp", "include/lumen/core.hpp"):
+            self.assertFalse(check_docs.covered(path, entries), path)
+
+    def test_a_config_default_that_differs_from_the_initialiser_is_reported(self):
+        header = "struct Config {\n    // count = 3; in a comment\n    std::size_t count = 7;\n" \
+                 "    std::string name = \"x\";\n    bool flag;\n};\n"
+        rows = [["Field", "Default"], ["---", "---"], ["`count`", "`3`"], ["`name`", "`\"x\"`"],
+                ["`flag`", "unset"]]
+        self.assertEqual(check_docs.config_problems(rows, header),
+                         ["count is initialised to 7, the table says `3`"])
+
+
 class RepositoryTest(unittest.TestCase):
     def test_the_documents_of_this_repository_have_no_name_errors(self):
         errors: list[str] = []
