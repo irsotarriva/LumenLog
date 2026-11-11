@@ -5,6 +5,7 @@ headers state the guarantees; this page says which file keeps them.
 
 ## Files
 
+<!-- check: files-table -->
 | File | Owns |
 |---|---|
 | `include/lumen/core.hpp`, `src/core.cpp` | `Core`: its API, and `Core::Impl`, which composes the parts below and runs the sequences that span them (submission, the dispatch loop, `flush`, fatal records, shutdown) |
@@ -16,9 +17,14 @@ headers state the guarantees; this page says which file keeps them.
 | `src/fatal_records.*` | Fatal records: announcing, posting and delivering them all before termination |
 | `src/diagnostic_reporter.*`, `src/first_reports.*` | Passing diagnostic lines to the handler one at a time; "report the first, then count" for queue drops, tag drops and sink exceptions |
 | `include/lumen/detail/ring_buffer.hpp` | `RingBuffer`, the bounded multi-producer single-consumer queue |
+| `include/lumen/record.hpp`, `include/lumen/tag_set.hpp`, `include/lumen/level.hpp` | The three record types, their fixed-capacity tag list and the log level |
+| `include/lumen/limits.hpp`, `include/lumen/thread_clock.hpp` | Every fixed capacity; the timestamp and thread number of a record |
+| `include/lumen/sink.hpp` | The `Sink` contract and `NullSink` |
+| `include/lumen/lumen.hpp` | Includes the headers a program that logs needs |
 | `include/lumen/record_builder.hpp`, `include/lumen/detail/string_scratch.hpp` | Builders and their scratch buffer for strings |
 | `include/lumen/macros.hpp` | The logging front end: statements, compile-time elision, scopes, loops |
 | `include/lumen/context.hpp`, `include/lumen/detail/context.hpp`, `src/context.cpp` | All context state: the process table, each thread's tags and scope frames, and the merge into a record |
+| `include/lumen/detail/tag_table.hpp` | `TagTable`, the owned tags of the process, a thread or a `Tagged` object |
 | `include/lumen/detail/scope_stack.hpp` | `ScopeGuard` and `LoopScope`, behind `LUMEN_SCOPE` and `LUMEN_LOOP` |
 | `include/lumen/tagged.hpp`, `src/tagged.cpp` | `Tagged` objects and their member scopes |
 | `include/lumen/detail/class_name.hpp` | The enclosing class, read from `std::source_location::function_name()` |
@@ -26,13 +32,15 @@ headers state the guarantees; this page says which file keeps them.
 | `include/lumen/predicate.hpp`, `src/predicate.cpp` | Predicate trees and their evaluation |
 | `src/predicate_lexer.*`, `src/predicate_parser.cpp`, `src/number_parse.hpp`, `src/ascii.hpp` | `parse_predicate`, locale-independent |
 | `src/record_format.*`, `src/text_encoding.*`, `src/time_format.*` | The line formats of the shipped sinks |
-| `src/line_writer.*` | The writer thread and bounded line queue shared by `TerminalSink` and `FileSink` |
-| `src/terminal_output.*`, `src/terminal_sink.cpp` | `TerminalSink`, its destination and the colour decision |
-| `src/rotating_file.*`, `src/file_sink.cpp` | `FileSink`: `{date}`, appending, rotation |
-| `src/dashboard_model.cpp` | `DashboardModel` (always built) |
-| `src/dashboard_sink.cpp`, `src/dashboard_frame.*` | `DashboardSink`; the only code that uses FTXUI (built with `LUMEN_ENABLE_DASHBOARD`) |
+| `include/lumen/writer_statistics.hpp`, `src/line_writer.*` | The writer thread and bounded line queue shared by `TerminalSink` and `FileSink`, and their counters |
+| `include/lumen/terminal_style.hpp` | Colours and time zone, shared by `TerminalSink` and `DashboardSink` |
+| `include/lumen/terminal_sink.hpp`, `src/terminal_output.*`, `src/terminal_sink.cpp` | `TerminalSink`, its destination and the colour decision |
+| `include/lumen/file_sink.hpp`, `src/rotating_file.*`, `src/file_sink.cpp` | `FileSink`: `{date}`, appending, rotation |
+| `include/lumen/dashboard_model.hpp`, `src/dashboard_model.cpp` | `DashboardModel` (always built) |
+| `include/lumen/dashboard_sink.hpp`, `src/dashboard_sink.cpp`, `src/dashboard_frame.*` | `DashboardSink`; the only code that uses FTXUI (built with `LUMEN_ENABLE_DASHBOARD`) |
 | `src/immortal.hpp` | Storage for the few objects that are never destroyed |
-| `src/error.cpp` | The `"lumen"` error category |
+| `include/lumen/error.hpp`, `src/error.cpp` | `LumenError` and the `"lumen"` error category |
+| `include/lumen/bridges/` | The header-only bridges ([Bridges](bridges.md)) |
 | `python/` | The pybind11 module, one file per area (`python/registration.hpp` lists them), and `logging_handler.py` |
 | `cmake/build_settings.cmake`, `cmake/config.hpp.in` | The settings that change what the headers compile to (`LUMEN_MIN_LEVEL`, queue capacities), written into the generated and installed `lumen/config.hpp` |
 
@@ -119,22 +127,28 @@ record or a shutdown started in a callback can finish the record in flight.
 Exceptions from callbacks are caught in one place (`call_sink` in
 `src/delivery.cpp`), counted per sink and reported once.
 
-Diagnostic lines go through one queue per Core: the thread that finds nobody
-passing lines to the handler does so until the queue is empty, and the
-others only add their line, so the handler never runs on two threads at once
-and no Core lock is held while it runs. A handler that throws has its line
-and the exception written to `std::cerr`.
+Diagnostic lines go through one queue per Core (`src/diagnostic_reporter.*`):
+the thread that finds nobody passing lines to the handler does so until the
+queue is empty, and the others only add their line, so the handler never
+runs on two threads at once. The reporter holds no lock while the handler
+runs; the line about a sink's exception is reported by the delivering
+thread, which holds the delivery lock then. A handler that throws has its
+line and the exception written to `std::cerr`.
 
 ## Context
 
-`src/context.cpp` owns every piece of context state. The process table is one
-object, never destroyed, guarded by a mutex, with a version counter that grows
-on every change. Each thread owns a `thread_local` context: its thread tags,
-the heads of two intrusive lists of frames (scope frames from `LUMEN_SCOPE`
-and `LUMEN_LOOP`, instance frames from `LUMEN_MEMBER_SCOPE`), and its own copy
-of the process table, refreshed under the mutex only when the version moved.
-A guard pushes its frame when constructed and pops it when destroyed; debug
-builds assert that this happens on the same thread in stack order.
+`src/context.cpp` owns every piece of context state. The process table is
+copied on write: a change, under a mutex, publishes a new immutable table
+through a `shared_ptr` and increments a version counter; the object that
+holds them is never destroyed. Each thread owns a `thread_local` context: its
+thread tags, two stacks of frames (scope frames from `LUMEN_SCOPE` and
+`LUMEN_LOOP`, which hold copies of their key and value, and instance frames
+from `LUMEN_MEMBER_SCOPE`, which point at their object), and a `shared_ptr`
+to the process table it last read, replaced under the mutex only when the
+version moved. A guard pushes its frame when constructed and pops it when
+destroyed; debug builds assert that this happens on the same thread in stack
+order, and `lumen/detail/context.hpp` states what release builds do
+otherwise.
 
 The merge walks instance frames (reading each object's tags at that moment),
 then scope frames, then the thread tags, then the thread's copy of the
