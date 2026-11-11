@@ -252,13 +252,29 @@ class FatalTest(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines(),
                          ["INFO before {}", "FATAL the end {'code': '7'}"])
 
+    def test_fatal_while_the_dispatch_thread_waits_for_the_gil_delivers_everything_and_aborts(self):
+        # The dispatch thread holds the Core's delivery lock while it waits
+        # for the GIL to call the sink; fatal() needs that lock, so it must
+        # not keep the GIL while it waits, or neither thread can go on.
+        result = run_child(self, """
+            import lumen_bindings as lumen
+            def on_log(record):
+                print(record.message, flush=True)
+            lumen.core().add_sink(lumen.CallbackSink(on_log=on_log))
+            for i in range(1000):
+                lumen.info(f"record {i}")
+            lumen.fatal("the end")
+        """, timeout=60)
+        self.assertEqual(result.returncode, -signal.SIGABRT, result.stderr)
+        self.assertEqual(result.stdout.splitlines(),
+                         [f"record {i}" for i in range(1000)] + ["the end"])
+
     def test_fatal_from_a_python_sink_callback_aborts_and_every_other_sink_receives_it(self):
-        # fatal() runs on the dispatch thread here, which holds the GIL for
-        # the callback; it must release it so that the other Python sink can
-        # take it, or the process hangs instead of aborting. The expected
-        # lines follow lumen/record_builder.hpp: the sink whose callback is
-        # running is skipped, and the pass that was delivering "trigger" does
-        # not go on to the other sinks.
+        # fatal() runs on the dispatch thread here, inside a callback, with
+        # the GIL. The expected lines follow lumen/record_builder.hpp
+        # ("Fatal"): the sink whose callback is running is skipped, and the
+        # pass that was delivering "trigger" does not go on to the other
+        # sinks; a change to that rule in the Core changes these lines.
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "fatal.log")
             result = run_child(self, """
