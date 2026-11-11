@@ -17,7 +17,7 @@ namespace {
 // Creates an exception class in `m` and returns it (a new reference held by `m`).
 py::object add_exception(py::module_& m, const char* name, const char* doc, py::handle bases) {
     const std::string qualified = std::string(module_name) + "." + name;
-    py::object type = py::reinterpret_steal<py::object>(
+    auto type = py::reinterpret_steal<py::object>(
         PyErr_NewExceptionWithDoc(qualified.c_str(), doc, bases.ptr(), nullptr));
     if (!type) {
         throw py::error_already_set();
