@@ -161,13 +161,19 @@ void measure_parallel(std::string_view name, uint32_t producers, const Statement
     report(name, producers, all, dropped_records() - dropped_before);
 }
 
-void set_ambient_tags(uint32_t process_tags, uint32_t thread_tags) {
+// Returns false if a table refused a tag (the case would then measure less
+// context than its name says).
+[[nodiscard]] bool set_ambient_tags(uint32_t process_tags, uint32_t thread_tags) {
+    bool all_set = true;
     for (uint32_t i = 0; i < process_tags; ++i) {
-        static_cast<void>(lumen::set_process_tag(std::format("process_{}", i), "value"));
+        all_set =
+            lumen::set_process_tag(std::format("process_{}", i), "value").has_value() && all_set;
     }
     for (uint32_t i = 0; i < thread_tags; ++i) {
-        static_cast<void>(lumen::set_thread_tag(std::format("thread_{}", i), "value"));
+        all_set =
+            lumen::set_thread_tag(std::format("thread_{}", i), "value").has_value() && all_set;
     }
+    return all_set;
 }
 
 }  // namespace
@@ -198,9 +204,15 @@ int main() {
     measure_parallel("plain message", 4, plain);
     measure_parallel("formatted message", 4, formatted);
     // Ambient tags last: thread tags stay on this thread.
-    set_ambient_tags(2, 2);
+    if (!set_ambient_tags(2, 2)) {
+        std::cout << "error: an ambient tag was refused\n";
+        return 1;
+    }
     measure_single("formatted, 4 ambient tags", formatted);
-    set_ambient_tags(8, 8);
+    if (!set_ambient_tags(8, 8)) {
+        std::cout << "error: an ambient tag was refused\n";
+        return 1;
+    }
     measure_single("formatted, 16 ambient tags", formatted);
     return 0;
 }
