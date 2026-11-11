@@ -13,6 +13,7 @@
 #include <chrono>
 #include <concepts>
 #include <condition_variable>
+#include <csignal>
 #include <cstdint>
 #include <expected>
 #include <functional>
