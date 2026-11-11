@@ -12,6 +12,11 @@ replaced by placeholders:
                     an ISO 8601 UTC time with nanoseconds
     "ts":<ns>       a JSON timestamp in nanoseconds
     <id>            a thread id: [t<id>], thread=<id>, "thread":<id>
+    <function>      a function signature: function="..." and "function":"...",
+                    whose spelling depends on the compiler
+
+Paths under the source directory are compared with forward slashes whatever
+the platform writes.
 
 Records of different types are not delivered in time order with each other
 (lumen/core.hpp, "Order"), so the lines are compared per record type: the
@@ -38,12 +43,42 @@ _MASKS = [
 ]
 
 
-def mask(text: str, source_dir: str) -> str:
-    if source_dir:
-        text = text.replace(source_dir.rstrip("/"), "<src>")
-    for pattern, replacement in _MASKS:
+_FUNCTION_MASKS = [
+    (re.compile(r'function="(?:[^"\\]|\\.)*"'), 'function="<function>"'),
+    (re.compile(r'"function":"(?:[^"\\]|\\.)*"'), '"function":"<function>"'),
+]
+
+# A path below <src>, with either separator, the backslash possibly doubled
+# by JSON or logfmt escaping.
+_SOURCE_PATH = re.compile(r"<src>(?:(?:/|\\{1,2})[\w.\-]+)+")
+_QUOTED_SOURCE_PATH = re.compile(r'file="(<src>[^"]*)"')
+
+
+def mask_functions(text: str) -> str:
+    for pattern, replacement in _FUNCTION_MASKS:
         text = pattern.sub(replacement, text)
     return text
+
+
+def mask_source_dir(text: str, source_dir: str) -> str:
+    """Replaces the source directory by <src> and normalises the path after it."""
+    root = source_dir.rstrip("/\\")
+    if not root:
+        return text
+    native = root.replace("/", "\\")
+    for spelling in (root, native, native.replace("\\", "\\\\")):
+        text = text.replace(spelling, "<src>")
+    text = _SOURCE_PATH.sub(lambda m: re.sub(r"\\+", "/", m.group(0)), text)
+    # logfmt quotes a value only when it has to: a backslash forces quotes
+    # that the same path with forward slashes does not need.
+    return _QUOTED_SOURCE_PATH.sub(r"file=\1", text)
+
+
+def mask(text: str, source_dir: str) -> str:
+    text = mask_source_dir(text, source_dir)
+    for pattern, replacement in _MASKS:
+        text = pattern.sub(replacement, text)
+    return mask_functions(text)
 
 
 def kind(line: str) -> str:
@@ -105,14 +140,14 @@ def main() -> int:
             if actual:
                 problems.append(f"{name}: expected nothing, got:\n{actual}")
             continue
-        problems += compare(name, actual, expected.read_text(encoding="utf-8"))
+        problems += compare(name, actual, mask_functions(expected.read_text(encoding="utf-8")))
 
     for produced, expected in produced_files:
         if not produced.exists():
             problems.append(f"{produced}: the program did not write this file")
             continue
         actual = mask(produced.read_text(encoding="utf-8"), args.source_dir)
-        problems += compare(str(produced), actual, expected.read_text(encoding="utf-8"))
+        problems += compare(str(produced), actual, mask_functions(expected.read_text(encoding="utf-8")))
 
     for problem in problems:
         print(problem, file=sys.stderr)
