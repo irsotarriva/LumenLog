@@ -851,6 +851,10 @@ TEST(CoreFatalDeathTest,
             Core* const target = &core;
             EXPECT_TRUE(core.add_sink(callback_sink([target](const LogRecord& r) {
                 if (r.message == "trigger") {
+                    // Raise it only once the next record is queued too.
+                    while (target->statistics().logs.accepted < 2) {
+                        std::this_thread::yield();
+                    }
                     log_to(*target, "fatal from callback", LogLevel::Fatal);
                 }
             })));
