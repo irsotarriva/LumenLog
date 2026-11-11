@@ -3,6 +3,7 @@
 #include <pybind11/pybind11.h>
 
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include "lumen/error.hpp"
@@ -27,12 +28,16 @@ py::object add_exception(py::module_& m, const char* name, const char* doc, py::
 
 [[nodiscard]] const char* exception_name(LumenError e) {
     switch (e) {
-        case LumenError::InvalidSinkId:    return "InvalidSinkIdError";
-        case LumenError::SinkBusy:         return "SinkBusyError";
-        case LumenError::TagTableFull:     return "TagTableFullError";
-        case LumenError::InvalidPredicate: return "InvalidPredicateError";
+        case LumenError::InvalidSinkId:     return "InvalidSinkIdError";
+        case LumenError::SinkBusy:          return "SinkBusyError";
+        case LumenError::TagTableFull:      return "TagTableFullError";
+        case LumenError::InvalidPredicate:  return "InvalidPredicateError";
+        case LumenError::InvalidSinkConfig: return "InvalidSinkConfigError";
+        case LumenError::FileOpenFailed:    return "FileOpenError";
         case LumenError::None:
-        case LumenError::NullSink:         return "LumenError";
+        case LumenError::NullSink:
+        case LumenError::IoError:
+        case LumenError::NotATerminal:      return "LumenError";
     }
     return "LumenError";
 }
@@ -59,9 +64,18 @@ void register_errors(py::module_& m) {
     add_exception(m, "InvalidPredicateError",
                   "parse_predicate was given a query that is not valid.",
                   py::make_tuple(base, py::handle(PyExc_ValueError)));
+    add_exception(m, "InvalidSinkConfigError",
+                  "A sink was created with a configuration field outside its documented range.",
+                  py::make_tuple(base, py::handle(PyExc_ValueError)));
+    add_exception(m, "FileOpenError", "A FileSink could not open its file for appending.",
+                  py::make_tuple(base, py::handle(PyExc_OSError)));
 }
 
 void raise_error(std::error_code code) {
+    raise_error(code, {});
+}
+
+void raise_error(std::error_code code, std::string_view context) {
     if (code.category() == std::generic_category() || code.category() == std::system_category()) {
         // OSError(errno, text) picks the matching subclass, e.g. FileNotFoundError.
         PyErr_SetObject(PyExc_OSError, py::make_tuple(code.value(), code.message()).ptr());
@@ -72,7 +86,12 @@ void raise_error(std::error_code code) {
         name = exception_name(static_cast<LumenError>(code.value()));
     }
     const py::object type = py::module_::import(module_name).attr(name);
-    PyErr_SetString(type.ptr(), code.message().c_str());
+    std::string text = code.message();
+    if (!context.empty()) {
+        text += ": ";
+        text += context;
+    }
+    PyErr_SetString(type.ptr(), text.c_str());
     throw py::error_already_set();
 }
 

@@ -41,8 +41,12 @@ TEST(LumenErrorTest, EveryErrorHasItsOwnMessage) {
         lumen_error_category().message(static_cast<int>(LumenError::SinkBusy)),
         lumen_error_category().message(static_cast<int>(LumenError::TagTableFull)),
         lumen_error_category().message(static_cast<int>(LumenError::InvalidPredicate)),
+        lumen_error_category().message(static_cast<int>(LumenError::InvalidSinkConfig)),
+        lumen_error_category().message(static_cast<int>(LumenError::FileOpenFailed)),
+        lumen_error_category().message(static_cast<int>(LumenError::IoError)),
+        lumen_error_category().message(static_cast<int>(LumenError::NotATerminal)),
     };
-    EXPECT_EQ(messages.size(), 6U);
+    EXPECT_EQ(messages.size(), 10U);
     EXPECT_FALSE(messages.contains("unknown lumen error"));
 }
 

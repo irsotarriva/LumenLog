@@ -17,8 +17,9 @@ PYBIND11_MODULE(lumen_bindings, m) {
         "Sinks: subclass Sink or use CallbackSink, or use the library's sinks; register them "
         "with core().add_sink(sink, predicate).\n\n"
         "Errors are raised as LumenError subclasses: InvalidSinkIdError (also a LookupError), "
-        "SinkBusyError, TagTableFullError and InvalidPredicateError (also a ValueError); an "
-        "operating-system error as OSError. Wrong argument types raise TypeError.\n\n"
+        "SinkBusyError, TagTableFullError, InvalidPredicateError and InvalidSinkConfigError "
+        "(both also ValueErrors) and FileOpenError (also an OSError); an operating-system "
+        "error as OSError. Wrong argument types raise TypeError.\n\n"
         "At interpreter exit the module delivers what is queued to Python sinks, then detaches "
         "them; sinks written in C++ keep receiving records until the process ends.";
 

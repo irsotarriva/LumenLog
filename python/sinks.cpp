@@ -1,57 +1,38 @@
 // The library's own sinks. This file is the only one that knows their
-// classes and configurations, so that a change to lumen/sink.hpp is made here
-// alone.
+// classes and configurations, so that a change to the sink headers is made
+// here alone.
+//
+// The configurations own their strings and paths, so binding their fields
+// directly copies Python's values. The configurations' `output` stream and
+// `diagnostics` handler are not bound: terminal output goes to stderr, and
+// a sink's diagnostics go to the default handler (stderr).
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/stl/filesystem.h>
 
-#include <functional>
-#include <mutex>
-#include <set>
+#include <cstddef>
+#include <cstdint>
+#include <expected>
+#include <filesystem>
+#include <memory>
 #include <string>
-#include <string_view>
-#include <vector>
+#include <system_error>
+#include <utility>
 
-#include "immortal.hpp"
+#include "errors.hpp"
+#include "lumen/error.hpp"
+#include "lumen/file_sink.hpp"
 #include "lumen/sink.hpp"
+#include "lumen/terminal_sink.hpp"
+#include "lumen/terminal_style.hpp"
+#include "lumen/writer_statistics.hpp"
 #include "registration.hpp"
 
 namespace py = pybind11;
 
 namespace lumen::python {
 namespace {
-
-// The configurations hold std::string_view, which must not point into a
-// Python string (it can be freed as soon as the assignment returns). So a
-// string assigned from Python is copied into this pool, which is never freed,
-// and the view a configuration (and the sink built from it) keeps stays
-// valid. Equal strings share one copy, so the pool grows only with the number
-// of distinct strings assigned. Not needed for configurations that own their
-// strings.
-struct RetainedStrings {
-    std::mutex mutex;
-    std::set<std::string, std::less<>> strings;  // guarded by mutex
-};
-
-[[nodiscard]] std::string_view retained(std::string_view text) {
-    static detail::Immortal<RetainedStrings> pool;
-    RetainedStrings& p = pool.get();
-    const std::scoped_lock lock(p.mutex);
-    return *p.strings.emplace(text).first;
-}
-
-[[nodiscard]] std::vector<std::string_view> retained_all(const std::vector<std::string>& texts) {
-    std::vector<std::string_view> out;
-    out.reserve(texts.size());
-    for (const std::string& t : texts) {
-        out.push_back(retained(t));
-    }
-    return out;
-}
-
-[[nodiscard]] std::vector<std::string> copies(const std::vector<std::string_view>& views) {
-    return {views.begin(), views.end()};
-}
 
 void register_enums(py::module_& m) {
     py::enum_<AnsiColor>(m, "AnsiColor")
@@ -65,62 +46,106 @@ void register_enums(py::module_& m) {
         .value("Cyan", AnsiColor::Cyan)
         .value("White", AnsiColor::White);
 
-    py::enum_<FileFormat>(m, "FileFormat")
-        .value("PlainText", FileFormat::PlainText)
+    py::enum_<ColorMode>(m, "ColorMode", "Whether a TerminalSink writes ANSI colour escapes.")
+        .value("Auto", ColorMode::Auto)
+        .value("Always", ColorMode::Always)
+        .value("Never", ColorMode::Never);
+
+    py::enum_<TimeZone>(m, "TimeZone", "The clock a TerminalSink shows times in.")
+        .value("Local", TimeZone::Local)
+        .value("Utc", TimeZone::Utc);
+
+    py::enum_<FileFormat>(m, "FileFormat", "The line format of a FileSink.")
+        .value("Text", FileFormat::Text)
         .value("KeyValue", FileFormat::KeyValue)
         .value("Json", FileFormat::Json);
 }
 
 void register_configs(py::module_& m) {
     using TerminalConfig = TerminalSink::Config;
-    py::class_<TerminalConfig>(m, "TerminalConfig")
+    py::class_<TerminalConfig>(m, "TerminalConfig",
+                               "Settings of a TerminalSink (lumen/terminal_sink.hpp). Lines go "
+                               "to stderr.")
         .def(py::init<>())
-        .def_property(
-            "time_format", [](const TerminalConfig& c) { return std::string(c.time_format); },
-            [](TerminalConfig& c, std::string_view v) { c.time_format = retained(v); })
-        .def_property(
-            "inline_tags", [](const TerminalConfig& c) { return copies(c.inline_tags); },
-            [](TerminalConfig& c, const std::vector<std::string>& v) {
-                c.inline_tags = retained_all(v);
-            })
-        .def_property(
-            "dashboard_metrics",
-            [](const TerminalConfig& c) { return copies(c.dashboard_metrics); },
-            [](TerminalConfig& c, const std::vector<std::string>& v) {
-                c.dashboard_metrics = retained_all(v);
-            })
-        .def_readwrite("dashboard_height", &TerminalConfig::dashboard_height)
-        .def_readwrite("enable_dashboard", &TerminalConfig::enable_dashboard)
-        .def_readwrite("colors", &TerminalConfig::colors);
+        .def_readwrite("color", &TerminalConfig::color)
+        .def_readwrite("colors", &TerminalConfig::colors)
+        .def_readwrite("time_format", &TerminalConfig::time_format)
+        .def_readwrite("time_zone", &TerminalConfig::time_zone)
+        .def_readwrite("inline_tags", &TerminalConfig::inline_tags)
+        .def_readwrite("show_source", &TerminalConfig::show_source)
+        .def_readwrite("max_queued_lines", &TerminalConfig::max_queued_lines);
 
     using FileConfig = FileSink::Config;
-    py::class_<FileConfig>(m, "FileConfig")
-        .def(py::init<>())
-        .def_property(
-            "path", [](const FileConfig& c) { return std::string(c.path); },
-            [](FileConfig& c, std::string_view v) { c.path = retained(v); })
-        .def_readwrite("rotate_mb", &FileConfig::rotate_mb)
+    const FileConfig defaults;
+    py::class_<FileConfig>(m, "FileConfig",
+                           "Settings of a FileSink (lumen/file_sink.hpp). `path` is a str or "
+                           "os.PathLike; \"{date}\" in it becomes the UTC date.")
+        .def(py::init([](std::filesystem::path path, FileFormat format, uint64_t max_file_bytes,
+                         uint32_t max_files, std::size_t max_queued_lines) {
+                 FileConfig c;
+                 c.path = std::move(path);
+                 c.format = format;
+                 c.max_file_bytes = max_file_bytes;
+                 c.max_files = max_files;
+                 c.max_queued_lines = max_queued_lines;
+                 return c;
+             }),
+             py::arg("path") = defaults.path, py::kw_only(), py::arg("format") = defaults.format,
+             py::arg("max_file_bytes") = defaults.max_file_bytes,
+             py::arg("max_files") = defaults.max_files,
+             py::arg("max_queued_lines") = defaults.max_queued_lines)
+        .def_readwrite("path", &FileConfig::path)
+        .def_readwrite("format", &FileConfig::format)
+        .def_readwrite("max_file_bytes", &FileConfig::max_file_bytes)
         .def_readwrite("max_files", &FileConfig::max_files)
-        .def_readwrite("format", &FileConfig::format);
+        .def_readwrite("max_queued_lines", &FileConfig::max_queued_lines);
+
+    py::class_<WriterStatistics>(m, "WriterStatistics",
+                                 "Counters of a sink's writer thread "
+                                 "(lumen/writer_statistics.hpp).")
+        .def_readonly("lines_queued", &WriterStatistics::lines_queued)
+        .def_readonly("lines_written", &WriterStatistics::lines_written)
+        .def_readonly("lines_dropped", &WriterStatistics::lines_dropped)
+        .def_readonly("lines_failed", &WriterStatistics::lines_failed);
+}
+
+[[nodiscard]] std::unique_ptr<FileSink> create_file_sink(FileSink::Config config) {
+    std::string path = config.path.string();
+    auto created = FileSink::create(std::move(config));
+    if (!created) {
+        raise_error(created.error(), path);
+    }
+    return std::move(*created);
 }
 
 }  // namespace
 
-// The sinks expose no methods to Python: once registered they belong to
-// Core, which serialises their callbacks, and a call from Python would race
-// with it.
+// Of the sinks' methods only statistics() and path are bound. The callbacks
+// and flush() are not: a registered sink belongs to Core, which serialises
+// its callbacks. Like any sink, one registered with Core.add_sink cannot be
+// used from Python until Core.remove_sink gives it back.
 void register_sinks(py::module_& m) {
     register_enums(m);
     register_configs(m);
 
-    py::classh<TerminalSink, Sink>(m, "TerminalSink", "Writes records to the terminal.")
-        .def(py::init<TerminalSink::Config>(), py::arg("config"));
+    py::classh<TerminalSink, Sink>(m, "TerminalSink",
+                                   "One human-readable line per record on stderr. Raises "
+                                   "InvalidSinkConfigError for an invalid time_format or "
+                                   "max_queued_lines == 0.")
+        .def(py::init([](TerminalSink::Config config) {
+                 return value_or_raise(TerminalSink::create(std::move(config)));
+             }),
+             py::arg("config") = TerminalSink::Config{})
+        .def_property_readonly("colored", &TerminalSink::colored)
+        .def("statistics", &TerminalSink::statistics);
 
-    py::classh<FileSink, Sink>(m, "FileSink", "Writes records to a file, with rotation.")
-        .def(py::init<FileSink::Config>(), py::arg("config"));
-
-    py::classh<JsonSink, Sink>(m, "JsonSink", "Writes records to a file as JSON lines.")
-        .def(py::init<std::string_view>(), py::arg("path"));
+    py::classh<FileSink, Sink>(m, "FileSink",
+                               "Appends one line per record to a file, with rotation. Raises "
+                               "InvalidSinkConfigError for an empty path or a zero count, and "
+                               "FileOpenError when the file cannot be opened.")
+        .def(py::init(&create_file_sink), py::arg("config"))
+        .def_property_readonly("path", &FileSink::path, "The active file, {date} substituted.")
+        .def("statistics", &FileSink::statistics);
 
     py::classh<NullSink, Sink>(m, "NullSink", "Discards every record.").def(py::init<>());
 }

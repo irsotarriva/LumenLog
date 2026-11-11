@@ -14,7 +14,7 @@ If you're new, start with [Getting Started](getting-started.md). If you want to 
 | [Sinks](sinks.md) | Terminal, file, JSON sinks. Configuration. Writing custom sinks. |
 | [Predicates](predicates.md) | Filtering records with the predicate DSL |
 | [API Reference](api.md) | Every public type, function, and macro |
-| [Bridges](bridges.md) | Zero-instrumentation hooks for PyTorch, ROOT, Eigen, OpenMP |
+| [Bridges](bridges.md) | Helpers that emit metrics from Eigen, OpenMP, ROOT and libtorch objects |
 
 ## Architecture at a glance
 

@@ -24,6 +24,16 @@ enum class LumenError : uint8_t {
     TagTableFull,
     // parse_predicate: the query is not valid.
     InvalidPredicate,
+    // A sink factory (TerminalSink::create, FileSink::create, ...): a Config
+    // field is out of its documented range.
+    InvalidSinkConfig,
+    // FileSink::create: the file could not be opened for appending.
+    FileOpenFailed,
+    // A sink's destination refused a write (reported through the sink's
+    // diagnostics and counted in its statistics, never returned by on_*).
+    IoError,
+    // DashboardSink::create: the destination is not a terminal.
+    NotATerminal,
 };
 
 class LumenErrorCategory : public std::error_category {

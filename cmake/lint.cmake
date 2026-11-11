@@ -55,10 +55,10 @@ if(LUMEN_RUN_CLANG_TIDY AND LUMEN_CLANG_TIDY)
             -quiet
             "-warnings-as-errors=*"
             ${lumen_tidy_extra_args}
-            # The OpenMP bridge check is compiled with GCC's -fopenmp, whose
-            # omp.h Clang does not find; the bridge header is linted through
-            # the bridges-without-frameworks check instead.
-            "^${PROJECT_SOURCE_DIR}/(src|examples|tests)/(?!compile_checks/bridge_openmp\\.cpp)"
+            # The OpenMP bridge check and tests are compiled with GCC's
+            # -fopenmp, whose omp.h Clang does not find; the bridge header is
+            # linted through the bridges-without-frameworks check instead.
+            "^${PROJECT_SOURCE_DIR}/(src|examples|tests)/(?!compile_checks/bridge_openmp\\.cpp|bridges/test_openmp\\.cpp)"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     COMMENT "clang-tidy over src/, examples/ and tests/"
     VERBATIM)

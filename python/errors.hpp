@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 
 #include <expected>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -19,6 +20,9 @@ namespace lumen::python {
 
 // Raises the Python exception that stands for `code`. Never returns.
 [[noreturn]] void raise_error(std::error_code code);
+
+// As above, with `context` (what failed, e.g. a path) after the code's message.
+[[noreturn]] void raise_error(std::error_code code, std::string_view context);
 
 // The value, or the Python exception for the error.
 template <typename T>

@@ -2,7 +2,9 @@
 and what happens when a sink raises."""
 
 import gc
+import json
 import os
+import pathlib
 import tempfile
 import unittest
 
@@ -169,30 +171,67 @@ class LibrarySinkTest(LumenTestCase):
         return "".join([self.directory.name, os.sep, name, ".log"])
 
     def _log_through(self, sink, message):
+        """Registers `sink`, logs `message`, and returns the sink taken back."""
         sink_id = lumen.core().add_sink(sink)
+        del sink
         lumen.info(message)
         lumen.core().flush()
-        del sink
-        # Destroying the returned sink closes its file.
-        lumen.core().remove_sink(sink_id)
-        gc.collect()
+        return lumen.core().remove_sink(sink_id)
 
     def test_file_sink_writes_to_a_path_assigned_from_a_temporary_string(self):
         config = lumen.FileConfig()
         config.path = self._path("file_sink")
         _churn()
         expected_path = self._path("file_sink")
-        self.assertEqual(config.path, expected_path)
-        self._log_through(lumen.FileSink(config), "file sink message 1234")
+        self.assertEqual(str(config.path), expected_path)
+        sink = self._log_through(lumen.FileSink(config), "file sink message 1234")
+        self.assertEqual(str(sink.path), expected_path)
+        del sink  # closes the file
         with open(expected_path, encoding="utf-8") as f:
             self.assertIn("file sink message 1234", f.read())
 
-    def test_json_sink_writes_to_a_path_given_as_a_temporary_string(self):
-        sink = lumen.JsonSink(self._path("json_sink"))
+    def test_file_sink_json_format_writes_one_json_object_per_record(self):
+        config = lumen.FileConfig(self._path("json_sink"), format=lumen.FileFormat.Json)
         _churn()
-        self._log_through(sink, "json sink message 5678")
+        self._log_through(lumen.FileSink(config), "json sink message 5678")  # dropped: closes the file
         with open(self._path("json_sink"), encoding="utf-8") as f:
-            self.assertIn("json sink message 5678", f.read())
+            lines = [json.loads(line) for line in f]
+        self.assertEqual([(r["type"], r["msg"]) for r in lines],
+                         [("log", "json sink message 5678")])
+
+    def test_file_config_accepts_a_path_object(self):
+        config = lumen.FileConfig(pathlib.Path(self._path("as_path")))
+        self.assertEqual(config.path, pathlib.Path(self._path("as_path")))
+
+    def test_sink_statistics_count_the_lines_written(self):
+        sink = lumen.FileSink(lumen.FileConfig(self._path("counted")))
+        before = sink.statistics()
+        self.assertEqual((before.lines_queued, before.lines_written), (0, 0))
+        sink = self._log_through(sink, "counted")
+        after = sink.statistics()
+        self.assertEqual((after.lines_queued, after.lines_written, after.lines_dropped,
+                          after.lines_failed), (1, 1, 0, 0))
+
+    def test_file_sink_in_a_missing_directory_raises_file_open_error(self):
+        missing = os.path.join(self.directory.name, "no such dir", "x.log")
+        with self.assertRaises(lumen.FileOpenError) as raised:
+            lumen.FileSink(lumen.FileConfig(missing))
+        self.assertIsInstance(raised.exception, OSError)
+        self.assertIsInstance(raised.exception, lumen.LumenError)
+        self.assertIn(missing, str(raised.exception))
+
+    def test_file_sink_with_an_invalid_config_raises_invalid_sink_config_error(self):
+        with self.assertRaises(lumen.InvalidSinkConfigError) as raised:
+            lumen.FileSink(lumen.FileConfig(self._path("bad"), max_files=0))
+        self.assertIsInstance(raised.exception, ValueError)
+        with self.assertRaises(lumen.InvalidSinkConfigError):
+            lumen.FileSink(lumen.FileConfig(""))
+
+    def test_terminal_sink_with_an_invalid_time_format_raises_invalid_sink_config_error(self):
+        config = lumen.TerminalConfig()
+        config.time_format = "%Q"
+        with self.assertRaises(lumen.InvalidSinkConfigError):
+            lumen.TerminalSink(config)
 
     def test_terminal_config_keeps_strings_assigned_from_temporaries(self):
         config = lumen.TerminalConfig()
@@ -201,6 +240,11 @@ class LibrarySinkTest(LumenTestCase):
         _churn()
         self.assertEqual(config.time_format, "%H:%M")
         self.assertEqual(config.inline_tags, ["run0", "run1", "run2"])
+
+    def test_terminal_sink_with_color_never_is_not_colored(self):
+        config = lumen.TerminalConfig()
+        config.color = lumen.ColorMode.Never
+        self.assertFalse(lumen.TerminalSink(config).colored)
 
     def test_null_sink_accepts_records(self):
         sink_id = self.add_sink(lumen.NullSink())

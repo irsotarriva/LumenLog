@@ -57,6 +57,10 @@ jobs:
             cc: clang-18
             cxx: clang++-18
             apt: libc++-18-dev libc++abi-18-dev
+            # The distro libc++ frees std::runtime_error's message with free()
+            # although it was allocated with operator new; ASan reports that
+            # as a mismatch whenever any exception is thrown and caught.
+            asan_options: alloc_dealloc_mismatch=0
             cmake_args: >-
               -DCMAKE_CXX_FLAGS=-stdlib=libc++
               -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
@@ -157,6 +161,8 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel
 
       - name: Test
+        env:
+          ASAN_OPTIONS: ${{ matrix.asan_options }}
         run: ctest --preset ${{ matrix.preset }} --parallel 4
 
       - name: Benchmark (informational)
@@ -188,3 +194,107 @@ jobs:
 
       - name: clang-tidy
         run: cmake --build --preset release --target lint
+
+  # The bridges against their real frameworks. The frameworks are fetched here,
+  # on the runner, and only for this job: Lumen's build never downloads them.
+  # LUMEN_REQUIRED_BRIDGE_FRAMEWORKS makes configuring fail if one is not
+  # found, so that the job cannot pass by skipping the tests it exists for.
+  bridges:
+    name: bridges (${{ matrix.framework }})
+    runs-on: ubuntu-24.04
+    # TODO(coordinator): remove continue-on-error once this job has passed once.
+    continue-on-error: true
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # libtorch (official CPU build) with the runner's GCC 13. Eigen comes
+          # from apt and OpenMP with GCC, so their bridges are tested here too.
+          - framework: torch
+            required: Eigen3;OpenMP;Torch
+          # ROOT from conda-forge. Lumen is compiled with conda-forge's GCC 13
+          # in the same environment, so that ROOT, the compiler, libstdc++ and
+          # the headers ROOT's interpreter reads at run time all come from one
+          # toolchain.
+          - framework: root
+            required: ROOT
+
+    env:
+      LIBTORCH_VERSION: 2.5.1
+      LIBTORCH_URL: https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcpu.zip
+      ROOT_VERSION: '6.32'
+
+    defaults:
+      run:
+        # A login shell, so that the conda environment of the root entry is
+        # active in every step.
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Eigen and GTest
+        if: matrix.framework == 'torch'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeigen3-dev libgtest-dev
+
+      - name: Restore the libtorch download
+        if: matrix.framework == 'torch'
+        uses: actions/cache@v4
+        with:
+          path: ~/downloads/libtorch-${{ env.LIBTORCH_VERSION }}-cpu.zip
+          key: libtorch-${{ env.LIBTORCH_VERSION }}-cpu-cxx11-abi
+
+      - name: Download and unpack libtorch
+        if: matrix.framework == 'torch'
+        run: |
+          zip="$HOME/downloads/libtorch-${LIBTORCH_VERSION}-cpu.zip"
+          if [ ! -f "$zip" ]; then
+            mkdir -p "$(dirname "$zip")"
+            curl --fail --location --retry 3 --output "$zip" "$LIBTORCH_URL"
+          fi
+          unzip -q "$zip" -d "$RUNNER_TEMP"
+          echo "BRIDGE_PREFIX=$RUNNER_TEMP/libtorch" >> "$GITHUB_ENV"
+
+      # setup-micromamba keeps its package downloads and the solved
+      # environment in the Actions cache (it uses actions/cache internally).
+      - name: Install ROOT and a GCC 13 toolchain from conda-forge
+        if: matrix.framework == 'root'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: lumen-root
+          create-args: >-
+            root=${{ env.ROOT_VERSION }}
+            gxx_linux-64=13
+            gtest
+          cache-downloads: true
+          cache-environment: true
+          init-shell: bash
+
+      - name: Point CMake at the conda environment
+        if: matrix.framework == 'root'
+        run: |
+          echo "BRIDGE_PREFIX=$CONDA_PREFIX" >> "$GITHUB_ENV"
+          # conda-forge builds ROOT as C++20 and RConfigure.h warns (#warning)
+          # when it is included from C++23 code. Keep the warning visible but
+          # do not let -Werror turn it into a build failure.
+          echo "CXXFLAGS=$CXXFLAGS -Wno-error=cpp" >> "$GITHUB_ENV"
+          "$CXX" --version
+          root-config --version
+
+      - name: Configure
+        run: >-
+          cmake --preset release
+          -DLUMEN_ENABLE_DASHBOARD=OFF
+          -DLUMEN_WARNINGS_AS_ERRORS=ON
+          "-DCMAKE_PREFIX_PATH=$BRIDGE_PREFIX"
+          "-DLUMEN_REQUIRED_BRIDGE_FRAMEWORKS=${{ matrix.required }}"
+
+      - name: Build
+        run: cmake --build --preset release --parallel
+
+      - name: Bridge tests and bridge compile checks
+        run: ctest --preset release --tests-regex Bridge --parallel 4
