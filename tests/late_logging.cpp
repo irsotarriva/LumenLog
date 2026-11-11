@@ -1,8 +1,9 @@
 // Logging during static destruction, after the global core has shut down.
 // Run by ctest as its own process: exit status 0 means the late records were
 // counted as dropped_after_shutdown, the record logged in main was delivered
-// at shutdown, a sink added after shutdown was refused with CoreShutDown and
-// destroyed, and nothing crashed (the Debug build runs under ASan).
+// at shutdown, the sink registered in main was destroyed by the shutdown, a
+// sink added after shutdown was refused with CoreShutDown and destroyed, and
+// nothing crashed (the Debug build runs under ASan).
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -18,9 +19,17 @@ namespace {
 std::atomic<int> delivered_in_main{0};
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<int> late_sinks_destroyed{0};
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+std::atomic<int> counting_sinks_destroyed{0};
 
 class CountingSink : public lumen::Sink {
 public:
+    CountingSink() = default;
+    ~CountingSink() override { counting_sinks_destroyed.fetch_add(1); }
+    CountingSink(const CountingSink&) = delete;
+    CountingSink& operator=(const CountingSink&) = delete;
+    CountingSink(CountingSink&&) = delete;
+    CountingSink& operator=(CountingSink&&) = delete;
     void on_log(const lumen::LogRecord& r) override {
         if (r.message == "from main") {
             delivered_in_main.fetch_add(1);
@@ -56,12 +65,13 @@ public:
         const bool ok = delivered_in_main.load() == 1 && stats.logs.dropped_after_shutdown == 1 &&
                         stats.metrics.dropped_after_shutdown == 1 &&
                         stats.progress.dropped_after_shutdown == 1 && refused &&
-                        late_sinks_destroyed.load() == 1;
+                        late_sinks_destroyed.load() == 1 && counting_sinks_destroyed.load() == 1;
         if (!ok) {
             std::cerr << "late logging: delivered_in_main=" << delivered_in_main.load()
                       << " logs.dropped_after_shutdown=" << stats.logs.dropped_after_shutdown
                       << " late add_sink refused=" << refused
-                      << " late sinks destroyed=" << late_sinks_destroyed.load() << '\n';
+                      << " late sinks destroyed=" << late_sinks_destroyed.load()
+                      << " sinks destroyed at shutdown=" << counting_sinks_destroyed.load() << '\n';
         }
         // The process is already exiting; _Exit reports the verdict as the status.
         std::_Exit(ok ? 0 : 1);
