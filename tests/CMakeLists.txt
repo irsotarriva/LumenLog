@@ -22,6 +22,7 @@ add_executable(lumen_tests
   test_dashboard_model.cpp
   test_error.cpp
   test_class_name.cpp
+  test_wakeup.cpp
 )
 
 if(LUMEN_ENABLE_DASHBOARD)
