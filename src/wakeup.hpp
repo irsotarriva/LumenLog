@@ -12,27 +12,31 @@ namespace lumen::detail {
 // How producers wake a sleeping dispatch thread, and how that thread waits
 // for records without missing one.
 //
-// Protocol. Both sides update `sleeping_` with a read-modify-write
-// (acq_rel), so the two updates are ordered in its modification order and
-// the later one sees the earlier:
-//   - the dispatcher sets it with an exchange, then checks the queues once
-//     more, and only then blocks;
-//   - a producer, after publishing its record, clears it with an exchange
-//     and notifies if it was set.
-// If the producer's exchange comes second, it sees `true` and wakes the
-// dispatcher. If it comes first, the dispatcher's exchange reads from it
-// (acquire), so the record published before it is visible to the second
-// check. Either way no record waits for a sleeping dispatcher. (A seq_cst
-// fence on each side would do the same, but ThreadSanitizer does not support
-// fences.)
+// Protocol. It pairs two sequentially consistent operations on each side
+// (no fences, which ThreadSanitizer does not support):
+//   - the dispatcher sets `sleeping_` (seq_cst exchange), then checks the
+//     queues once more, reading each head position (seq_cst load,
+//     RingBuffer::head_position), and only then blocks;
+//   - a producer claims its position (the seq_cst CAS on the queue's head in
+//     RingBuffer::try_push), publishes its record, then reads `sleeping_`
+//     (seq_cst load) and, if it is set, clears it with an exchange and
+//     notifies when the exchange found it set.
+// All four operations lie in one total order. If the producer's claim comes
+// before the dispatcher's head load, the dispatcher sees the claim and does
+// not block (it waits for the record to be published by retrying). If it
+// comes after, the dispatcher's earlier store to `sleeping_` comes before
+// the producer's later load, which therefore sees `true` (or a later
+// clearing by another producer, which notifies). Either way no record waits
+// for a sleeping dispatcher. The exchange makes one producer of several that
+// saw `true` the one that notifies.
 //
-// Cost on every emit: one atomic exchange on a shared cache line (a locked
-// instruction, a few tens of cycles; producers on several cores also move
-// that line between them). The mutex and the notify (a system call) are only
-// paid by a producer that finds the dispatcher asleep.
+// Cost on every emit: one load of `sleeping_`. While the dispatcher is awake
+// nobody writes that cache line, so producers on several cores share it
+// without moving it between them. The exchange, the mutex and the notify (a
+// system call) are only paid by a producer that finds the dispatcher asleep.
 class Wakeup {
 public:
-    // Producer side, after the record is published.
+    // Producer side, after RingBuffer::try_push accepted the record.
     void wake_if_sleeping() noexcept;
 
     // Dispatcher side. Returns once `queues` has a record or stop() was

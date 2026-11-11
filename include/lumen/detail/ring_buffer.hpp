@@ -51,9 +51,15 @@ concept RingBufferElement =
 // publishing store (release) pairs with the consumer's load (acquire), and the
 // consumer's freeing store (release) pairs with the next producer's load
 // (acquire), so a construction never overlaps the destruction of the previous
-// element in that slot. head_ only arbitrates which producer owns a position
-// and can be relaxed. tail_ is written by the consumer alone and is stored
-// with release for observers.
+// element in that slot. head_ only arbitrates which producer owns a position;
+// for the buffer alone it could be relaxed. Its successful CAS and
+// head_position() are sequentially consistent instead, so that a user of the
+// buffer can order a claim against a flag of its own: a producer that reads
+// a flag (seq_cst) after try_push(), and a consumer that sets the flag
+// (seq_cst) before reading head_position(), cannot both miss each other
+// (src/wakeup.hpp relies on this). On x86 this costs nothing extra: the CAS
+// is a locked instruction either way and the load a plain move. tail_ is
+// written by the consumer alone and is stored with release for observers.
 //
 // Ordering. Elements are popped in position order. try_pop() returns false
 // while the oldest claimed element is still being written, even if later
@@ -61,7 +67,12 @@ concept RingBufferElement =
 //
 // Storage. Slots are raw storage on the heap: an element exists only between
 // its push and its pop, and the constructor does not write to it, so pages
-// that are never used are never made resident. Slots are not padded to cache
+// that are never used are never made resident. A page that has held an
+// element stays resident (nothing returns it to the system), so after N
+// pushes all N * sizeof(T) bytes are. The sequence numbers, 8 bytes per
+// slot, are written by the constructor and resident from the start. A popped
+// element is destroyed in its slot, so an empty slot owns nothing. Slots are
+// not padded to cache
 // lines: for elements of several hundred bytes, two producers share at most
 // the one line at a slot boundary, and padding would add up to 63 bytes per
 // slot.
@@ -133,9 +144,10 @@ public:
     [[nodiscard]] bool empty() const noexcept { return size() == 0; }
 
     // Number of positions claimed by producers so far (monotonic). A claimed
-    // element may still be being written.
+    // element may still be being written. Sequentially consistent: see
+    // "Memory order".
     [[nodiscard]] uint64_t head_position() const noexcept {
-        return head_.load(std::memory_order_acquire);
+        return head_.load(std::memory_order_seq_cst);
     }
 
     // Number of elements popped so far (monotonic).
@@ -189,7 +201,8 @@ private:
             const uint64_t sequence = (*sequence_)[index_of_(pos)].load(std::memory_order_acquire);
             if (sequence == free_for_(pos)) {
                 // On failure the CAS reloads `pos` and we look at the new slot.
-                if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
+                if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_seq_cst,
+                                                std::memory_order_relaxed)) {
                     return pos;
                 }
             } else if (sequence < free_for_(pos)) {

@@ -15,7 +15,10 @@ constexpr uint32_t idle_check_count = 5;
 }  // namespace
 
 void Wakeup::wake_if_sleeping() noexcept {
-    if (!sleeping_.exchange(false, std::memory_order_acq_rel)) {
+    // A plain load first: while the dispatcher is awake, producers only read
+    // the flag's cache line and do not take it from each other.
+    if (!sleeping_.load(std::memory_order_seq_cst) ||
+        !sleeping_.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
     {
@@ -54,7 +57,7 @@ bool Wakeup::found_work_before_sleeping_(const RecordQueues& queues) {
         return true;
     }
     // The previous value is false: only this thread sets the flag.
-    static_cast<void>(sleeping_.exchange(true, std::memory_order_acq_rel));
+    static_cast<void>(sleeping_.exchange(true, std::memory_order_seq_cst));
     if (queues.has_pending()) {
         sleeping_.store(false, std::memory_order_relaxed);
         return true;
