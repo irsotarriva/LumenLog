@@ -62,7 +62,7 @@ if (!set && set.error() == lumen::LumenError::TagTableFull) {
 |---|---|
 | `InvalidSinkId` | `remove_sink`, `sink_exception_count`: no sink has this id |
 | `NullSink` | `add_sink`: the sink is null |
-| `SinkBusy` | `remove_sink` from inside a callback of the sink being removed |
+| `SinkBusy` | `remove_sink` while a callback of that sink runs further up the calling thread's stack |
 | `TagTableFull` | `set_process_tag`, `set_thread_tag`, `Tagged::lumen_tag`: the key is new and the table is full |
 | `InvalidPredicate` | `parse_predicate` (in `PredicateParseError::code`) |
 | `InvalidSinkConfig` | `TerminalSink::create`, `FileSink::create`, `DashboardSink::create`: a `Config` field is out of range |

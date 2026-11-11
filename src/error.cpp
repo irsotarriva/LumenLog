@@ -11,7 +11,7 @@ std::string LumenErrorCategory::message(int ev) const {
         case LumenError::None:              return "no error";
         case LumenError::InvalidSinkId:     return "sink id not found";
         case LumenError::NullSink:          return "sink is null";
-        case LumenError::SinkBusy:          return "sink cannot be removed from its own callback";
+        case LumenError::SinkBusy:          return "sink cannot be removed while its callback runs on this thread";
         case LumenError::TagTableFull:      return "tag table is full";
         case LumenError::InvalidPredicate:  return "invalid predicate query";
         case LumenError::InvalidSinkConfig: return "invalid sink configuration";

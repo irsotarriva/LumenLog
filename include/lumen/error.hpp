@@ -17,7 +17,9 @@ enum class LumenError : uint8_t {
     InvalidSinkId,
     // add_sink: the sink pointer is null.
     NullSink,
-    // remove_sink: called from inside a callback of the sink being removed.
+    // remove_sink: a callback of the sink being removed is running further up
+    // the calling thread's stack (the sink removes itself, or another sink
+    // removes the one that raised the fatal record it is receiving).
     SinkBusy,
     // set_process_tag, set_thread_tag, Tagged::lumen_tag: the key is new and
     // the table already holds its maximum number of keys (lumen/limits.hpp).

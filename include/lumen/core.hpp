@@ -147,9 +147,12 @@ public:
     // Core will never call it again; records still queued are not delivered
     // to it. If one of its callbacks is running on another thread, this waits
     // for that callback to return (the one case where a call here waits for a
-    // sink). Called from inside a callback of the same Core, it never waits:
-    // only the calling sink can be busy then, and removing the calling sink
-    // itself fails with LumenError::SinkBusy and leaves it registered.
+    // sink). Called from inside a callback of the same Core (directly, or
+    // through a callback of another Core), it never waits: a sink whose
+    // callback is running further up the calling thread's stack (the calling
+    // sink itself, or the sink that raised a fatal record from its callback)
+    // cannot be removed, and the call fails with LumenError::SinkBusy and
+    // leaves it registered. Any other sink is removed at once.
     // Fails with LumenError::InvalidSinkId if no sink has this id.
     [[nodiscard]] std::expected<std::unique_ptr<Sink>, std::error_code> remove_sink(SinkId id);
 
@@ -165,8 +168,15 @@ public:
     //
     // From inside a sink callback of this Core it does nothing and returns at
     // once: the calling thread is the one delivering, and cannot wait for
-    // itself. The records stay queued and are delivered when the current pass
-    // continues. After shutdown it does nothing.
+    // itself. The same holds when the callback belongs to another Core that
+    // this Core's delivery called into (a sink of A flushes B, a sink of B
+    // flushes A). The records stay queued and are delivered when the current
+    // pass continues. After shutdown it does nothing.
+    //
+    // Sinks of two Cores that flush each other from their callbacks on two
+    // different threads at the same moment deadlock, as any two locks taken
+    // in opposite orders do: each thread holds its own Core's delivery and
+    // waits for the other's. Do not build such a cycle.
     void flush();
 
     [[nodiscard]] CoreStatistics statistics() const noexcept;

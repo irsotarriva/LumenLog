@@ -69,32 +69,44 @@ struct SinkEntry {
 
 using Registry = std::vector<std::shared_ptr<SinkEntry>>;
 
-// What the calling thread is delivering, if anything: the Core whose records
-// it delivers (it holds that Core's consume mutex) and the sink whose
-// callback is running. Lets flush, remove_sink and fatal records recognise a
-// call from inside a callback.
-struct Delivery {
-    const void* core = nullptr;  // non-owning: the Core::Impl
-    SinkEntry* entry = nullptr;  // non-owning
+// One delivery in progress on the calling thread: the thread holds this
+// Core's consume mutex. A sink of one Core may flush another, so a thread can
+// deliver for several Cores at once; the frames form a stack, innermost
+// first. Lets flush, remove_sink and fatal records recognise a call made
+// from inside a callback, however many Cores lie in between.
+struct DeliveryFrame {
+    const void* core = nullptr;      // non-owning: the Core::Impl
+    DeliveryFrame* outer = nullptr;  // non-owning: the frame below it on this thread
 };
 
-// Per-thread delivery state; this file is its only user.
+// The calling thread's innermost delivery frame; this file is its only user.
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-thread_local Delivery tls_delivery;
+thread_local DeliveryFrame* tls_innermost_delivery = nullptr;
 
 class DeliveryScope {
 public:
-    explicit DeliveryScope(const void* core) noexcept
-        : previous_(std::exchange(tls_delivery, Delivery{core, nullptr})) {}
-    ~DeliveryScope() { tls_delivery = previous_; }
+    explicit DeliveryScope(const void* core) noexcept : frame_{core, tls_innermost_delivery} {
+        tls_innermost_delivery = &frame_;
+    }
+    ~DeliveryScope() { tls_innermost_delivery = frame_.outer; }
     DeliveryScope(const DeliveryScope&) = delete;
     DeliveryScope& operator=(const DeliveryScope&) = delete;
     DeliveryScope(DeliveryScope&&) = delete;
     DeliveryScope& operator=(DeliveryScope&&) = delete;
 
 private:
-    Delivery previous_;
+    DeliveryFrame frame_;
 };
+
+[[nodiscard]] bool thread_delivers_for(const void* core) noexcept {
+    for (const DeliveryFrame* frame = tls_innermost_delivery; frame != nullptr;
+         frame = frame->outer) {
+        if (frame->core == core) {
+            return true;
+        }
+    }
+    return false;
+}
 
 [[nodiscard]] std::string_view& text_of(LogRecord& r) {
     return r.message;
@@ -409,7 +421,6 @@ struct Core::Impl {
             entry.busy.store(false, std::memory_order_release);
             return;
         }
-        SinkEntry* const outer = std::exchange(tls_delivery.entry, &entry);
         try {
             std::forward<F>(fn)();
         } catch (const std::exception& e) {
@@ -417,7 +428,6 @@ struct Core::Impl {
         } catch (...) {
             note_exception(entry, callback, "unknown exception");
         }
-        tls_delivery.entry = outer;
         entry.busy.store(false, std::memory_order_release);
     }
 
@@ -509,7 +519,7 @@ struct Core::Impl {
         }
     }
 
-    [[nodiscard]] bool delivering_here() const noexcept { return tls_delivery.core == this; }
+    [[nodiscard]] bool delivering_here() const noexcept { return thread_delivers_for(this); }
 
     void flush() {
         if (delivering_here() || !accepting.load(std::memory_order_acquire)) {
@@ -626,7 +636,10 @@ struct Core::Impl {
             if (it == registry->end()) {
                 return std::unexpected(make_error_code(LumenError::InvalidSinkId));
             }
-            if (delivering_here() && tls_delivery.entry == it->get()) {
+            // This thread holds the consume mutex, so a busy sink is in a
+            // callback further up this thread's stack: waiting for it would
+            // never end.
+            if (delivering_here() && (*it)->busy.load(std::memory_order_seq_cst)) {
                 return std::unexpected(make_error_code(LumenError::SinkBusy));
             }
             entry = *it;

@@ -321,6 +321,38 @@ TEST_F(CoreFlushTest, FlushOnEachOfFourProducerThreadsLeavesNoRecordUndelivered)
     EXPECT_EQ(_captured->logs().size(), static_cast<std::size_t>(thread_count * per_thread));
 }
 
+TEST(CoreFlushAcrossCoresTest, FlushReachedThroughAnotherCoresCallbackReturnsAtOnce) {
+    // Flushes `other` from its own flush(), which only Core::flush() calls,
+    // on the thread that called it.
+    struct FlushesOtherCore : Sink {
+        FlushesOtherCore(Core& core, std::shared_ptr<std::atomic<int>> returned)
+            : other(core), flushes_returned(std::move(returned)) {}
+        void flush() override {
+            other.flush();
+            flushes_returned->fetch_add(1);
+        }
+        Core& other;
+        std::shared_ptr<std::atomic<int>> flushes_returned;
+    };
+    const test::CleanContext context;
+    Core first([](std::string_view /*line*/) {});
+    Core second([](std::string_view /*line*/) {});
+    auto returned = std::make_shared<std::atomic<int>>(0);
+    ASSERT_TRUE(second.add_sink(std::make_unique<FlushesOtherCore>(first, returned)));
+    const auto in_second = capture(second);
+    ASSERT_TRUE(first.add_sink(callback_sink([&second](const LogRecord& r) {
+        if (r.message == "flush the second core") {
+            second.flush();  // whose sink then flushes the first, which this thread delivers for
+        }
+    })));
+    log_to(second, "for the second core");
+    log_to(first, "flush the second core");
+    first.flush();
+
+    EXPECT_EQ(returned->load(), 1);
+    EXPECT_EQ(in_second->messages(), (std::vector<std::string>{"for the second core"}));
+}
+
 // Loss accounting.
 
 class CoreStatisticsTest : public LocalCoreTest {};
@@ -823,6 +855,33 @@ TEST(CoreFatalDeathTest, FatalFromASinkCallbackReachesTheOtherSinksAndFlushesThe
         // The sink that logged is skipped; the other one has not seen
         // "trigger" yet (it comes later in the list) and never will.
         "^delivered:fatal from callback\nflushed");
+}
+
+TEST(CoreFatalDeathTest, SinkReceivingAFatalRaisedByAnotherSinkCannotRemoveItAndGetsSinkBusy) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_DEATH(
+        {
+            Core core;
+            Core* const target = &core;
+            const auto raiser = core.add_sink(callback_sink([target](const LogRecord& r) {
+                if (r.message == "trigger") {
+                    log_to(*target, "fatal from callback", LogLevel::Fatal);
+                }
+            }));
+            EXPECT_TRUE(raiser);
+            const SinkId raiser_id = raiser.value_or(0);
+            EXPECT_TRUE(core.add_sink(callback_sink([target, raiser_id](const LogRecord& r) {
+                if (r.message == "fatal from callback") {
+                    const auto removed = target->remove_sink(raiser_id);
+                    std::cerr << "remove_sink: "
+                              << (removed ? std::string("removed") : removed.error().message())
+                              << '\n';
+                }
+            })));
+            log_to(core, "trigger");
+            core.flush();
+        },
+        "remove_sink: sink cannot be removed while its callback runs on this thread");
 }
 
 }  // namespace
