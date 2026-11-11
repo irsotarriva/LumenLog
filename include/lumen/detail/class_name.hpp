@@ -5,6 +5,12 @@
 
 namespace lumen::detail {
 
+// ASCII letters, digits and '_': the characters of a C++ identifier as
+// compilers spell them in function signatures.
+[[nodiscard]] constexpr bool is_class_name_char(char c) noexcept {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
 // The innermost class named in a function signature as produced by
 // std::source_location::function_name(), for example "MyClass" from
 // "void MyClass::method(int)" or "Inner" from "auto Outer::Inner::f() -> void".
@@ -23,13 +29,7 @@ namespace lumen::detail {
     }
 
     auto class_start = method_sep;
-    while (class_start > 0) {
-        const char c = function_name[class_start - 1];
-        const bool identifier_char =
-            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-        if (!identifier_char) {
-            break;
-        }
+    while (class_start > 0 && is_class_name_char(function_name[class_start - 1])) {
         --class_start;
     }
     return function_name.substr(class_start, method_sep - class_start);

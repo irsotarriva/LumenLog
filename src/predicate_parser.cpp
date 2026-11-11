@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,9 +24,13 @@ using detail::TokenKind;
 inline constexpr uint32_t max_nesting = 64;
 
 [[nodiscard]] constexpr bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        if (detail::ascii::to_lower(a[i]) != detail::ascii::to_lower(b[i])) return false;
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (detail::ascii::to_lower(a[i]) != detail::ascii::to_lower(b[i])) {
+            return false;
+        }
     }
     return true;
 }
@@ -35,8 +40,10 @@ inline constexpr std::array<std::string_view, 6> level_names = {"TRACE", "DEBUG"
                                                                 "WARN",  "ERROR", "FATAL"};
 
 [[nodiscard]] std::optional<LogLevel> parse_level(std::string_view text) {
-    for (size_t i = 0; i < level_names.size(); ++i) {
-        if (iequals(text, level_names[i])) return static_cast<LogLevel>(i);
+    for (std::size_t i = 0; i < level_names.size(); ++i) {
+        if (iequals(text, level_names[i])) {
+            return static_cast<LogLevel>(i);
+        }
     }
     if (text.size() == 1 && text[0] >= '0' && text[0] <= '5') {
         return static_cast<LogLevel>(text[0] - '0');
@@ -53,9 +60,13 @@ public:
     explicit Parser(std::string_view query) : lexer_(query) {}
 
     [[nodiscard]] std::expected<Predicate, PredicateParseError> parse() {
-        if (!advance_()) return std::unexpected(std::move(error_));
+        if (!advance_()) {
+            return std::unexpected(std::move(error_));
+        }
         std::optional<Predicate> result = parse_or_(0);
-        if (!result) return std::unexpected(std::move(error_));
+        if (!result) {
+            return std::unexpected(std::move(error_));
+        }
         if (token_.kind != TokenKind::End) {
             return std::unexpected(
                 detail::make_parse_error(token_.position, "unexpected '" + token_.text + "'"));
@@ -67,9 +78,13 @@ private:
     [[nodiscard]] std::optional<Predicate> parse_or_(uint32_t depth) {
         std::optional<Predicate> lhs = parse_and_(depth);
         while (lhs && is_keyword_or_(TokenKind::Or, "or")) {
-            if (!advance_()) return std::nullopt;
+            if (!advance_()) {
+                return std::nullopt;
+            }
             std::optional<Predicate> rhs = parse_and_(depth);
-            if (!rhs) return std::nullopt;
+            if (!rhs) {
+                return std::nullopt;
+            }
             lhs = *lhs || *rhs;
         }
         return lhs;
@@ -78,20 +93,30 @@ private:
     [[nodiscard]] std::optional<Predicate> parse_and_(uint32_t depth) {
         std::optional<Predicate> lhs = parse_unary_(depth);
         while (lhs && is_keyword_or_(TokenKind::And, "and")) {
-            if (!advance_()) return std::nullopt;
+            if (!advance_()) {
+                return std::nullopt;
+            }
             std::optional<Predicate> rhs = parse_unary_(depth);
-            if (!rhs) return std::nullopt;
+            if (!rhs) {
+                return std::nullopt;
+            }
             lhs = *lhs && *rhs;
         }
         return lhs;
     }
 
     [[nodiscard]] std::optional<Predicate> parse_unary_(uint32_t depth) {
-        if (depth >= max_nesting) return fail_(token_.position, "query nested too deeply");
+        if (depth >= max_nesting) {
+            return fail_(token_.position, "query nested too deeply");
+        }
         if (is_keyword_or_(TokenKind::Not, "not")) {
-            if (!advance_()) return std::nullopt;
+            if (!advance_()) {
+                return std::nullopt;
+            }
             std::optional<Predicate> operand = parse_unary_(depth + 1);
-            if (!operand) return std::nullopt;
+            if (!operand) {
+                return std::nullopt;
+            }
             return !*operand;
         }
         return parse_primary_(depth);
@@ -99,10 +124,11 @@ private:
 
     [[nodiscard]] std::optional<Predicate> parse_primary_(uint32_t depth) {
         switch (token_.kind) {
-            case TokenKind::LParen: return parse_group_(depth);
+            case TokenKind::LParen:     return parse_group_(depth);
             case TokenKind::Identifier: return parse_word_condition_();
-            case TokenKind::String: return parse_tag_comparison_();  // quoted key, e.g. "level" == 3
-            case TokenKind::End: return fail_(token_.position, "unexpected end of query");
+            // A quoted key, e.g. "level" == 3.
+            case TokenKind::String: return parse_tag_comparison_();
+            case TokenKind::End:    return fail_(token_.position, "unexpected end of query");
             default:
                 return fail_(token_.position, "expected a condition, got '" + token_.text + "'");
         }
@@ -110,10 +136,16 @@ private:
 
     // "(" query ")"
     [[nodiscard]] std::optional<Predicate> parse_group_(uint32_t depth) {
-        if (!advance_()) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
         std::optional<Predicate> inner = parse_or_(depth + 1);
-        if (!inner) return std::nullopt;
-        if (!expect_(TokenKind::RParen, "')'")) return std::nullopt;
+        if (!inner) {
+            return std::nullopt;
+        }
+        if (!expect_(TokenKind::RParen, "')'")) {
+            return std::nullopt;
+        }
         return inner;
     }
 
@@ -122,59 +154,87 @@ private:
         if (iequals(token_.text, "true") || iequals(token_.text, "false")) {
             return parse_literal_();
         }
-        if (iequals(token_.text, "exists")) return parse_exists_();
-        if (iequals(token_.text, "level")) return parse_level_comparison_();
+        if (iequals(token_.text, "exists")) {
+            return parse_exists_();
+        }
+        if (iequals(token_.text, "level")) {
+            return parse_level_comparison_();
+        }
         return parse_tag_comparison_();
     }
 
     [[nodiscard]] std::optional<Predicate> parse_literal_() {
         const bool value = iequals(token_.text, "true");
-        if (!advance_()) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
         return value ? always() : never();
     }
 
     // "exists" "(" key ")"
     [[nodiscard]] std::optional<Predicate> parse_exists_() {
-        if (!advance_()) return std::nullopt;
-        if (!expect_(TokenKind::LParen, "'(' after exists")) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
+        if (!expect_(TokenKind::LParen, "'(' after exists")) {
+            return std::nullopt;
+        }
         if (token_.kind != TokenKind::Identifier && token_.kind != TokenKind::String) {
             return fail_(token_.position, "expected a tag name in exists(...)");
         }
         const std::string key = token_.text;
-        if (!advance_()) return std::nullopt;
-        if (!expect_(TokenKind::RParen, "')'")) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
+        if (!expect_(TokenKind::RParen, "')'")) {
+            return std::nullopt;
+        }
         return tag_exists(key);
     }
 
     // "level" op LEVEL
     [[nodiscard]] std::optional<Predicate> parse_level_comparison_() {
-        if (!advance_()) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
         if (token_.kind != TokenKind::Compare) {
             return fail_(token_.position, "expected a comparison after 'level'");
         }
         const CompareOp op = token_.op;
-        if (!advance_()) return std::nullopt;
-        const bool is_word = token_.kind == TokenKind::Identifier || token_.kind == TokenKind::Number;
+        if (!advance_()) {
+            return std::nullopt;
+        }
+        const bool is_word =
+            token_.kind == TokenKind::Identifier || token_.kind == TokenKind::Number;
         const std::optional<LogLevel> level = is_word ? parse_level(token_.text) : std::nullopt;
         if (!level) {
-            return fail_(token_.position, "expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)");
+            return fail_(token_.position,
+                         "expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)");
         }
-        if (!advance_()) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
         return level_compare(op, *level);
     }
 
     // key op value
     [[nodiscard]] std::optional<Predicate> parse_tag_comparison_() {
         const std::string key = token_.text;
-        if (!advance_()) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
         if (token_.kind != TokenKind::Compare) {
             return fail_(token_.position, "expected a comparison after '" + key +
                                               "' (for presence use exists(" + key + "))");
         }
         const CompareOp op = token_.op;
-        const size_t op_position = token_.position;
-        if (!advance_()) return std::nullopt;
-        if (token_.kind == TokenKind::Number) return parse_number_value_(key, op);
+        const std::size_t op_position = token_.position;
+        if (!advance_()) {
+            return std::nullopt;
+        }
+        if (token_.kind == TokenKind::Number) {
+            return parse_number_value_(key, op);
+        }
         if (token_.kind == TokenKind::String || token_.kind == TokenKind::Identifier) {
             return parse_text_value_(key, op, op_position);
         }
@@ -183,21 +243,23 @@ private:
 
     [[nodiscard]] std::optional<Predicate> parse_number_value_(std::string_view key, CompareOp op) {
         const double value = token_.number;
-        if (!advance_()) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
         return tag_compare(key, op, value);
     }
 
     [[nodiscard]] std::optional<Predicate> parse_text_value_(std::string_view key, CompareOp op,
-                                                             size_t op_position) {
+                                                             std::size_t op_position) {
         if (op != CompareOp::Equal && op != CompareOp::NotEqual) {
             return fail_(op_position, "'<', '<=', '>' and '>=' need a number on the right");
         }
         const std::string value = token_.text;
-        if (!advance_()) return std::nullopt;
+        if (!advance_()) {
+            return std::nullopt;
+        }
         return op == CompareOp::Equal ? tag_equals(key, value) : tag_not_equals(key, value);
     }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
 
     // Makes the next token current; false (with `error_` set) if it is malformed.
     [[nodiscard]] bool advance_() {
@@ -223,7 +285,7 @@ private:
         return advance_();
     }
 
-    [[nodiscard]] std::nullopt_t fail_(size_t position, std::string message) {
+    [[nodiscard]] std::nullopt_t fail_(std::size_t position, std::string message) {
         error_ = detail::make_parse_error(position, std::move(message));
         return std::nullopt;
     }

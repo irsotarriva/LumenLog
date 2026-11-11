@@ -17,11 +17,11 @@ namespace {
 constexpr std::string_view hex_digits = "0123456789abcdef";
 constexpr std::string_view replacement_escape = "\\ufffd";
 
-[[nodiscard]] constexpr bool is_control(unsigned char byte) noexcept {
+[[nodiscard]] constexpr bool is_control(uint8_t byte) noexcept {
     return byte < 0x20 || byte == 0x7F;
 }
 
-void append_hex_byte(std::string& out, unsigned char byte) {
+void append_hex_byte(std::string& out, uint8_t byte) {
     out += hex_digits[byte >> 4U];
     out += hex_digits[byte & 0x0FU];
 }
@@ -35,7 +35,7 @@ struct LeadByte {
     uint32_t min_code_point = 0;
 };
 
-[[nodiscard]] constexpr LeadByte decode_lead(unsigned char byte) noexcept {
+[[nodiscard]] constexpr LeadByte decode_lead(uint8_t byte) noexcept {
     if ((byte & 0xE0U) == 0xC0U) {
         return {2, byte & 0x1FU, 0x80};
     }
@@ -55,13 +55,13 @@ struct LeadByte {
 // Length of the valid multi-byte UTF-8 sequence at text[pos], or 0 if there
 // is none there.
 [[nodiscard]] std::size_t utf8_sequence_length(std::string_view text, std::size_t pos) noexcept {
-    const LeadByte lead = decode_lead(static_cast<unsigned char>(text[pos]));
+    const LeadByte lead = decode_lead(static_cast<uint8_t>(text[pos]));
     if (lead.length == 0 || text.size() - pos < lead.length) {
         return 0;
     }
     uint32_t code_point = lead.bits;
     for (std::size_t k = 1; k < lead.length; ++k) {
-        const auto byte = static_cast<unsigned char>(text[pos + k]);
+        const auto byte = static_cast<uint8_t>(text[pos + k]);
         if ((byte & 0xC0U) != 0x80U) {
             return 0;
         }
@@ -73,7 +73,7 @@ struct LeadByte {
     return lead.length;
 }
 
-void append_json_ascii(std::string& out, unsigned char byte) {
+void append_json_ascii(std::string& out, uint8_t byte) {
     switch (byte) {
         case '"':  out += "\\\""; return;
         case '\\': out += "\\\\"; return;
@@ -95,7 +95,7 @@ void append_json_ascii(std::string& out, unsigned char byte) {
 [[nodiscard]] bool needs_logfmt_quotes(std::string_view text) noexcept {
     return text.empty() || std::ranges::any_of(text, [](char c) {
                return c == ' ' || c == '=' || c == '"' || c == '\\' ||
-                      is_control(static_cast<unsigned char>(c));
+                      is_control(static_cast<uint8_t>(c));
            });
 }
 
@@ -115,7 +115,7 @@ std::string_view level_name(LogLevel level) noexcept {
 
 void append_text_escaped(std::string& out, std::string_view text) {
     for (const char c : text) {
-        const auto byte = static_cast<unsigned char>(c);
+        const auto byte = static_cast<uint8_t>(c);
         if (!is_control(byte)) {
             out += c;
         } else if (c == '\n') {
@@ -135,7 +135,7 @@ void append_json_string(std::string& out, std::string_view text) {
     out += '"';
     std::size_t pos = 0;
     while (pos < text.size()) {
-        const auto byte = static_cast<unsigned char>(text[pos]);
+        const auto byte = static_cast<uint8_t>(text[pos]);
         if (byte < 0x80) {
             append_json_ascii(out, byte);
             ++pos;

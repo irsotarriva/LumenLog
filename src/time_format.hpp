@@ -52,9 +52,6 @@ private:
     TimeZone zone_ = TimeZone::Local;
 };
 
-// 2026-11-11T10:00:00.123456789Z
-void append_iso8601_utc(std::string& out, uint64_t timestamp_ns);
-
 // 2026-11-11: the UTC date of `timestamp_ns`.
 [[nodiscard]] std::string utc_date(uint64_t timestamp_ns);
 

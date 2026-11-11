@@ -3,11 +3,15 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <mutex>
 #include <span>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "immortal.hpp"

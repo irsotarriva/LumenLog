@@ -53,8 +53,11 @@ private:
 
 struct ThrowingMove {
     ThrowingMove() = default;
-    ThrowingMove(ThrowingMove&&) noexcept(false) {}
-    ThrowingMove& operator=(ThrowingMove&&) noexcept(false) { return *this; }
+    ~ThrowingMove() = default;
+    ThrowingMove(const ThrowingMove&) = delete;
+    ThrowingMove& operator=(const ThrowingMove&) = delete;
+    ThrowingMove(ThrowingMove&& /*other*/) noexcept(false) {}
+    ThrowingMove& operator=(ThrowingMove&& /*other*/) noexcept(false) { return *this; }
 };
 
 template <typename T, std::size_t N>
@@ -66,7 +69,7 @@ static_assert(!CanInstantiate<int, 0>, "capacity zero is rejected");
 static_assert(!CanInstantiate<int, 3>, "a capacity that is not a power of two is rejected");
 static_assert(!CanInstantiate<ThrowingMove, 4>, "an element whose move may throw is rejected");
 
-// ── Single-threaded semantics ────────────────────────────────────────────────
+// Single-threaded semantics.
 
 TEST(RingBufferTest, TryPopReturnsPushedElementsInFifoOrder) {
     RingBuffer<int, 8> buffer;
@@ -101,7 +104,8 @@ TEST(RingBufferTest, TryPushOnFullBufferReturnsFalseAndLeavesItemIntact) {
     auto item = std::make_unique<int>(99);
     EXPECT_FALSE(buffer.try_push(std::move(item)));
     ASSERT_NE(item, nullptr);
-    EXPECT_EQ(*item, 99);
+    // A rejected try_push does not move from its argument; that is under test.
+    EXPECT_EQ(*item, 99);  // NOLINT(bugprone-use-after-move)
 
     std::unique_ptr<int> out;
     ASSERT_TRUE(buffer.try_pop(out));
@@ -113,48 +117,48 @@ TEST(RingBufferTest, TryPushOnFullBufferReturnsFalseAndLeavesItemIntact) {
 
 TEST(RingBufferTest, RejectedCountCountsOnlyFailedTryPushes) {
     RingBuffer<int, 2> buffer;
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
     EXPECT_TRUE(buffer.try_push(1));
     EXPECT_TRUE(buffer.try_push(2));
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
 
     EXPECT_FALSE(buffer.try_push(3));
     EXPECT_FALSE(buffer.try_push(4));
     EXPECT_FALSE(buffer.try_push(5));
-    EXPECT_EQ(buffer.rejected_count(), 3u);
+    EXPECT_EQ(buffer.rejected_count(), 3U);
 
     int out = 0;
     EXPECT_TRUE(buffer.try_pop(out));
     EXPECT_TRUE(buffer.try_push(6));
     EXPECT_TRUE(buffer.try_pop(out));
     buffer.push_blocking(7);
-    EXPECT_EQ(buffer.rejected_count(), 3u);
+    EXPECT_EQ(buffer.rejected_count(), 3U);
 }
 
 TEST(RingBufferTest, SizeEmptyAndPositionsFollowPushesAndPops) {
     RingBuffer<int, 4> buffer;
     EXPECT_TRUE(buffer.empty());
-    EXPECT_EQ(buffer.size(), 0u);
-    EXPECT_EQ(buffer.capacity(), 4u);
+    EXPECT_EQ(buffer.size(), 0U);
+    EXPECT_EQ(buffer.capacity(), 4U);
 
     EXPECT_TRUE(buffer.try_push(1));
     EXPECT_TRUE(buffer.try_push(2));
     EXPECT_TRUE(buffer.try_push(3));
     EXPECT_FALSE(buffer.empty());
-    EXPECT_EQ(buffer.size(), 3u);
-    EXPECT_EQ(buffer.head_position(), 3u);
-    EXPECT_EQ(buffer.tail_position(), 0u);
+    EXPECT_EQ(buffer.size(), 3U);
+    EXPECT_EQ(buffer.head_position(), 3U);
+    EXPECT_EQ(buffer.tail_position(), 0U);
 
     int out = 0;
     EXPECT_TRUE(buffer.try_pop(out));
-    EXPECT_EQ(buffer.size(), 2u);
-    EXPECT_EQ(buffer.tail_position(), 1u);
+    EXPECT_EQ(buffer.size(), 2U);
+    EXPECT_EQ(buffer.tail_position(), 1U);
 
     EXPECT_TRUE(buffer.try_push(4));
     EXPECT_TRUE(buffer.try_push(5));
     EXPECT_FALSE(buffer.try_push(6));
-    EXPECT_EQ(buffer.size(), 4u);
-    EXPECT_EQ(buffer.head_position(), 5u);
+    EXPECT_EQ(buffer.size(), 4U);
+    EXPECT_EQ(buffer.head_position(), 5U);
 }
 
 TEST(RingBufferTest, PushBlockingIntoBufferWithRoomStoresElementWithoutRejecting) {
@@ -166,7 +170,7 @@ TEST(RingBufferTest, PushBlockingIntoBufferWithRoomStoresElementWithoutRejecting
     EXPECT_EQ(out, 10);
     EXPECT_TRUE(buffer.try_pop(out));
     EXPECT_EQ(out, 11);
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
 }
 
 TEST(RingBufferTest, WrapsAroundManyTimesPastCapacityInFifoOrder) {
@@ -190,7 +194,7 @@ TEST(RingBufferTest, WrapsAroundManyTimesPastCapacityInFifoOrder) {
     EXPECT_EQ(buffer.head_position(), next_in);
     EXPECT_EQ(buffer.tail_position(), next_in);
     EXPECT_GT(next_in, 100 * buffer.capacity());
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
 }
 
 TEST(RingBufferTest, CapacityOneHoldsExactlyOneElementAtATime) {
@@ -203,13 +207,13 @@ TEST(RingBufferTest, CapacityOneHoldsExactlyOneElementAtATime) {
         EXPECT_EQ(out, i);
         EXPECT_FALSE(buffer.try_pop(out));
     }
-    EXPECT_EQ(buffer.rejected_count(), 100u);
+    EXPECT_EQ(buffer.rejected_count(), 100U);
 }
 
-// ── Element lifetime ─────────────────────────────────────────────────────────
+// Element lifetime.
 
 TEST(RingBufferTest, ConstructingAndDestroyingEmptyBufferCreatesNoElements) {
-    LifetimeCounts counts;
+    const LifetimeCounts counts;
     { const RingBuffer<Tracked, 16> buffer; }
     EXPECT_EQ(counts.constructed.load(), 0);
     EXPECT_EQ(counts.destroyed.load(), 0);
@@ -244,13 +248,13 @@ TEST(RingBufferTest, EveryElementIsDestroyedExactlyOnceIncludingUnconsumedAfterW
         for (uint64_t i = 6; i < 9; ++i) {
             EXPECT_TRUE(buffer.try_push(Tracked(counts, i)));
         }
-        EXPECT_EQ(buffer.size(), 3u);
+        EXPECT_EQ(buffer.size(), 3U);
     }
     EXPECT_GT(counts.constructed.load(), 0);
     EXPECT_EQ(counts.destroyed.load(), counts.constructed.load());
 }
 
-// ── Multi-producer stress ────────────────────────────────────────────────────
+// Multi-producer stress.
 
 constexpr uint64_t stress_producers = 4;
 constexpr uint64_t stress_items_per_producer = 20'000;
@@ -277,7 +281,8 @@ struct StressOutcome {
     return producer * stress_items_per_producer + index;
 }
 
-void record_delivery(const Tracked& item, std::vector<uint64_t>& next_index, StressOutcome& outcome) {
+void record_delivery(const Tracked& item, std::vector<uint64_t>& next_index,
+                     StressOutcome& outcome) {
     const uint64_t value = item.value();
     if (value >= stress_total) {
         ++outcome.invalid_values;
@@ -344,7 +349,7 @@ TEST(RingBufferStressTest, TryPushFromFourProducersDeliversOrRejectsEachValueOnc
         const StressOutcome outcome = run_stress(
             buffer, counts, [](auto& b, Tracked&& item) { return b.try_push(std::move(item)); });
 
-        EXPECT_EQ(outcome.invalid_values, 0u);
+        EXPECT_EQ(outcome.invalid_values, 0U);
         EXPECT_EQ(outcome.values_delivered_more_than_once(), 0);
         EXPECT_EQ(outcome.delivered + outcome.rejected_seen_by_producers, stress_total);
         EXPECT_EQ(buffer.rejected_count(), outcome.rejected_seen_by_producers);
@@ -362,13 +367,13 @@ TEST(RingBufferStressTest, TryPushRetriedUntilAcceptedDeliversEveryValueExactlyO
         RingBuffer<Tracked, 2> buffer;
         const StressOutcome outcome = run_stress(buffer, counts, [](auto& b, Tracked&& item) {
             // A rejected push must leave `item` intact for the next attempt.
-            while (!b.try_push(std::move(item))) {
+            while (!b.try_push(std::move(item))) {  // NOLINT(bugprone-use-after-move)
                 std::this_thread::yield();
             }
             return true;
         });
 
-        EXPECT_EQ(outcome.invalid_values, 0u);
+        EXPECT_EQ(outcome.invalid_values, 0U);
         EXPECT_EQ(outcome.values_not_delivered_once(), 0);
         EXPECT_EQ(outcome.delivered, stress_total);
         EXPECT_TRUE(outcome.per_producer_order_kept);
@@ -385,10 +390,10 @@ TEST(RingBufferStressTest, PushBlockingFromFourProducersDeliversEveryValueExactl
             return true;
         });
 
-        EXPECT_EQ(outcome.invalid_values, 0u);
+        EXPECT_EQ(outcome.invalid_values, 0U);
         EXPECT_EQ(outcome.values_not_delivered_once(), 0);
         EXPECT_EQ(outcome.delivered, stress_total);
-        EXPECT_EQ(buffer.rejected_count(), 0u);
+        EXPECT_EQ(buffer.rejected_count(), 0U);
         EXPECT_TRUE(outcome.per_producer_order_kept);
     }
     EXPECT_EQ(counts.destroyed.load(), counts.constructed.load());

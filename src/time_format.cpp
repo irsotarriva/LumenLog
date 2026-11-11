@@ -20,8 +20,6 @@ namespace {
 constexpr uint64_t ns_per_second = 1'000'000'000;
 constexpr uint64_t ns_per_millisecond = 1'000'000;
 constexpr uint64_t seconds_per_day = 86'400;
-constexpr uint64_t seconds_per_hour = 3'600;
-constexpr uint64_t seconds_per_minute = 60;
 
 // The std::strftime conversions that take no E or O modifier. Anything else
 // after '%' is undefined behaviour for std::strftime, so it is refused.
@@ -161,16 +159,6 @@ void TimeFormat::append(std::string& out, uint64_t timestamp_ns) const {
                 break;
         }
     }
-}
-
-void append_iso8601_utc(std::string& out, uint64_t timestamp_ns) {
-    const uint64_t seconds = timestamp_ns / ns_per_second;
-    const uint64_t second_of_day = seconds % seconds_per_day;
-    const CivilDay day = civil_day(seconds / seconds_per_day);
-    std::format_to(std::back_inserter(out), "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z", day.year,
-                   day.month, day.day, second_of_day / seconds_per_hour,
-                   second_of_day % seconds_per_hour / seconds_per_minute,
-                   second_of_day % seconds_per_minute, timestamp_ns % ns_per_second);
 }
 
 std::string utc_date(uint64_t timestamp_ns) {

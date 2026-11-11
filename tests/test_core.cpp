@@ -98,7 +98,7 @@ template <typename F>
     return std::make_unique<CallbackSink<F>>(std::move(action));
 }
 
-// ── Submission: every record is complete ─────────────────────────────────
+// Submission: every record is complete.
 
 class CoreSubmitTest : public LocalCoreTest {};
 
@@ -230,7 +230,7 @@ TEST_F(CoreSubmitTest, OnePassDeliversProgressThenMetricsThenLogs) {
     EXPECT_EQ(*order, (std::vector<std::string>{"progress", "metric", "log"}));
 }
 
-// ── Routing ──────────────────────────────────────────────────────────────
+// Routing.
 
 class CoreRoutingTest : public LocalCoreTest {};
 
@@ -263,7 +263,7 @@ TEST_F(CoreRoutingTest, MetricsAndProgressAreFilteredByTagsAndIgnoreLevelConditi
     EXPECT_EQ(filtered->messages(), (std::vector<std::string>{"right level"}));
 }
 
-// ── flush() ──────────────────────────────────────────────────────────────
+// flush().
 
 class CoreFlushTest : public LocalCoreTest {};
 
@@ -319,7 +319,7 @@ TEST_F(CoreFlushTest, FlushOnEachOfFourProducerThreadsLeavesNoRecordUndelivered)
     EXPECT_EQ(_captured->logs().size(), static_cast<std::size_t>(thread_count * per_thread));
 }
 
-// ── Loss accounting ──────────────────────────────────────────────────────
+// Loss accounting.
 
 class CoreStatisticsTest : public LocalCoreTest {};
 
@@ -404,7 +404,7 @@ TEST_F(CoreStatisticsTest, EmptyDiagnosticHandlerSilencesDiagnostics) {
     EXPECT_TRUE(_diagnostic_lines().empty());
 }
 
-// ── The sink registry ────────────────────────────────────────────────────
+// The sink registry.
 
 class CoreRegistryTest : public LocalCoreTest {};
 
@@ -590,7 +590,7 @@ TEST_F(CoreRegistryTest, SinkExceptionCountForAnUnknownIdFailsWithInvalidSinkId)
     EXPECT_EQ(count.error(), LumenError::InvalidSinkId);
 }
 
-// ── Shutdown ─────────────────────────────────────────────────────────────
+// Shutdown.
 
 TEST(CoreShutdownTest, DestroyingACoreDeliversQueuedRecordsFlushesAndDestroysItsSinks) {
     struct LifetimeSink : CaptureSink {
@@ -618,7 +618,7 @@ TEST(CoreShutdownTest, DestroyingACoreDeliversQueuedRecordsFlushesAndDestroysIts
     EXPECT_TRUE(destroyed->load());
 }
 
-// ── Fatal records ────────────────────────────────────────────────────────
+// Fatal records.
 
 // Writes what it receives to stderr, where the death test reads it.
 class StderrSink : public Sink {

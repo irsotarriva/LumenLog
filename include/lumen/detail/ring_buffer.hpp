@@ -2,6 +2,7 @@
 #define LUMEN_DETAIL_RING_BUFFER_HPP
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cstddef>
@@ -17,9 +18,9 @@ namespace lumen {
 // An element must be movable without throwing: a producer that has claimed a
 // slot must always publish it, or the consumer would wait on that slot forever.
 template <typename T>
-concept RingBufferElement = std::is_nothrow_move_constructible_v<T> &&
-                            std::is_nothrow_move_assignable_v<T> &&
-                            std::is_nothrow_destructible_v<T>;
+concept RingBufferElement =
+    std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T> &&
+    std::is_nothrow_destructible_v<T>;
 
 // Bounded multi-producer, single-consumer FIFO queue (D. Vyukov's bounded
 // queue, with the consumer side specialised to one thread).
@@ -73,17 +74,16 @@ template <RingBufferElement T, std::size_t N>
 class RingBuffer {
 public:
     RingBuffer() noexcept
-        : cells_(std::make_unique_for_overwrite<Cell[]>(N)),
-          sequence_(std::make_unique<std::atomic<uint64_t>[]>(N)) {
+        : cells_(std::make_unique_for_overwrite<Cells>()), sequence_(std::make_unique<Sequence>()) {
         for (uint64_t pos = 0; pos < N; ++pos) {
-            sequence_[pos].store(free_for(pos), std::memory_order_relaxed);
+            (*sequence_)[pos].store(free_for_(pos), std::memory_order_relaxed);
         }
     }
 
     ~RingBuffer() {
         const uint64_t head = head_.load(std::memory_order_relaxed);
         for (uint64_t pos = tail_.load(std::memory_order_relaxed); pos != head; ++pos) {
-            std::destroy_at(&cells_[index_of(pos)].value);
+            std::destroy_at(slot_(pos));
         }
     }
 
@@ -122,14 +122,14 @@ public:
     // still being written. Single consumer: see the class comment.
     [[nodiscard]] bool try_pop(T& out) noexcept {
         const uint64_t pos = tail_.load(std::memory_order_relaxed);
-        std::atomic<uint64_t>& sequence = sequence_[index_of(pos)];
-        if (sequence.load(std::memory_order_acquire) != stored(pos)) {
+        std::atomic<uint64_t>& sequence = (*sequence_)[index_of_(pos)];
+        if (sequence.load(std::memory_order_acquire) != stored_(pos)) {
             return false;
         }
-        T& value = cells_[index_of(pos)].value;
-        out = std::move(value);
-        std::destroy_at(&value);
-        sequence.store(free_for(pos + N), std::memory_order_release);
+        T* const value = slot_(pos);
+        out = std::move(*value);
+        std::destroy_at(value);
+        sequence.store(free_for_(pos + N), std::memory_order_release);
         tail_.store(pos + 1, std::memory_order_release);
         return true;
     }
@@ -175,28 +175,37 @@ private:
         Cell& operator=(Cell&&) = delete;
         T value;
     };
+    using Cells = std::array<Cell, N>;
+    using Sequence = std::array<std::atomic<uint64_t>, N>;
 
     // Producers and the consumer write different counters; keeping them on
     // separate cache lines avoids false sharing between the two sides.
     static constexpr std::size_t cache_line_size = 64;
 
-    [[nodiscard]] static constexpr std::size_t index_of(uint64_t pos) noexcept {
+    [[nodiscard]] static constexpr std::size_t index_of_(uint64_t pos) noexcept {
         return static_cast<std::size_t>(pos & (N - 1));
     }
-    [[nodiscard]] static constexpr uint64_t free_for(uint64_t pos) noexcept { return 2 * pos; }
-    [[nodiscard]] static constexpr uint64_t stored(uint64_t pos) noexcept { return 2 * pos + 1; }
+    [[nodiscard]] static constexpr uint64_t free_for_(uint64_t pos) noexcept { return 2 * pos; }
+    [[nodiscard]] static constexpr uint64_t stored_(uint64_t pos) noexcept { return 2 * pos + 1; }
+
+    // The element storage of position `pos`. The one place that names the
+    // union member: Cell is a union precisely so that its lifetime is managed
+    // by hand, which std::variant cannot do.
+    [[nodiscard]] T* slot_(uint64_t pos) noexcept {
+        return &(*cells_)[index_of_(pos)].value;  // NOLINT(cppcoreguidelines-pro-type-union-access)
+    }
 
     // Claims the next position, or returns nullopt if the buffer is full.
     [[nodiscard]] std::optional<uint64_t> try_claim_() noexcept {
         uint64_t pos = head_.load(std::memory_order_relaxed);
         while (true) {
-            const uint64_t sequence = sequence_[index_of(pos)].load(std::memory_order_acquire);
-            if (sequence == free_for(pos)) {
+            const uint64_t sequence = (*sequence_)[index_of_(pos)].load(std::memory_order_acquire);
+            if (sequence == free_for_(pos)) {
                 // On failure the CAS reloads `pos` and we look at the new slot.
                 if (head_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
                     return pos;
                 }
-            } else if (sequence < free_for(pos)) {
+            } else if (sequence < free_for_(pos)) {
                 return std::nullopt;
             } else {
                 pos = head_.load(std::memory_order_relaxed);
@@ -206,12 +215,12 @@ private:
 
     // Stores `item` at a position this thread has claimed and hands it to the consumer.
     void publish_(uint64_t pos, T&& item) noexcept {
-        std::construct_at(&cells_[index_of(pos)].value, std::move(item));
-        sequence_[index_of(pos)].store(stored(pos), std::memory_order_release);
+        std::construct_at(slot_(pos), std::move(item));
+        (*sequence_)[index_of_(pos)].store(stored_(pos), std::memory_order_release);
     }
 
-    std::unique_ptr<Cell[]> cells_;
-    std::unique_ptr<std::atomic<uint64_t>[]> sequence_;
+    std::unique_ptr<Cells> cells_;
+    std::unique_ptr<Sequence> sequence_;
     alignas(cache_line_size) std::atomic<uint64_t> head_{0};
     alignas(cache_line_size) std::atomic<uint64_t> tail_{0};
     alignas(cache_line_size) std::atomic<uint64_t> rejected_{0};

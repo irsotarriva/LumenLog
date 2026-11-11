@@ -37,7 +37,7 @@ struct Payload {
 using Buffer = lumen::RingBuffer<Payload, LUMEN_LOG_CAPACITY>;
 using Clock = std::chrono::steady_clock;
 
-enum class PushMode {
+enum class PushMode : uint8_t {
     TryPush,       // drop when full, as the logging front end does
     PushBlocking,  // wait for room
 };
@@ -54,11 +54,10 @@ struct RunResult {
 [[nodiscard]] uint64_t produce(Buffer& buffer, PushMode mode, uint64_t count) {
     uint64_t accepted = 0;
     for (uint64_t i = 0; i < count; ++i) {
-        Payload item{.value = i};
         if (mode == PushMode::PushBlocking) {
-            buffer.push_blocking(std::move(item));
+            buffer.push_blocking(Payload{.value = i});
             ++accepted;
-        } else if (buffer.try_push(std::move(item))) {
+        } else if (buffer.try_push(Payload{.value = i})) {
             ++accepted;
         }
     }
@@ -137,15 +136,15 @@ int main() {
     constexpr uint64_t total_per_run = 2'000'000;
     std::cout << std::format("element size {} B, capacity {}, {} elements offered per run\n",
                              sizeof(Payload), Buffer::capacity(), total_per_run);
-    std::cout << std::format("{:<14}{:>4}{:>11}{:>11}{:>11}{:>16}{:>16}\n", "mode", "P",
-                             "accepted", "rejected", "delivered", "accepted/s", "delivered/s");
+    std::cout << std::format("{:<14}{:>4}{:>11}{:>11}{:>11}{:>16}{:>16}\n", "mode", "P", "accepted",
+                             "rejected", "delivered", "accepted/s", "delivered/s");
 
     bool consistent = true;
     for (const PushMode mode : {PushMode::TryPush, PushMode::PushBlocking}) {
-        for (const uint32_t producers : {1u, 2u, 4u, 8u}) {
+        for (const uint32_t producers : {1U, 2U, 4U, 8U}) {
             const RunResult r = run(mode, producers, total_per_run / producers);
-            consistent = consistent && r.delivered == r.accepted &&
-                         r.accepted + r.rejected == r.offered;
+            consistent =
+                consistent && r.delivered == r.accepted && r.accepted + r.rejected == r.offered;
             std::cout << std::format("{:<14}{:>4}{:>11}{:>11}{:>11}{:>16.0f}{:>16.0f}\n",
                                      name(mode), producers, r.accepted, r.rejected, r.delivered,
                                      static_cast<double>(r.accepted) / r.producer_seconds,
