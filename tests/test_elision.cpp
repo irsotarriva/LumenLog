@@ -29,11 +29,12 @@ static_assert(std::to_underlying(compiled_min_level) == LUMEN_TEST_EXPECTED_MIN_
 
 class ElisionTest : public test::GlobalCoreTest {
 protected:
-    [[nodiscard]] std::vector<LogLevel> delivered_levels() {
+    [[nodiscard]] std::vector<LogLevel> _delivered_levels() {
         core().flush();
         std::vector<LogLevel> out;
-        for (const LogRecord& r : captured_->logs())
+        for (const LogRecord& r : _captured->logs()) {
             out.push_back(r.level);
+        }
         return out;
     }
 };
@@ -42,7 +43,9 @@ protected:
     // Written as a search, not `level >= threshold`, which GCC flags as
     // always true when the threshold is 0.
     for (int value = LUMEN_TEST_EXPECTED_MIN_LEVEL; value <= 5; ++value) {
-        if (static_cast<int>(std::to_underlying(level)) == value) return true;
+        if (static_cast<int>(std::to_underlying(level)) == value) {
+            return true;
+        }
     }
     return false;
 }
@@ -56,9 +59,11 @@ TEST_F(ElisionTest, MacrosAtOrAboveTheThresholdEmitAndThoseBelowEmitNothing) {
     std::vector<LogLevel> expected;
     for (const LogLevel level :
          {LogLevel::Trace, LogLevel::Debug, LogLevel::Info, LogLevel::Warn, LogLevel::Error}) {
-        if (enabled(level)) expected.push_back(level);
+        if (enabled(level)) {
+            expected.push_back(level);
+        }
     }
-    EXPECT_EQ(delivered_levels(), expected);
+    EXPECT_EQ(_delivered_levels(), expected);
 }
 
 TEST_F(ElisionTest, ArgumentsOfElidedMacrosAreNotEvaluated) {
@@ -81,28 +86,56 @@ TEST_F(ElisionTest, ArgumentsOfElidedMacrosAreNotEvaluated) {
     EXPECT_EQ(error, enabled(LogLevel::Error) ? 1 : 0);
 }
 
-TEST_F(ElisionTest, ElseAfterAMacroAsTheBodyOfAnIfBindsToThatIfAtEveryLevel) {
+// One `if (c) MACRO(...); else ...` per level, run with c false then true.
+// Returns how often the else branch ran. The missing braces are the point.
+// NOLINTBEGIN(readability-braces-around-statements)
+[[nodiscard]] int else_count_trace() {
     int else_taken = 0;
     for (const bool condition : {false, true}) {
         if (condition)
             LUMEN_LOG_TRACE("t");
         else
             ++else_taken;
+    }
+    return else_taken;
+}
+
+[[nodiscard]] int else_count_info() {
+    int else_taken = 0;
+    for (const bool condition : {false, true}) {
         if (condition)
             LUMEN_LOG_INFO("i");
         else
             ++else_taken;
+    }
+    return else_taken;
+}
+
+[[nodiscard]] int else_count_error() {
+    int else_taken = 0;
+    for (const bool condition : {false, true}) {
         if (condition)
             LUMEN_LOG_ERROR("e");
         else
             ++else_taken;
     }
-    EXPECT_EQ(else_taken, 3);
-    std::vector<LogLevel> expected;
-    for (const LogLevel level : {LogLevel::Trace, LogLevel::Info, LogLevel::Error}) {
-        if (enabled(level)) expected.push_back(level);
-    }
-    EXPECT_EQ(delivered_levels(), expected);
+    return else_taken;
+}
+// NOLINTEND(readability-braces-around-statements)
+
+TEST_F(ElisionTest, ElseAfterATraceMacroAsTheBodyOfAnIfBindsToThatIf) {
+    EXPECT_EQ(else_count_trace(), 1);
+    EXPECT_EQ(_delivered_levels().size(), enabled(LogLevel::Trace) ? 1U : 0U);
+}
+
+TEST_F(ElisionTest, ElseAfterAnInfoMacroAsTheBodyOfAnIfBindsToThatIf) {
+    EXPECT_EQ(else_count_info(), 1);
+    EXPECT_EQ(_delivered_levels().size(), enabled(LogLevel::Info) ? 1U : 0U);
+}
+
+TEST_F(ElisionTest, ElseAfterAnErrorMacroAsTheBodyOfAnIfBindsToThatIf) {
+    EXPECT_EQ(else_count_error(), 1);
+    EXPECT_EQ(_delivered_levels().size(), enabled(LogLevel::Error) ? 1U : 0U);
 }
 
 template <typename T>
@@ -116,9 +149,11 @@ TEST_F(ElisionTest, ElisionAppliesInsideAFunctionTemplate) {
     log_from_template(int64_t{1});
     std::vector<LogLevel> expected;
     for (const LogLevel level : {LogLevel::Info, LogLevel::Error}) {
-        if (enabled(level)) expected.push_back(level);
+        if (enabled(level)) {
+            expected.push_back(level);
+        }
     }
-    EXPECT_EQ(delivered_levels(), expected);
+    EXPECT_EQ(_delivered_levels(), expected);
 }
 
 }  // namespace

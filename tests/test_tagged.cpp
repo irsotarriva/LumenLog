@@ -36,8 +36,9 @@ public:
 
 [[nodiscard]] Pairs pairs_of(const Tagged& object) {
     Pairs out;
-    for (const auto& tag : object.lumen_tags())
+    for (const auto& tag : object.lumen_tags()) {
         out.emplace_back(tag.key, tag.value);
+    }
     return out;
 }
 
@@ -47,17 +48,17 @@ static_assert(!std::is_constructible_v<Tagged>, "Tagged is only a base class");
 
 class TaggedTest : public LocalCoreTest {
 protected:
-    [[nodiscard]] std::vector<LogRecord> logs() {
-        core_.flush();
-        return captured_->logs();
+    [[nodiscard]] std::vector<LogRecord> _logs() {
+        _core.flush();
+        return _captured->logs();
     }
 };
 
 TEST_F(TaggedTest, RecordsInsideAMemberScopeCarryTheObjectsTags) {
     const Detector d("tracker");
-    d.emit(core_, "inside");
-    log_to(core_, "outside");
-    const auto records = logs();
+    d.emit(_core, "inside");
+    log_to(_core, "outside");
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(tag_of(records[0].tags, "detector"), "tracker");
     EXPECT_EQ(tag_of(records[1].tags, "detector"), std::nullopt);
@@ -66,9 +67,9 @@ TEST_F(TaggedTest, RecordsInsideAMemberScopeCarryTheObjectsTags) {
 TEST_F(TaggedTest, TwoInstancesWithDifferentTagsTagTheirOwnRecords) {
     const Detector a("tracker");
     const Detector b("calorimeter");
-    a.emit(core_, "a");
-    b.emit(core_, "b");
-    const auto records = logs();
+    a.emit(_core, "a");
+    b.emit(_core, "b");
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(tag_of(records[0].tags, "detector"), "tracker");
     EXPECT_EQ(tag_of(records[1].tags, "detector"), "calorimeter");
@@ -76,8 +77,8 @@ TEST_F(TaggedTest, TwoInstancesWithDifferentTagsTagTheirOwnRecords) {
 
 TEST_F(TaggedTest, UntaggedObjectAddsNoTags) {
     const Detector d;
-    d.emit(core_, "plain");
-    const auto records = logs();
+    d.emit(_core, "plain");
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(records[0].tags.count(), 0U);
 }
@@ -111,9 +112,9 @@ TEST_F(TaggedTest, ExplicitTagWinsOverTheInstanceTag) {
     const Detector d("instance");
     {
         const auto scope = d.lumen_scope();
-        log_to(core_, "explicit").tag("detector", "explicit");
+        log_to(_core, "explicit").tag("detector", "explicit");
     }
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(tag_of(records[0].tags, "detector"), "explicit");
 }
@@ -124,9 +125,9 @@ TEST_F(TaggedTest, InnerMemberScopeWinsAndOuterObjectsOtherTagsRemain) {
     const Detector inner("inner");
     {
         const auto outer_scope = outer.lumen_scope();
-        inner.emit(core_, "nested");
+        inner.emit(_core, "nested");
     }
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(tags_of(records[0].tags), (Pairs{{"detector", "inner"}, {"run", "7"}}));
 }
@@ -135,11 +136,11 @@ TEST_F(TaggedTest, TagSetInsideAMemberScopeAppliesToLaterRecords) {
     Detector d;
     {
         const auto scope = d.lumen_scope();
-        log_to(core_, "before");
+        log_to(_core, "before");
         ASSERT_TRUE(d.lumen_tag("stage", "2"));
-        log_to(core_, "after");
+        log_to(_core, "after");
     }
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(tag_of(records[0].tags, "stage"), std::nullopt);
     EXPECT_EQ(tag_of(records[1].tags, "stage"), "2");

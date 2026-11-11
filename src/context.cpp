@@ -82,6 +82,7 @@ struct ThreadContext {
     std::vector<OwnedTag> process_tags;
 };
 
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 thread_local ThreadContext tls_context;
 
 [[nodiscard]] std::span<const OwnedTag> current_process_tags() {
@@ -120,8 +121,12 @@ void unlink(Frame*& head, Frame& frame) noexcept {
 [[nodiscard]] uint32_t add_layer(RecordTags& tags, std::span<const OwnedTag> layer) {
     uint32_t dropped = 0;
     for (const OwnedTag& tag : layer) {
-        if (tags.contains(tag.key)) continue;
-        if (!tags.add(tag.key, tag.value)) ++dropped;
+        if (tags.contains(tag.key)) {
+            continue;
+        }
+        if (!tags.add(tag.key, tag.value)) {
+            ++dropped;
+        }
     }
     return dropped;
 }
@@ -153,8 +158,12 @@ uint32_t merge_context(RecordTags& tags) {
         dropped += add_layer(tags, instance_tags(*f->object));
     }
     for (const ScopeFrame* f = context.scope_head; f != nullptr; f = f->next) {
-        if (tags.contains(f->key)) continue;
-        if (!tags.add(f->key, f->value)) ++dropped;
+        if (tags.contains(f->key)) {
+            continue;
+        }
+        if (!tags.add(f->key, f->value)) {
+            ++dropped;
+        }
     }
     dropped += add_layer(tags, context.thread_tags.tags());
     dropped += add_layer(tags, current_process_tags());
@@ -167,7 +176,9 @@ std::expected<void, std::error_code> set_process_tag(std::string_view key, std::
     detail::ProcessContext& process = detail::process_context();
     const std::scoped_lock lock(process.mutex);
     auto result = process.table.set(key, value);
-    if (result) detail::bump_version(process);
+    if (result) {
+        detail::bump_version(process);
+    }
     return result;
 }
 
@@ -175,7 +186,9 @@ bool remove_process_tag(std::string_view key) {
     detail::ProcessContext& process = detail::process_context();
     const std::scoped_lock lock(process.mutex);
     const bool removed = process.table.remove(key);
-    if (removed) detail::bump_version(process);
+    if (removed) {
+        detail::bump_version(process);
+    }
     return removed;
 }
 

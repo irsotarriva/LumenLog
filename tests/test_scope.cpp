@@ -31,20 +31,20 @@ using States = std::vector<std::pair<uint64_t, uint64_t>>;
 
 class ScopeTest : public LocalCoreTest {
 protected:
-    [[nodiscard]] std::vector<LogRecord> logs() {
-        core_.flush();
-        return captured_->logs();
+    [[nodiscard]] std::vector<LogRecord> _logs() {
+        _core.flush();
+        return _captured->logs();
     }
 };
 
 TEST_F(ScopeTest, ScopeTagIsOnRecordsInsideTheBlockAndAbsentAfterIt) {
-    log_to(core_, "before");
+    log_to(_core, "before");
     {
         LUMEN_SCOPE("request", "42");
-        log_to(core_, "inside");
+        log_to(_core, "inside");
     }
-    log_to(core_, "after");
-    const auto records = logs();
+    log_to(_core, "after");
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 3U);
     EXPECT_EQ(tag_of(records[0].tags, "request"), std::nullopt);
     EXPECT_EQ(tag_of(records[1].tags, "request"), "42");
@@ -54,9 +54,9 @@ TEST_F(ScopeTest, ScopeTagIsOnRecordsInsideTheBlockAndAbsentAfterIt) {
 TEST_F(ScopeTest, ScopeValueFromATemporaryStringIsCopied) {
     {
         LUMEN_SCOPE(std::string("run"), std::to_string(1234567890123LL) + std::string(40, 'x'));
-        log_to(core_, "inside");
+        log_to(_core, "inside");
     }
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(tag_of(records[0].tags, "run"), "1234567890123" + std::string(40, 'x'));
 }
@@ -68,11 +68,11 @@ TEST_F(ScopeTest, NestedScopesAllContributeAndTheInnerValueWinsForASharedKey) {
         {
             LUMEN_SCOPE("inner", "2");
             LUMEN_SCOPE("shared", "inner");
-            log_to(core_, "nested");
+            log_to(_core, "nested");
         }
-        log_to(core_, "outer only");
+        log_to(_core, "outer only");
     }
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(tags_of(records[0].tags), (std::vector<std::pair<std::string, std::string>>{
                                             {"shared", "inner"}, {"inner", "2"}, {"outer", "1"}}));
@@ -82,31 +82,34 @@ TEST_F(ScopeTest, NestedScopesAllContributeAndTheInnerValueWinsForASharedKey) {
 
 TEST_F(ScopeTest, TwentyNestedScopesFillTheRecordInnermostFirstAndCountTheRest) {
     std::vector<std::unique_ptr<detail::ScopeGuard>> guards;
+    guards.reserve(20);
     for (int i = 0; i < 20; ++i) {
         guards.push_back(
             std::make_unique<detail::ScopeGuard>("s" + std::to_string(i), std::to_string(i)));
     }
-    log_to(core_, "deep");
-    while (!guards.empty())
+    log_to(_core, "deep");
+    while (!guards.empty()) {
         guards.pop_back();  // innermost first
-    const auto records = logs();
+    }
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     const auto tags = tags_of(records[0].tags);
     ASSERT_EQ(tags.size(), max_record_tags);
     EXPECT_EQ(tags.front().first, "s19");
     EXPECT_EQ(tags.back().first, "s4");
-    EXPECT_EQ(core_.statistics().tags_dropped, 4U);
+    EXPECT_EQ(_core.statistics().tags_dropped, 4U);
 }
 
 TEST_F(ScopeTest, ScopeTagIsPresentWhenTheExceptionIsThrownAndGoneAfterUnwinding) {
     try {
         LUMEN_SCOPE("phase", "risky");
-        log_to(core_, "before throw");
+        log_to(_core, "before throw");
         throw std::runtime_error("unwind");
-    } catch (const std::runtime_error&) {
-        log_to(core_, "in handler");
+    } catch (const std::runtime_error& e) {
+        EXPECT_STREQ(e.what(), "unwind");
+        log_to(_core, "in handler");
     }
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(tag_of(records[0].tags, "phase"), "risky");
     EXPECT_EQ(tag_of(records[1].tags, "phase"), std::nullopt);
@@ -114,9 +117,9 @@ TEST_F(ScopeTest, ScopeTagIsPresentWhenTheExceptionIsThrownAndGoneAfterUnwinding
 
 TEST_F(ScopeTest, ScopeOnOneThreadDoesNotReachRecordsOfAnother) {
     LUMEN_SCOPE("owner", "main");
-    std::thread other([this] { log_to(core_, "other"); });
+    std::thread other([this] { log_to(_core, "other"); });
     other.join();
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(tag_of(records[0].tags, "owner"), std::nullopt);
 }
@@ -150,11 +153,13 @@ TEST(ScopeDeathTest, DestroyingAScopeGuardOnAnotherThreadAssertsInDebugBuilds) {
 class LoopTest : public GlobalCoreTest {
 protected:
     // (current, total) of the progress records with `label`.
-    [[nodiscard]] States states(std::string_view label) {
+    [[nodiscard]] States _states(std::string_view label) {
         core().flush();
         States out;
-        for (const ProgressRecord& r : captured_->progress()) {
-            if (r.label == label) out.emplace_back(r.current, r.total);
+        for (const ProgressRecord& r : _captured->progress()) {
+            if (r.label == label) {
+                out.emplace_back(r.current, r.total);
+            }
         }
         return out;
     }
@@ -166,14 +171,14 @@ TEST_F(LoopTest, CompletedLoopSendsZeroThenOneProgressRecordPerCompletedIteratio
         seen.push_back(i);
     }
     EXPECT_EQ(seen, (std::vector<int>{0, 1, 2}));
-    EXPECT_EQ(states("L"), (States{{0, 3}, {1, 3}, {2, 3}, {3, 3}}));
+    EXPECT_EQ(_states("L"), (States{{0, 3}, {1, 3}, {2, 3}, {3, 3}}));
 }
 
 TEST_F(LoopTest, ProgressBeforeABodyCountsOnlyTheBodiesAlreadyCompleted) {
     std::vector<States> seen_at_body_start;
     LUMEN_LOOP("L", i, 3) {
         static_cast<void>(i);
-        seen_at_body_start.push_back(states("L"));
+        seen_at_body_start.push_back(_states("L"));
     }
     ASSERT_EQ(seen_at_body_start.size(), 3U);
     EXPECT_EQ(seen_at_body_start[2].back(), (std::pair<uint64_t, uint64_t>{2, 3}));
@@ -181,29 +186,36 @@ TEST_F(LoopTest, ProgressBeforeABodyCountsOnlyTheBodiesAlreadyCompleted) {
 
 TEST_F(LoopTest, BreakDoesNotClaimCompletion) {
     LUMEN_LOOP("L", i, 100) {
-        if (i == 1) break;
+        if (i == 1) {
+            break;
+        }
     }
-    EXPECT_EQ(states("L"), (States{{0, 100}, {1, 100}}));
+    EXPECT_EQ(_states("L"), (States{{0, 100}, {1, 100}}));
 }
 
 TEST_F(LoopTest, ContinueCountsTheIterationAsCompleted) {
     int bodies_finished = 0;
     LUMEN_LOOP("L", i, 3) {
-        if (i == 1) continue;
+        if (i == 1) {
+            continue;
+        }
         ++bodies_finished;
     }
     EXPECT_EQ(bodies_finished, 2);
-    EXPECT_EQ(states("L"), (States{{0, 3}, {1, 3}, {2, 3}, {3, 3}}));
+    EXPECT_EQ(_states("L"), (States{{0, 3}, {1, 3}, {2, 3}, {3, 3}}));
 }
 
 TEST_F(LoopTest, ExceptionLeavesTheLastCompletedCountAndNoCompletion) {
     try {
         LUMEN_LOOP("L", i, 5) {
-            if (i == 2) throw std::runtime_error("stop");
+            if (i == 2) {
+                throw std::runtime_error("stop");
+            }
         }
-    } catch (const std::runtime_error&) {
+    } catch (const std::runtime_error& e) {
+        EXPECT_STREQ(e.what(), "stop");
     }
-    EXPECT_EQ(states("L"), (States{{0, 5}, {1, 5}, {2, 5}}));
+    EXPECT_EQ(_states("L"), (States{{0, 5}, {1, 5}, {2, 5}}));
 }
 
 TEST_F(LoopTest, ZeroIterationsSendsTheSingleRecordZeroOfZeroAndRunsNoBody) {
@@ -213,7 +225,7 @@ TEST_F(LoopTest, ZeroIterationsSendsTheSingleRecordZeroOfZeroAndRunsNoBody) {
         ++bodies;
     }
     EXPECT_EQ(bodies, 0);
-    EXPECT_EQ(states("L"), (States{{0, 0}}));
+    EXPECT_EQ(_states("L"), (States{{0, 0}}));
 }
 
 TEST_F(LoopTest, NegativeTotalRunsNoBodyLikeZero) {
@@ -223,7 +235,7 @@ TEST_F(LoopTest, NegativeTotalRunsNoBodyLikeZero) {
         ++bodies;
     }
     EXPECT_EQ(bodies, 0);
-    EXPECT_EQ(states("L"), (States{{0, 0}}));
+    EXPECT_EQ(_states("L"), (States{{0, 0}}));
 }
 
 TEST_F(LoopTest, LoopVariableHasTheTypeOfTheTotalAndIsConst) {
@@ -244,7 +256,7 @@ TEST_F(LoopTest, BodyRecordsCarryTheIterationIndexUnderTheLoopLabel) {
     }
     LUMEN_LOG_INFO("after");
     core().flush();
-    const auto records = captured_->logs();
+    const auto records = _captured->logs();
     ASSERT_EQ(records.size(), 3U);
     EXPECT_EQ(tag_of(records[0].tags, "epoch"), "0");
     EXPECT_EQ(tag_of(records[1].tags, "epoch"), "1");
@@ -258,17 +270,19 @@ TEST_F(LoopTest, NestedLoopsEachKeepTheirOwnIterationTagAndBar) {
         }
     }
     core().flush();
-    const auto records = captured_->logs();
+    const auto records = _captured->logs();
     ASSERT_EQ(records.size(), 4U);
     EXPECT_EQ(tag_of(records[3].tags, "outer"), "1");
     EXPECT_EQ(tag_of(records[3].tags, "inner"), "1");
     EXPECT_EQ(tag_of(records[1].tags, "outer"), "0");
     EXPECT_EQ(tag_of(records[1].tags, "inner"), "1");
-    EXPECT_EQ(states("outer"), (States{{0, 2}, {1, 2}, {2, 2}}));
+    EXPECT_EQ(_states("outer"), (States{{0, 2}, {1, 2}, {2, 2}}));
     // Two inner bars (different ids), each complete.
-    EXPECT_EQ(states("inner"), (States{{0, 2}, {1, 2}, {2, 2}, {0, 2}, {1, 2}, {2, 2}}));
+    EXPECT_EQ(_states("inner"), (States{{0, 2}, {1, 2}, {2, 2}, {0, 2}, {1, 2}, {2, 2}}));
 }
 
+// The missing braces are what this test is about.
+// NOLINTBEGIN(readability-braces-around-statements)
 TEST_F(LoopTest, ElseAfterALoopAsTheBodyOfAnIfBindsToThatIf) {
     int else_taken = 0;
     int bodies = 0;
@@ -282,6 +296,7 @@ TEST_F(LoopTest, ElseAfterALoopAsTheBodyOfAnIfBindsToThatIf) {
     EXPECT_EQ(bodies, 0);
     EXPECT_EQ(else_taken, 1);
 }
+// NOLINTEND(readability-braces-around-statements)
 
 TEST_F(LoopTest, LabelAndTotalAreEvaluatedOnce) {
     int label_calls = 0;

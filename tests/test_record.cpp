@@ -36,11 +36,12 @@ TEST(TagSetTest, AddAppendsPairsInOrder) {
     TagSet<4> tags;
     EXPECT_TRUE(tags.add("a", "1"));
     EXPECT_TRUE(tags.add("b", "2"));
-    ASSERT_EQ(tags.count(), 2U);
-    EXPECT_EQ(tags.begin()[0].key, "a");
-    EXPECT_EQ(tags.begin()[0].value, "1");
-    EXPECT_EQ(tags.begin()[1].key, "b");
-    EXPECT_EQ(tags.begin()[1].value, "2");
+    const std::vector<TagSet<4>::Entry> entries(tags.begin(), tags.end());
+    ASSERT_EQ(entries.size(), 2U);
+    EXPECT_EQ(entries[0].key, "a");
+    EXPECT_EQ(entries[0].value, "1");
+    EXPECT_EQ(entries[1].key, "b");
+    EXPECT_EQ(entries[1].value, "2");
 }
 
 TEST(TagSetTest, AddKeepsADuplicateKeyAndFindReturnsTheFirstValue) {
@@ -119,11 +120,13 @@ TEST(ThreadIdTest, SixtyFourThreadsGetSixtyFourDistinctIds) {
     constexpr std::size_t thread_count = 64;
     std::vector<uint32_t> ids(thread_count);
     std::vector<std::thread> threads;
+    threads.reserve(thread_count);
     for (std::size_t i = 0; i < thread_count; ++i) {
         threads.emplace_back([&ids, i] { ids[i] = this_thread_id(); });
     }
-    for (std::thread& t : threads)
+    for (std::thread& t : threads) {
         t.join();
+    }
     ids.push_back(this_thread_id());
     const std::set<uint32_t> distinct(ids.begin(), ids.end());
     EXPECT_EQ(distinct.size(), thread_count + 1);

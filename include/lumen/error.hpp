@@ -11,7 +11,7 @@ namespace lumen {
 // category. Compare a returned code with the enumerator directly:
 //
 //   if (result.error() == lumen::LumenError::TagTableFull) { ... }
-enum class LumenError : int32_t {
+enum class LumenError : uint8_t {
     None = 0,
     // remove_sink, sink_exception_count: no sink is registered under this id.
     InvalidSinkId,

@@ -43,7 +43,9 @@ ProgressHandle& ProgressHandle::operator=(ProgressHandle&& other) noexcept {
 }
 
 void ProgressHandle::update(uint64_t current) {
-    if (core_ == nullptr || finished_) return;
+    if (core_ == nullptr || finished_) {
+        return;
+    }
     current_ = current;
     send_();
 }
@@ -53,14 +55,18 @@ void ProgressHandle::tick() {
 }
 
 void ProgressHandle::finish() {
-    if (core_ == nullptr || finished_) return;
+    if (core_ == nullptr || finished_) {
+        return;
+    }
     current_ = total_;
     send_();
     finished_ = true;
 }
 
 void ProgressHandle::send_() {
-    if (sent_any_ && last_sent_ == current_) return;
+    if (sent_any_ && last_sent_ == current_) {
+        return;
+    }
     ProgressRecord record{};
     record.id = id_;
     record.label = label_;

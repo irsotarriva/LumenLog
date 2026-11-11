@@ -6,16 +6,17 @@
 #include <concepts>
 #include <condition_variable>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <format>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -75,6 +76,8 @@ struct Delivery {
     SinkEntry* entry = nullptr;  // non-owning
 };
 
+// Per-thread delivery state; this file is its only user.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 thread_local Delivery tls_delivery;
 
 class DeliveryScope {
@@ -137,13 +140,15 @@ void own_strings(R& record) {
     for (const auto& e : record.tags) {
         total += e.key.size() + 1 + e.value.size() + 1;
     }
+    // The array form of make_shared: one allocation for all the strings.
+    // NOLINTNEXTLINE(*-avoid-c-arrays)
     auto block = std::make_shared_for_overwrite<char[]>(total);
-    char* out = block.get();
+    std::span<char> out(block.get(), total);
     auto copy = [&out](std::string_view s) {
-        if (!s.empty()) std::memcpy(out, s.data(), s.size());
+        std::ranges::copy(s, out.begin());
         out[s.size()] = '\0';
-        const std::string_view owned(out, s.size());
-        out += s.size() + 1;
+        const std::string_view owned(out.data(), s.size());
+        out = out.subspan(s.size() + 1);
         return owned;
     };
     text = copy(text);
@@ -174,22 +179,24 @@ struct Core::Impl {
 
     template <AnyRecord R>
     [[nodiscard]] auto& queue() {
-        if constexpr (std::same_as<R, LogRecord>)
+        if constexpr (std::same_as<R, LogRecord>) {
             return logs;
-        else if constexpr (std::same_as<R, MetricRecord>)
+        } else if constexpr (std::same_as<R, MetricRecord>) {
             return metrics;
-        else
+        } else {
             return progress;
+        }
     }
 
     template <AnyRecord R>
     [[nodiscard]] std::atomic<uint64_t>& after_shutdown() {
-        if constexpr (std::same_as<R, LogRecord>)
+        if constexpr (std::same_as<R, LogRecord>) {
             return logs_after_shutdown;
-        else if constexpr (std::same_as<R, MetricRecord>)
+        } else if constexpr (std::same_as<R, MetricRecord>) {
             return metrics_after_shutdown;
-        else
+        } else {
             return progress_after_shutdown;
+        }
     }
 
     template <AnyRecord R>
@@ -197,12 +204,16 @@ struct Core::Impl {
         record.timestamp_ns = now_ns();
         record.thread_id = this_thread_id();
         const uint32_t dropped = tags_dropped_explicit + detail::merge_context(record.tags);
-        if (dropped != 0) tags_dropped.fetch_add(dropped, std::memory_order_relaxed);
+        if (dropped != 0) {
+            tags_dropped.fetch_add(dropped, std::memory_order_relaxed);
+        }
         own_strings(record);
     }
 
+    // R is named explicitly by the caller, so `record` is an rvalue
+    // reference, not a forwarding one.
     template <AnyRecord R>
-    void submit(R&& record, uint32_t tags_dropped_explicit) {
+    void submit(std::type_identity_t<R>&& record, uint32_t tags_dropped_explicit) {
         if (!accepting.load(std::memory_order_acquire)) {
             after_shutdown<R>().fetch_add(1, std::memory_order_relaxed);
             return;
@@ -232,7 +243,9 @@ struct Core::Impl {
     // also move that line between them). The mutex and the notify (a system
     // call) are only paid by a producer that finds the dispatcher asleep.
     void wake_if_sleeping() noexcept {
-        if (!sleeping.exchange(false, std::memory_order_acq_rel)) return;
+        if (!sleeping.exchange(false, std::memory_order_acq_rel)) {
+            return;
+        }
         {
             // Empty critical section: the dispatcher tests `sleeping` and
             // starts waiting under wake_mutex, so after this the notify
@@ -258,11 +271,15 @@ struct Core::Impl {
     // than spinning, keeps it off the producers' cache lines meanwhile. An
     // idle dispatcher wakes up only these few times after its last record.
     [[nodiscard]] bool wait_for_work() {
-        if (stopping.load(std::memory_order_acquire)) return false;
+        if (stopping.load(std::memory_order_acquire)) {
+            return false;
+        }
         for (int check = 0; check < idle_check_count && !has_pending(); ++check) {
             std::this_thread::sleep_for(idle_check_interval);
         }
-        if (has_pending()) return true;
+        if (has_pending()) {
+            return true;
+        }
         static_cast<void>(sleeping.exchange(true, std::memory_order_acq_rel));
         if (has_pending()) {
             sleeping.store(false, std::memory_order_relaxed);
@@ -289,7 +306,9 @@ struct Core::Impl {
             report_first_losses();
             // A claimed record that is not yet published cannot be popped;
             // let its producer run instead of spinning on it.
-            if (delivered == 0) std::this_thread::yield();
+            if (delivered == 0) {
+                std::this_thread::yield();
+            }
         }
     }
 
@@ -347,7 +366,9 @@ struct Core::Impl {
     template <AnyRecord R>
     void dispatch(const R& record) {
         for (const std::shared_ptr<SinkEntry>& entry : delivery_registry()) {
-            if (!matches(entry->predicate, record)) continue;
+            if (!matches(entry->predicate, record)) {
+                continue;
+            }
             call_sink(*entry, callback_name<R>, [&] { deliver_to(*entry->sink, record); });
         }
     }
@@ -364,7 +385,9 @@ struct Core::Impl {
     // handler because it dies with the exception.
     template <std::invocable F>
     void call_sink(SinkEntry& entry, std::string_view callback, F&& fn) noexcept {
-        if (entry.busy.exchange(true, std::memory_order_seq_cst)) return;
+        if (entry.busy.exchange(true, std::memory_order_seq_cst)) {
+            return;
+        }
         if (entry.removed.load(std::memory_order_seq_cst)) {
             entry.busy.store(false, std::memory_order_release);
             return;
@@ -397,7 +420,9 @@ struct Core::Impl {
             handler = diagnostics;
         }
         // Called without the lock, so a handler may replace itself.
-        if (handler) handler(line);
+        if (handler) {
+            handler(line);
+        }
     }
 
     void report_first_losses() {
@@ -419,7 +444,9 @@ struct Core::Impl {
     [[nodiscard]] bool delivering_here() const noexcept { return tls_delivery.core == this; }
 
     void flush() {
-        if (delivering_here() || !accepting.load(std::memory_order_acquire)) return;
+        if (delivering_here() || !accepting.load(std::memory_order_acquire)) {
+            return;
+        }
         const uint64_t log_target = logs.head_position();
         const uint64_t metric_target = metrics.head_position();
         const uint64_t progress_target = progress.head_position();
@@ -438,7 +465,7 @@ struct Core::Impl {
         flush_sinks();
     }
 
-    void submit_fatal(LogRecord&& record, uint32_t tags_dropped_explicit) {
+    void submit_fatal(LogRecord& record, uint32_t tags_dropped_explicit) {
         if (!accepting.load(std::memory_order_acquire)) {
             logs_after_shutdown.fetch_add(1, std::memory_order_relaxed);
             return;
@@ -455,13 +482,17 @@ struct Core::Impl {
     }
 
     void shut_down() noexcept {
-        if (!accepting.exchange(false, std::memory_order_acq_rel)) return;
+        if (!accepting.exchange(false, std::memory_order_acq_rel)) {
+            return;
+        }
         {
             const std::scoped_lock lock(wake_mutex);
             stopping.store(true, std::memory_order_release);
         }
         wake_cv.notify_one();
-        if (dispatcher.joinable()) dispatcher.join();
+        if (dispatcher.joinable()) {
+            dispatcher.join();
+        }
         {
             const std::scoped_lock consume(consume_mutex);
             const DeliveryScope scope(this);
@@ -483,7 +514,9 @@ struct Core::Impl {
 
     [[nodiscard]] std::expected<SinkId, std::error_code> add_sink(std::unique_ptr<Sink> sink,
                                                                   Predicate predicate) {
-        if (!sink) return std::unexpected(make_error_code(LumenError::NullSink));
+        if (!sink) {
+            return std::unexpected(make_error_code(LumenError::NullSink));
+        }
         const SinkId id = next_sink_id.fetch_add(1, std::memory_order_relaxed);
         auto entry = std::make_shared<SinkEntry>(id, std::move(sink), std::move(predicate));
         const std::scoped_lock lock(registry_mutex);
@@ -512,15 +545,18 @@ struct Core::Impl {
             replace_registry(std::move(next));
         }
         // Only a callback on another thread can be running; wait for it.
-        while (entry->busy.load(std::memory_order_seq_cst))
+        while (entry->busy.load(std::memory_order_seq_cst)) {
             std::this_thread::yield();
+        }
         return std::move(entry->owner);
     }
 
     [[nodiscard]] std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id) const {
         const std::scoped_lock lock(registry_mutex);
         for (const std::shared_ptr<SinkEntry>& entry : *registry) {
-            if (entry->id == id) return entry->exceptions.load(std::memory_order_relaxed);
+            if (entry->id == id) {
+                return entry->exceptions.load(std::memory_order_relaxed);
+            }
         }
         return std::unexpected(make_error_code(LumenError::InvalidSinkId));
     }
@@ -607,25 +643,30 @@ void Core::set_diagnostic_handler(DiagnosticHandler handler) {
 }
 
 void Core::submit_(LogRecord&& record, uint32_t tags_dropped) noexcept {
-    impl_->submit(std::move(record), tags_dropped);
+    impl_->submit<LogRecord>(std::move(record), tags_dropped);
 }
 
 void Core::submit_(MetricRecord&& record, uint32_t tags_dropped) noexcept {
-    impl_->submit(std::move(record), tags_dropped);
+    impl_->submit<MetricRecord>(std::move(record), tags_dropped);
 }
 
 void Core::submit_(ProgressRecord&& record, uint32_t tags_dropped) noexcept {
-    impl_->submit(std::move(record), tags_dropped);
+    impl_->submit<ProgressRecord>(std::move(record), tags_dropped);
 }
 
-void Core::submit_fatal_(LogRecord&& record, uint32_t tags_dropped) noexcept {
-    impl_->submit_fatal(std::move(record), tags_dropped);
+void Core::submit_fatal_(LogRecord& record, uint32_t tags_dropped) noexcept {
+    impl_->submit_fatal(record, tags_dropped);
     std::terminate();
 }
 
 struct Core::ShutdownAtExit {
+    explicit ShutdownAtExit(Core& target) : core(target) {}
     Core& core;
     ~ShutdownAtExit() { core.impl_->shut_down(); }
+    ShutdownAtExit(const ShutdownAtExit&) = delete;
+    ShutdownAtExit& operator=(const ShutdownAtExit&) = delete;
+    ShutdownAtExit(ShutdownAtExit&&) = delete;
+    ShutdownAtExit& operator=(ShutdownAtExit&&) = delete;
 };
 
 Core& core() {

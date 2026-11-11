@@ -30,7 +30,9 @@ public:
     // Appends the pair. Returns false, and leaves the set unchanged, when it
     // already holds N entries.
     [[nodiscard]] constexpr bool add(std::string_view key, std::string_view value) {
-        if (count_ == N) return false;
+        if (count_ == N) {
+            return false;
+        }
         entries_[count_++] = {key, value};
         return true;
     }
@@ -52,14 +54,18 @@ public:
     // none. Use contains() to tell an empty value from a missing key.
     [[nodiscard]] constexpr std::string_view find(std::string_view key) const {
         for (std::size_t i = 0; i < count_; ++i) {
-            if (entries_[i].key == key) return entries_[i].value;
+            if (entries_[i].key == key) {
+                return entries_[i].value;
+            }
         }
         return {};
     }
 
     [[nodiscard]] constexpr bool contains(std::string_view key) const {
         for (std::size_t i = 0; i < count_; ++i) {
-            if (entries_[i].key == key) return true;
+            if (entries_[i].key == key) {
+                return true;
+            }
         }
         return false;
     }
@@ -68,7 +74,7 @@ public:
     // at storage that the caller owns.
     template <std::invocable<std::string_view> F>
         requires std::convertible_to<std::invoke_result_t<F&, std::string_view>, std::string_view>
-    constexpr void remap(F&& f) {
+    constexpr void remap(F f) {
         for (std::size_t i = 0; i < count_; ++i) {
             entries_[i].key = f(entries_[i].key);
             entries_[i].value = f(entries_[i].value);

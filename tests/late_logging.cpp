@@ -13,12 +13,16 @@
 
 namespace {
 
+// Read during static destruction, hence global.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<int> delivered_in_main{0};
 
 class CountingSink : public lumen::Sink {
 public:
     void on_log(const lumen::LogRecord& r) override {
-        if (r.message == "from main") delivered_in_main.fetch_add(1);
+        if (r.message == "from main") {
+            delivered_in_main.fetch_add(1);
+        }
     }
     void flush() override {}
 };
@@ -56,7 +60,9 @@ const LogsWhenDestroyed logs_when_destroyed;
 }  // namespace
 
 int main() {
-    if (!lumen::core().add_sink(std::make_unique<CountingSink>())) return 2;
+    if (!lumen::core().add_sink(std::make_unique<CountingSink>())) {
+        return 2;
+    }
     // Queued, not flushed: shutdown must deliver it.
     LUMEN_LOG_INFO("from main");
     // Not 0: the status must come from the destructor above, which replaces

@@ -160,7 +160,7 @@ private:
     void submit_(ProgressRecord&& record, uint32_t tags_dropped) noexcept;
     // For a Fatal record: delivers everything queued, then this record, flushes
     // the sinks and terminates (see BasicRecordBuilder).
-    [[noreturn]] void submit_fatal_(LogRecord&& record, uint32_t tags_dropped) noexcept;
+    [[noreturn]] void submit_fatal_(LogRecord& record, uint32_t tags_dropped) noexcept;
 
     // Shuts the global core down at static destruction (see above).
     struct ShutdownAtExit;

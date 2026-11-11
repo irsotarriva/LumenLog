@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -95,14 +96,14 @@ private:
 
 class CaptureSink : public Sink {
 public:
-    explicit CaptureSink(std::shared_ptr<Captured> captured) : captured_(std::move(captured)) {}
-    void on_log(const LogRecord& r) override { captured_->add(r); }
-    void on_metric(const MetricRecord& r) override { captured_->add(r); }
-    void on_progress(const ProgressRecord& r) override { captured_->add(r); }
-    void flush() override { captured_->add_flush(); }
+    explicit CaptureSink(std::shared_ptr<Captured> captured) : _captured(std::move(captured)) {}
+    void on_log(const LogRecord& r) override { _captured->add(r); }
+    void on_metric(const MetricRecord& r) override { _captured->add(r); }
+    void on_progress(const ProgressRecord& r) override { _captured->add(r); }
+    void flush() override { _captured->add_flush(); }
 
 private:
-    std::shared_ptr<Captured> captured_;
+    std::shared_ptr<Captured> _captured;
 };
 
 // Registers a CaptureSink on `core` and returns what it captures.
@@ -135,6 +136,18 @@ inline RecordBuilder log_to(Core& core, std::string_view message, LogLevel level
     return RecordBuilder(core, level, loc, message);
 }
 
+// A metric on a given Core.
+inline MetricBuilder metric_to(Core& core, std::string_view name, double value) {
+    return MetricBuilder(core, name, value);
+}
+
+// A formatted log statement on a given Core.
+template <typename... Args>
+inline RecordBuilder log_formatted_to(Core& core, std::format_string<Args...> fmt, Args&&... args) {
+    return RecordBuilder(core, LogLevel::Info, std::source_location::current(), fmt,
+                         std::forward<Args>(args)...);
+}
+
 // Clears the process tags and the calling thread's tags on entry and on exit,
 // so a test neither sees nor leaves ambient tags.
 class CleanContext {
@@ -157,22 +170,22 @@ private:
 // capture sink on it, and a clean ambient context.
 class LocalCoreTest : public ::testing::Test {
 protected:
-    [[nodiscard]] std::vector<std::string> diagnostics() const {
-        const std::scoped_lock lock(diagnostics_->mutex);
-        return diagnostics_->lines;
+    [[nodiscard]] std::vector<std::string> _diagnostic_lines() const {
+        const std::scoped_lock lock(_diagnostics->mutex);
+        return _diagnostics->lines;
     }
 
     struct Diagnostics {
         std::mutex mutex;
         std::vector<std::string> lines;  // guarded by mutex
     };
-    std::shared_ptr<Diagnostics> diagnostics_ = std::make_shared<Diagnostics>();
-    CleanContext context_;
-    Core core_{[d = diagnostics_](std::string_view line) {
+    std::shared_ptr<Diagnostics> _diagnostics = std::make_shared<Diagnostics>();
+    CleanContext _context;
+    Core _core{[d = _diagnostics](std::string_view line) {
         const std::scoped_lock lock(d->mutex);
         d->lines.emplace_back(line);
     }};
-    std::shared_ptr<Captured> captured_ = capture(core_);
+    std::shared_ptr<Captured> _captured = capture(_core);
 };
 
 // A test that has to go through the global core() (the macros): registers a
@@ -183,19 +196,19 @@ class GlobalCoreTest : public ::testing::Test {
 protected:
     void SetUp() override {
         core().flush();
-        captured_ = std::make_shared<Captured>();
-        const auto id = core().add_sink(std::make_unique<CaptureSink>(captured_), always());
+        _captured = std::make_shared<Captured>();
+        const auto id = core().add_sink(std::make_unique<CaptureSink>(_captured), always());
         ASSERT_TRUE(id.has_value());
-        sink_id_ = *id;
+        _sink_id = *id;
     }
     void TearDown() override {
         core().flush();
-        EXPECT_TRUE(core().remove_sink(sink_id_).has_value());
+        EXPECT_TRUE(core().remove_sink(_sink_id).has_value());
     }
 
-    CleanContext context_;
-    std::shared_ptr<Captured> captured_;
-    SinkId sink_id_ = 0;
+    CleanContext _context;
+    std::shared_ptr<Captured> _captured;
+    SinkId _sink_id = 0;
 };
 
 }  // namespace lumen::test

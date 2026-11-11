@@ -13,17 +13,23 @@ namespace lumen::detail {
 [[nodiscard]] constexpr std::string_view extract_class_name(
     std::string_view function_name) noexcept {
     const auto paren = function_name.rfind('(');
-    if (paren == std::string_view::npos) return {};
+    if (paren == std::string_view::npos) {
+        return {};
+    }
 
     const auto method_sep = function_name.rfind("::", paren);
-    if (method_sep == std::string_view::npos) return {};
+    if (method_sep == std::string_view::npos) {
+        return {};
+    }
 
     auto class_start = method_sep;
     while (class_start > 0) {
         const char c = function_name[class_start - 1];
         const bool identifier_char =
             (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-        if (!identifier_char) break;
+        if (!identifier_char) {
+            break;
+        }
         --class_start;
     }
     return function_name.substr(class_start, method_sep - class_start);

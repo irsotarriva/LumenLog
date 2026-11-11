@@ -30,7 +30,9 @@ Tagged& Tagged::operator=(const Tagged& other) {
 
 std::expected<void, std::error_code> Tagged::lumen_tag(std::string_view key,
                                                        std::string_view value) {
-    if (!tags_) tags_ = std::make_unique<std::vector<detail::OwnedTag>>();
+    if (!tags_) {
+        tags_ = std::make_unique<std::vector<detail::OwnedTag>>();
+    }
     const auto it =
         std::ranges::find_if(*tags_, [key](const detail::OwnedTag& tag) { return tag.key == key; });
     if (it != tags_->end()) {
@@ -45,13 +47,17 @@ std::expected<void, std::error_code> Tagged::lumen_tag(std::string_view key,
 }
 
 bool Tagged::lumen_untag(std::string_view key) {
-    if (!tags_) return false;
+    if (!tags_) {
+        return false;
+    }
     return std::erase_if(*tags_, [key](const detail::OwnedTag& tag) { return tag.key == key; }) !=
            0;
 }
 
 std::span<const detail::OwnedTag> Tagged::lumen_tags() const noexcept {
-    if (!tags_) return {};
+    if (!tags_) {
+        return {};
+    }
     return *tags_;
 }
 

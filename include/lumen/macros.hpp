@@ -135,12 +135,15 @@ inline constexpr LogLevel compiled_min_level = static_cast<LogLevel>(LUMEN_MIN_L
 
 // The `if (...; false) {} else body` form gives the body a const loop
 // variable and already has its `else`, so an `else` after the loop body
-// binds to the user's own `if`.
+// binds to the user's own `if`. `var` and `scope` name variables, which
+// cannot be parenthesised.
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define LUMEN_LOOP_IMPL(label, var, total, scope)                                            \
     for (lumen::detail::LoopScope<std::remove_cvref_t<decltype(total)>> scope(lumen::core(), \
                                                                               label, total); \
          scope.advance();)                                                                   \
         if ([[maybe_unused]] const auto var = scope.index(); false) {                        \
         } else
+// NOLINTEND(bugprone-macro-parentheses)
 
 #endif

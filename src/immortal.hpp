@@ -23,6 +23,8 @@ public:
     template <typename... Args>
         requires std::constructible_from<T, Args...>
     explicit Immortal(Args&&... args)
+        // The storage is raw bytes until T is constructed in it.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         : object_(std::construct_at(reinterpret_cast<T*>(storage_.data()),
                                     std::forward<Args>(args)...)) {}
     ~Immortal() = default;  // deliberately does not destroy the object

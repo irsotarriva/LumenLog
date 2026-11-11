@@ -21,11 +21,11 @@ namespace lumen::detail {
 // Short strings go to an inline buffer on the builder's stack; longer ones go
 // to list nodes, whose addresses never change. Returned views stay valid for
 // the scratch object's lifetime.
-class StringScratch {
+class StringScratch {  // NOLINT(cppcoreguidelines-pro-type-member-init): inline_buf_
 public:
     static constexpr std::size_t inline_capacity = 512;
 
-    StringScratch() = default;
+    StringScratch() = default;  // NOLINT(cppcoreguidelines-pro-type-member-init): inline_buf_
     ~StringScratch() = default;
     StringScratch(const StringScratch&) = delete;
     StringScratch& operator=(const StringScratch&) = delete;
@@ -35,7 +35,9 @@ public:
     [[nodiscard]] std::string_view store(std::string_view s) {
         if (s.size() <= inline_capacity - used_) {
             char* const dst = inline_buf_.data() + used_;
-            if (!s.empty()) std::memcpy(dst, s.data(), s.size());
+            if (!s.empty()) {
+                std::memcpy(dst, s.data(), s.size());
+            }
             used_ += s.size();
             return {dst, s.size()};
         }
@@ -52,7 +54,9 @@ public:
         const auto [end, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), value);
         // 32 characters hold every 64-bit integer and every double in
         // shortest form, so to_chars cannot fail here.
-        if (ec != std::errc{}) return {};
+        if (ec != std::errc{}) {
+            return {};
+        }
         return store(std::string_view(buf.data(), static_cast<std::size_t>(end - buf.data())));
     }
 

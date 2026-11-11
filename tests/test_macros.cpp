@@ -22,9 +22,9 @@ using test::tag_of;
 
 class MacroTest : public GlobalCoreTest {
 protected:
-    [[nodiscard]] std::vector<LogRecord> logs() {
+    [[nodiscard]] std::vector<LogRecord> _logs() {
         core().flush();
-        return captured_->logs();
+        return _captured->logs();
     }
 };
 
@@ -33,7 +33,7 @@ TEST_F(MacroTest, EachEnabledLevelMacroEmitsOneRecordAtItsLevel) {
     LUMEN_LOG_INFO("info");
     LUMEN_LOG_WARN("warn");
     LUMEN_LOG_ERROR("error");
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 4U);
     EXPECT_EQ(records[0].level, LogLevel::Debug);
     EXPECT_EQ(records[1].level, LogLevel::Info);
@@ -45,7 +45,7 @@ TEST_F(MacroTest, EachEnabledLevelMacroEmitsOneRecordAtItsLevel) {
 TEST_F(MacroTest, ShortNamesEmitLikeThePrefixedOnes) {
     LOG_INFO("short info");
     LOG_ERROR("short error");
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(records[0].level, LogLevel::Info);
     EXPECT_EQ(records[1].level, LogLevel::Error);
@@ -59,7 +59,7 @@ TEST_F(MacroTest, TraceIsElidedAtTheDefaultThresholdAndItsArgumentsAreNotEvaluat
     LUMEN_LOG_TRACE("trace {}", side_effect());
     LOG_TRACE("trace {}", side_effect());
     EXPECT_EQ(evaluated, 0);
-    EXPECT_TRUE(logs().empty());
+    EXPECT_TRUE(_logs().empty());
 }
 
 TEST_F(MacroTest, MacroRecordsTheCallersSourceLocationAndClass) {
@@ -71,7 +71,7 @@ TEST_F(MacroTest, MacroRecordsTheCallersSourceLocationAndClass) {
         }
     };
     const std::source_location here = Caller::log_here();
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(records[0].source.line, here.line() + 1);
     EXPECT_EQ(records[0].source.file, here.file_name());
@@ -81,7 +81,7 @@ TEST_F(MacroTest, MacroRecordsTheCallersSourceLocationAndClass) {
 TEST_F(MacroTest, FormatArgumentsAreFormattedAndASingleArgumentIsVerbatim) {
     LOG_INFO("cluster energy {:.2f} GeV in {} hits", 12.3456, 7).tag("run", 3);
     LOG_WARN("single argument is verbatim: {braces} stay");
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(records[0].message, "cluster energy 12.35 GeV in 7 hits");
     EXPECT_EQ(tag_of(records[0].tags, "run"), "3");
@@ -90,13 +90,15 @@ TEST_F(MacroTest, FormatArgumentsAreFormattedAndASingleArgumentIsVerbatim) {
 
 TEST_F(MacroTest, ChainedTagsAreAllOnTheRecord) {
     LOG_INFO("tags").tag("a", "1").tag("b", 2).tag("c", true);
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(tag_of(records[0].tags, "a"), "1");
     EXPECT_EQ(tag_of(records[0].tags, "b"), "2");
     EXPECT_EQ(tag_of(records[0].tags, "c"), "true");
 }
 
+// The missing braces are what this test is about.
+// NOLINTBEGIN(readability-braces-around-statements)
 TEST_F(MacroTest, ElseAfterAnEnabledMacroBindsToTheCallersIf) {
     int else_taken = 0;
     for (const bool condition : {false, true}) {
@@ -106,16 +108,17 @@ TEST_F(MacroTest, ElseAfterAnEnabledMacroBindsToTheCallersIf) {
             ++else_taken;
     }
     EXPECT_EQ(else_taken, 1);
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(records[0].message, "taken");
 }
+// NOLINTEND(readability-braces-around-statements)
 
 TEST_F(MacroTest, MacroWorksInsideALambdaAndAFunctionTemplate) {
     auto in_lambda = [] { LOG_INFO("from lambda"); };
     in_lambda();
     [](auto value) { LOG_INFO("from generic lambda {}", value); }(5);
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 2U);
     EXPECT_EQ(records[0].message, "from lambda");
     EXPECT_EQ(records[1].message, "from generic lambda 5");
@@ -127,7 +130,7 @@ TEST_F(MacroTest, RecordFromAnExitedThreadKeepsThatThreadsTags) {
         LOG_INFO("from worker");
     });
     worker.join();
-    const auto records = logs();
+    const auto records = _logs();
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(tag_of(records[0].tags, "worker"), std::string(40, 'w'));
 }
@@ -136,8 +139,8 @@ TEST_F(MacroTest, MetricAndProgressHelpersUseTheGlobalCore) {
     lumen::metric("loss", 0.5).tag("epoch", 1);
     lumen::progress("bar", 2).finish();
     core().flush();
-    const auto metrics = captured_->metrics();
-    const auto progress = captured_->progress();
+    const auto metrics = _captured->metrics();
+    const auto progress = _captured->progress();
     ASSERT_EQ(metrics.size(), 1U);
     ASSERT_EQ(progress.size(), 1U);
     EXPECT_EQ(tag_of(metrics[0].tags, "epoch"), "1");
@@ -152,14 +155,14 @@ TEST(MacroCoreTest, CoreReturnsTheSameObjectEveryTime) {
 class StderrSink : public Sink {
 public:
     void on_log(const LogRecord& r) override { std::cerr << "delivered:" << r.message << '\n'; }
-    void flush() override { std::cerr << "flushed" << std::endl; }
+    void flush() override { std::cerr << "flushed" << '\n' << std::flush; }
 };
 
 TEST(MacroFatalDeathTest, FatalMacroDeliversItsRecordFlushesAndTerminates) {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_DEATH(
         {
-            static_cast<void>(core().add_sink(std::make_unique<StderrSink>()));
+            EXPECT_TRUE(core().add_sink(std::make_unique<StderrSink>()));
             LUMEN_LOG_INFO("before");
             LUMEN_LOG_FATAL("fatal {}", 42);
         },

@@ -27,20 +27,24 @@ using test::tags_of;
 class ContextTest : public LocalCoreTest {
 protected:
     // Submits one record and returns its tags as delivered.
-    [[nodiscard]] std::vector<std::pair<std::string, std::string>> tags_of_one_record() {
-        log_to(core_, "probe");
-        core_.flush();
-        const auto logs = captured_->logs();
+    [[nodiscard]] std::vector<std::pair<std::string, std::string>> _tags_of_one_record() {
+        log_to(_core, "probe");
+        _core.flush();
+        const auto logs = _captured->logs();
         EXPECT_EQ(logs.size(), 1U);
-        if (logs.empty()) return {};
+        if (logs.empty()) {
+            return {};
+        }
         return tags_of(logs.back().tags);
     }
-    [[nodiscard]] std::optional<std::string> tag_on_one_record(std::string_view key) {
-        log_to(core_, "probe");
-        core_.flush();
-        const auto logs = captured_->logs();
+    [[nodiscard]] std::optional<std::string> _tag_on_one_record(std::string_view key) {
+        log_to(_core, "probe");
+        _core.flush();
+        const auto logs = _captured->logs();
         EXPECT_FALSE(logs.empty());
-        if (logs.empty()) return std::nullopt;
+        if (logs.empty()) {
+            return std::nullopt;
+        }
         return tag_of(logs.back().tags, key);
     }
 };
@@ -49,11 +53,11 @@ class Widget : public Tagged {};
 
 TEST_F(ContextTest, ProcessTagReachesRecordsFromEveryThread) {
     ASSERT_TRUE(set_process_tag("app", "demo"));
-    std::thread other([this] { log_to(core_, "other thread"); });
+    std::thread other([this] { log_to(_core, "other thread"); });
     other.join();
-    log_to(core_, "this thread");
-    core_.flush();
-    const auto logs = captured_->logs();
+    log_to(_core, "this thread");
+    _core.flush();
+    const auto logs = _captured->logs();
     ASSERT_EQ(logs.size(), 2U);
     EXPECT_EQ(tag_of(logs[0].tags, "app"), "demo");
     EXPECT_EQ(tag_of(logs[1].tags, "app"), "demo");
@@ -61,11 +65,11 @@ TEST_F(ContextTest, ProcessTagReachesRecordsFromEveryThread) {
 
 TEST_F(ContextTest, ThreadTagReachesOnlyRecordsOfTheThreadThatSetIt) {
     ASSERT_TRUE(set_thread_tag("worker", "main"));
-    std::thread other([this] { log_to(core_, "other thread"); });
+    std::thread other([this] { log_to(_core, "other thread"); });
     other.join();
-    log_to(core_, "this thread");
-    core_.flush();
-    const auto logs = captured_->logs();
+    log_to(_core, "this thread");
+    _core.flush();
+    const auto logs = _captured->logs();
     ASSERT_EQ(logs.size(), 2U);
     EXPECT_EQ(tag_of(logs[0].tags, "worker"), std::nullopt);
     EXPECT_EQ(tag_of(logs[1].tags, "worker"), "main");
@@ -74,14 +78,14 @@ TEST_F(ContextTest, ThreadTagReachesOnlyRecordsOfTheThreadThatSetIt) {
 TEST_F(ContextTest, SettingAProcessTagAgainReplacesItsValue) {
     ASSERT_TRUE(set_process_tag("k", "old"));
     ASSERT_TRUE(set_process_tag("k", "new"));
-    EXPECT_EQ(tags_of_one_record(),
+    EXPECT_EQ(_tags_of_one_record(),
               (std::vector<std::pair<std::string, std::string>>{{"k", "new"}}));
 }
 
 TEST_F(ContextTest, SettingAThreadTagAgainReplacesItsValue) {
     ASSERT_TRUE(set_thread_tag("k", "old"));
     ASSERT_TRUE(set_thread_tag("k", "new"));
-    EXPECT_EQ(tags_of_one_record(),
+    EXPECT_EQ(_tags_of_one_record(),
               (std::vector<std::pair<std::string, std::string>>{{"k", "new"}}));
 }
 
@@ -94,7 +98,7 @@ TEST_F(ContextTest, ProcessTableRefusesTheTagPastItsLimitAndKeepsTheFirstOnes) {
     EXPECT_EQ(refused.error(), LumenError::TagTableFull);
     // Replacing an existing key still works on a full table.
     EXPECT_TRUE(set_process_tag("p0", "replaced"));
-    const auto tags = tags_of_one_record();
+    const auto tags = _tags_of_one_record();
     ASSERT_EQ(tags.size(), max_process_tags);
     EXPECT_EQ(tags[0], (std::pair<std::string, std::string>{"p0", "replaced"}));
     EXPECT_EQ(tags.back().first, "p" + std::to_string(max_process_tags - 1));
@@ -107,7 +111,7 @@ TEST_F(ContextTest, ThreadTableRefusesTheTagPastItsLimit) {
     const auto refused = set_thread_tag("one_too_many", "v");
     ASSERT_FALSE(refused.has_value());
     EXPECT_EQ(refused.error(), LumenError::TagTableFull);
-    EXPECT_EQ(tags_of_one_record().size(), max_thread_tags);
+    EXPECT_EQ(_tags_of_one_record().size(), max_thread_tags);
 }
 
 TEST_F(ContextTest, RemovedProcessTagIsNoLongerOnRecords) {
@@ -115,7 +119,7 @@ TEST_F(ContextTest, RemovedProcessTagIsNoLongerOnRecords) {
     ASSERT_TRUE(set_process_tag("kept", "2"));
     EXPECT_TRUE(remove_process_tag("gone"));
     EXPECT_FALSE(remove_process_tag("gone"));
-    EXPECT_EQ(tags_of_one_record(),
+    EXPECT_EQ(_tags_of_one_record(),
               (std::vector<std::pair<std::string, std::string>>{{"kept", "2"}}));
 }
 
@@ -124,7 +128,7 @@ TEST_F(ContextTest, RemovedThreadTagIsNoLongerOnRecords) {
     ASSERT_TRUE(set_thread_tag("kept", "2"));
     EXPECT_TRUE(remove_thread_tag("gone"));
     EXPECT_FALSE(remove_thread_tag("never_set"));
-    EXPECT_EQ(tags_of_one_record(),
+    EXPECT_EQ(_tags_of_one_record(),
               (std::vector<std::pair<std::string, std::string>>{{"kept", "2"}}));
 }
 
@@ -133,7 +137,7 @@ TEST_F(ContextTest, ClearingBothLayersLeavesRecordsWithoutAmbientTags) {
     ASSERT_TRUE(set_thread_tag("t", "1"));
     clear_process_tags();
     clear_thread_tags();
-    EXPECT_TRUE(tags_of_one_record().empty());
+    EXPECT_TRUE(_tags_of_one_record().empty());
 }
 
 TEST_F(ContextTest, ClearedTableAcceptsAFullSetOfTagsAgain) {
@@ -149,19 +153,19 @@ TEST_F(ContextTest, ClearedTableAcceptsAFullSetOfTagsAgain) {
 TEST_F(ContextTest, SameKeyInEveryLayerTakesTheValueOfTheHighestLayer) {
     ASSERT_TRUE(set_process_tag("k", "process"));
     ASSERT_TRUE(set_thread_tag("k", "thread"));
-    EXPECT_EQ(tag_on_one_record("k"), "thread");
+    EXPECT_EQ(_tag_on_one_record("k"), "thread");
     {
         LUMEN_SCOPE("k", "scope");
-        EXPECT_EQ(tag_on_one_record("k"), "scope");
+        EXPECT_EQ(_tag_on_one_record("k"), "scope");
         Widget w;
         ASSERT_TRUE(w.lumen_tag("k", "instance"));
         const auto member_scope = w.lumen_scope();
-        EXPECT_EQ(tag_on_one_record("k"), "instance");
-        log_to(core_, "explicit").tag("k", "explicit");
-        core_.flush();
-        EXPECT_EQ(tag_of(captured_->logs().back().tags, "k"), "explicit");
+        EXPECT_EQ(_tag_on_one_record("k"), "instance");
+        log_to(_core, "explicit").tag("k", "explicit");
+        _core.flush();
+        EXPECT_EQ(tag_of(_captured->logs().back().tags, "k"), "explicit");
     }
-    EXPECT_EQ(tag_on_one_record("k"), "thread");
+    EXPECT_EQ(_tag_on_one_record("k"), "thread");
 }
 
 TEST_F(ContextTest, FullRecordKeepsHigherLayersAndCountsEveryAmbientTagLeftOut) {
@@ -173,12 +177,13 @@ TEST_F(ContextTest, FullRecordKeepsHigherLayersAndCountsEveryAmbientTagLeftOut) 
         ASSERT_TRUE(set_thread_tag("t" + std::to_string(i), "v"));
     }
     {
-        auto builder = log_to(core_, "crowded");
-        for (int i = 0; i < 10; ++i)
+        auto builder = log_to(_core, "crowded");
+        for (int i = 0; i < 10; ++i) {
             builder.tag("e" + std::to_string(i), i);
+        }
     }
-    core_.flush();
-    const auto logs = captured_->logs();
+    _core.flush();
+    const auto logs = _captured->logs();
     ASSERT_EQ(logs.size(), 1U);
     const auto tags = tags_of(logs[0].tags);
     ASSERT_EQ(tags.size(), max_record_tags);
@@ -188,17 +193,17 @@ TEST_F(ContextTest, FullRecordKeepsHigherLayersAndCountsEveryAmbientTagLeftOut) 
     EXPECT_EQ(tags[15].first, "t5");
     EXPECT_EQ(tag_of(logs[0].tags, "t6"), std::nullopt);
     EXPECT_EQ(tag_of(logs[0].tags, "p0"), std::nullopt);
-    EXPECT_EQ(core_.statistics().tags_dropped, 2U + max_process_tags);
-    const auto lines = diagnostics();
+    EXPECT_EQ(_core.statistics().tags_dropped, 2U + max_process_tags);
+    const auto lines = _diagnostic_lines();
     ASSERT_EQ(lines.size(), 1U);
     EXPECT_NE(lines[0].find("tag was dropped"), std::string::npos);
 }
 
 TEST_F(ContextTest, AmbientTagShadowedByAnExplicitTagIsNotCountedAsDropped) {
     ASSERT_TRUE(set_thread_tag("k", "thread"));
-    log_to(core_, "shadowed").tag("k", "explicit");
-    core_.flush();
-    EXPECT_EQ(core_.statistics().tags_dropped, 0U);
+    log_to(_core, "shadowed").tag("k", "explicit");
+    _core.flush();
+    EXPECT_EQ(_core.statistics().tags_dropped, 0U);
 }
 
 TEST_F(ContextTest, TagBytesArriveUnchangedWhateverTheyContain) {
@@ -212,20 +217,21 @@ TEST_F(ContextTest, TagBytesArriveUnchangedWhateverTheyContain) {
         {std::string("nul\0inside", 10), std::string("a\0b", 3)},
     };
     {
-        auto builder = log_to(core_, "unusual");
-        for (const auto& [k, v] : unusual)
+        auto builder = log_to(_core, "unusual");
+        for (const auto& [k, v] : unusual) {
             builder.tag(k, v);
+        }
     }
     ASSERT_TRUE(set_process_tag("process =\n\"", "\x01\x1b[0m"));
-    core_.flush();
-    const auto logs = captured_->logs();
+    _core.flush();
+    const auto logs = _captured->logs();
     ASSERT_EQ(logs.size(), 1U);
     // The process tag was set after this record was submitted, so it is not on it.
     EXPECT_EQ(tags_of(logs[0].tags), unusual);
 
-    log_to(core_, "after");
-    core_.flush();
-    EXPECT_EQ(tag_of(captured_->logs().back().tags, "process =\n\""), "\x01\x1b[0m");
+    log_to(_core, "after");
+    _core.flush();
+    EXPECT_EQ(tag_of(_captured->logs().back().tags, "process =\n\""), "\x01\x1b[0m");
 }
 
 }  // namespace

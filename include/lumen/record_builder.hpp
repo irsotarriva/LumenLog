@@ -76,7 +76,7 @@ public:
     ~BasicRecordBuilder() {
         if constexpr (std::same_as<R, LogRecord>) {
             if (record_.level == LogLevel::Fatal) {
-                core_->submit_fatal_(std::move(record_), tags_dropped_);
+                core_->submit_fatal_(record_, tags_dropped_);
             }
         }
         core_->submit_(std::move(record_), tags_dropped_);

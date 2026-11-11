@@ -30,33 +30,34 @@ namespace lumen {
 using RecordTags = TagSet<max_record_tags>;
 
 struct SourceLocation {
-    std::string_view file{};
-    std::string_view function{};
-    std::string_view class_name{};  // innermost enclosing class, "" for a free function
+    std::string_view file;
+    std::string_view function;
+    std::string_view class_name;  // innermost enclosing class, "" for a free function
     uint32_t line{};
 };
 
 namespace detail {
-using RecordStorage = std::shared_ptr<const char[]>;
+// The array form of shared_ptr: one block for all of a record's strings.
+using RecordStorage = std::shared_ptr<const char[]>;  // NOLINT(*-avoid-c-arrays)
 }  // namespace detail
 
 struct LogRecord {
     LogLevel level{};
-    std::string_view message{};
+    std::string_view message;
     RecordTags tags{};
     uint64_t timestamp_ns{};  // lumen::now_ns() at submission
     uint32_t thread_id{};     // lumen::this_thread_id() of the producer
     SourceLocation source{};
-    detail::RecordStorage storage{};
+    detail::RecordStorage storage;
 };
 
 struct MetricRecord {
-    std::string_view name{};
+    std::string_view name;
     double value{};
     RecordTags tags{};
     uint64_t timestamp_ns{};
     uint32_t thread_id{};
-    detail::RecordStorage storage{};
+    detail::RecordStorage storage;
 };
 
 // One state of a progress bar. `current` counts completed units of work out
@@ -64,13 +65,13 @@ struct MetricRecord {
 // the sequence are described with ProgressHandle (lumen/progress.hpp).
 struct ProgressRecord {
     uint64_t id{};
-    std::string_view label{};
+    std::string_view label;
     uint64_t current{};
     uint64_t total{};
     RecordTags tags{};
     uint64_t timestamp_ns{};
     uint32_t thread_id{};
-    detail::RecordStorage storage{};
+    detail::RecordStorage storage;
 };
 
 }  // namespace lumen
