@@ -1,0 +1,2 @@
+{"type":"log","ts":<ns>,"level":"INFO","msg":"channel hot","file":"<src>/examples/routing.cpp","line":140,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter","temperature":"312.5"}}
+{"type":"log","ts":<ns>,"level":"ERROR","msg":"readout lost","file":"<src>/examples/routing.cpp","line":141,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter"}}

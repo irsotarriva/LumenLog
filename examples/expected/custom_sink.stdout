@@ -1,0 +1,4 @@
+log,INFO,"run started","run=7"
+log,WARN,"say ""cheese""","camera=front"
+metric,"exposure_ms",12.5,"camera=front"
+dropped: 0
