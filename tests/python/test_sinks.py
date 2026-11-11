@@ -100,9 +100,11 @@ class PythonSinkTest(LumenTestCase):
         with self.assertRaises(RuntimeError):
             lumen.core().add_sink(sink)
 
-    def test_none_is_not_a_sink(self):
-        with self.assertRaises((TypeError, lumen.LumenError)):
+    def test_adding_none_raises_lumen_error_for_a_null_sink(self):
+        with self.assertRaises(lumen.LumenError) as raised:
             lumen.core().add_sink(None)
+        self.assertIs(type(raised.exception), lumen.LumenError)
+        self.assertEqual(str(raised.exception), "sink is null")
 
     def test_callback_sink_rejects_a_callback_that_is_not_callable(self):
         with self.assertRaises(TypeError):
