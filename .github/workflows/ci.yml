@@ -278,6 +278,10 @@ jobs:
         if: matrix.framework == 'root'
         run: |
           echo "BRIDGE_PREFIX=$CONDA_PREFIX" >> "$GITHUB_ENV"
+          # conda-forge builds ROOT as C++20 and RConfigure.h warns (#warning)
+          # when it is included from C++23 code. Keep the warning visible but
+          # do not let -Werror turn it into a build failure.
+          echo "CXXFLAGS=$CXXFLAGS -Wno-error=cpp" >> "$GITHUB_ENV"
           "$CXX" --version
           root-config --version
 
