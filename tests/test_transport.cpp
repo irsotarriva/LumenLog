@@ -113,48 +113,48 @@ TEST(RingBufferTest, TryPushOnFullBufferReturnsFalseAndLeavesItemIntact) {
 
 TEST(RingBufferTest, RejectedCountCountsOnlyFailedTryPushes) {
     RingBuffer<int, 2> buffer;
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
     EXPECT_TRUE(buffer.try_push(1));
     EXPECT_TRUE(buffer.try_push(2));
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
 
     EXPECT_FALSE(buffer.try_push(3));
     EXPECT_FALSE(buffer.try_push(4));
     EXPECT_FALSE(buffer.try_push(5));
-    EXPECT_EQ(buffer.rejected_count(), 3u);
+    EXPECT_EQ(buffer.rejected_count(), 3U);
 
     int out = 0;
     EXPECT_TRUE(buffer.try_pop(out));
     EXPECT_TRUE(buffer.try_push(6));
     EXPECT_TRUE(buffer.try_pop(out));
     buffer.push_blocking(7);
-    EXPECT_EQ(buffer.rejected_count(), 3u);
+    EXPECT_EQ(buffer.rejected_count(), 3U);
 }
 
 TEST(RingBufferTest, SizeEmptyAndPositionsFollowPushesAndPops) {
     RingBuffer<int, 4> buffer;
     EXPECT_TRUE(buffer.empty());
-    EXPECT_EQ(buffer.size(), 0u);
-    EXPECT_EQ(buffer.capacity(), 4u);
+    EXPECT_EQ(buffer.size(), 0U);
+    EXPECT_EQ(buffer.capacity(), 4U);
 
     EXPECT_TRUE(buffer.try_push(1));
     EXPECT_TRUE(buffer.try_push(2));
     EXPECT_TRUE(buffer.try_push(3));
     EXPECT_FALSE(buffer.empty());
-    EXPECT_EQ(buffer.size(), 3u);
-    EXPECT_EQ(buffer.head_position(), 3u);
-    EXPECT_EQ(buffer.tail_position(), 0u);
+    EXPECT_EQ(buffer.size(), 3U);
+    EXPECT_EQ(buffer.head_position(), 3U);
+    EXPECT_EQ(buffer.tail_position(), 0U);
 
     int out = 0;
     EXPECT_TRUE(buffer.try_pop(out));
-    EXPECT_EQ(buffer.size(), 2u);
-    EXPECT_EQ(buffer.tail_position(), 1u);
+    EXPECT_EQ(buffer.size(), 2U);
+    EXPECT_EQ(buffer.tail_position(), 1U);
 
     EXPECT_TRUE(buffer.try_push(4));
     EXPECT_TRUE(buffer.try_push(5));
     EXPECT_FALSE(buffer.try_push(6));
-    EXPECT_EQ(buffer.size(), 4u);
-    EXPECT_EQ(buffer.head_position(), 5u);
+    EXPECT_EQ(buffer.size(), 4U);
+    EXPECT_EQ(buffer.head_position(), 5U);
 }
 
 TEST(RingBufferTest, PushBlockingIntoBufferWithRoomStoresElementWithoutRejecting) {
@@ -166,7 +166,7 @@ TEST(RingBufferTest, PushBlockingIntoBufferWithRoomStoresElementWithoutRejecting
     EXPECT_EQ(out, 10);
     EXPECT_TRUE(buffer.try_pop(out));
     EXPECT_EQ(out, 11);
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
 }
 
 TEST(RingBufferTest, WrapsAroundManyTimesPastCapacityInFifoOrder) {
@@ -190,7 +190,7 @@ TEST(RingBufferTest, WrapsAroundManyTimesPastCapacityInFifoOrder) {
     EXPECT_EQ(buffer.head_position(), next_in);
     EXPECT_EQ(buffer.tail_position(), next_in);
     EXPECT_GT(next_in, 100 * buffer.capacity());
-    EXPECT_EQ(buffer.rejected_count(), 0u);
+    EXPECT_EQ(buffer.rejected_count(), 0U);
 }
 
 TEST(RingBufferTest, CapacityOneHoldsExactlyOneElementAtATime) {
@@ -203,7 +203,7 @@ TEST(RingBufferTest, CapacityOneHoldsExactlyOneElementAtATime) {
         EXPECT_EQ(out, i);
         EXPECT_FALSE(buffer.try_pop(out));
     }
-    EXPECT_EQ(buffer.rejected_count(), 100u);
+    EXPECT_EQ(buffer.rejected_count(), 100U);
 }
 
 // ── Element lifetime ─────────────────────────────────────────────────────────
@@ -244,7 +244,7 @@ TEST(RingBufferTest, EveryElementIsDestroyedExactlyOnceIncludingUnconsumedAfterW
         for (uint64_t i = 6; i < 9; ++i) {
             EXPECT_TRUE(buffer.try_push(Tracked(counts, i)));
         }
-        EXPECT_EQ(buffer.size(), 3u);
+        EXPECT_EQ(buffer.size(), 3U);
     }
     EXPECT_GT(counts.constructed.load(), 0);
     EXPECT_EQ(counts.destroyed.load(), counts.constructed.load());
@@ -344,7 +344,7 @@ TEST(RingBufferStressTest, TryPushFromFourProducersDeliversOrRejectsEachValueOnc
         const StressOutcome outcome = run_stress(
             buffer, counts, [](auto& b, Tracked&& item) { return b.try_push(std::move(item)); });
 
-        EXPECT_EQ(outcome.invalid_values, 0u);
+        EXPECT_EQ(outcome.invalid_values, 0U);
         EXPECT_EQ(outcome.values_delivered_more_than_once(), 0);
         EXPECT_EQ(outcome.delivered + outcome.rejected_seen_by_producers, stress_total);
         EXPECT_EQ(buffer.rejected_count(), outcome.rejected_seen_by_producers);
@@ -368,7 +368,7 @@ TEST(RingBufferStressTest, TryPushRetriedUntilAcceptedDeliversEveryValueExactlyO
             return true;
         });
 
-        EXPECT_EQ(outcome.invalid_values, 0u);
+        EXPECT_EQ(outcome.invalid_values, 0U);
         EXPECT_EQ(outcome.values_not_delivered_once(), 0);
         EXPECT_EQ(outcome.delivered, stress_total);
         EXPECT_TRUE(outcome.per_producer_order_kept);
@@ -385,10 +385,10 @@ TEST(RingBufferStressTest, PushBlockingFromFourProducersDeliversEveryValueExactl
             return true;
         });
 
-        EXPECT_EQ(outcome.invalid_values, 0u);
+        EXPECT_EQ(outcome.invalid_values, 0U);
         EXPECT_EQ(outcome.values_not_delivered_once(), 0);
         EXPECT_EQ(outcome.delivered, stress_total);
-        EXPECT_EQ(buffer.rejected_count(), 0u);
+        EXPECT_EQ(buffer.rejected_count(), 0U);
         EXPECT_TRUE(outcome.per_producer_order_kept);
     }
     EXPECT_EQ(counts.destroyed.load(), counts.constructed.load());

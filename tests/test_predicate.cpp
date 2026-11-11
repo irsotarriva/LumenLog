@@ -241,7 +241,7 @@ TEST(PredicateTest, FirstOfDuplicateKeysDecidesTextComparisons) {
     TagSet<16> tags;
     EXPECT_TRUE(tags.add("k", "a"));
     EXPECT_TRUE(tags.add("k", "b"));
-    ASSERT_EQ(tags.count(), 2u);
+    ASSERT_EQ(tags.count(), 2U);
 
     EXPECT_TRUE(tag_exists("k").evaluate(tags, LogLevel::Info));
     EXPECT_TRUE(tag_equals("k", "a").evaluate(tags, LogLevel::Info));
@@ -256,7 +256,7 @@ TEST(PredicateTest, FirstOfDuplicateKeysDecidesNumericComparisons) {
     EXPECT_TRUE(tags.add("n", "5"));
     EXPECT_TRUE(tags.add("m", "abc"));
     EXPECT_TRUE(tags.add("m", "5"));
-    ASSERT_EQ(tags.count(), 4u);
+    ASSERT_EQ(tags.count(), 4U);
 
     EXPECT_TRUE(tag_compare("n", CompareOp::Equal, 1.0).evaluate(tags, LogLevel::Info));
     EXPECT_FALSE(tag_compare("n", CompareOp::Equal, 5.0).evaluate(tags, LogLevel::Info));
@@ -481,7 +481,9 @@ inline constexpr int32_t deep_terms = 100'000;
 
 TEST(PredicateTest, LeftDeepAndChainOf100000TermsEvaluates) {
     Predicate chain = always();
-    for (int32_t i = 0; i < deep_terms; ++i) chain = chain && tag_exists("k");
+    for (int32_t i = 0; i < deep_terms; ++i) {
+        chain = chain && tag_exists("k");
+    }
 
     TagSet<16> with_k;
     EXPECT_TRUE(with_k.add("k", "1"));
@@ -493,7 +495,9 @@ TEST(PredicateTest, LeftDeepAndChainOf100000TermsEvaluates) {
 
 TEST(PredicateTest, RightDeepOrChainOf100000TermsEvaluates) {
     Predicate chain = never();
-    for (int32_t i = 0; i < deep_terms; ++i) chain = tag_exists("k") || chain;
+    for (int32_t i = 0; i < deep_terms; ++i) {
+        chain = tag_exists("k") || chain;
+    }
 
     TagSet<16> with_k;
     EXPECT_TRUE(with_k.add("k", "1"));
@@ -504,7 +508,9 @@ TEST(PredicateTest, RightDeepOrChainOf100000TermsEvaluates) {
 
 TEST(PredicateTest, ChainOf100000NegationsEvaluates) {
     Predicate chain = tag_exists("env");
-    for (int32_t i = 0; i < deep_terms; ++i) chain = !chain;  // an even count
+    for (int32_t i = 0; i < deep_terms; ++i) {
+        chain = !chain;  // an even count
+    }
 
     EXPECT_TRUE(chain.evaluate(make_tags(), LogLevel::Info));
     EXPECT_FALSE(chain.evaluate(TagSet<16>{}, LogLevel::Info));
@@ -512,7 +518,9 @@ TEST(PredicateTest, ChainOf100000NegationsEvaluates) {
 
 TEST(PredicateTest, DeepChainsSharingNodesCanBeDestroyedOnTwoThreadsAtOnce) {
     Predicate shared = always();
-    for (int32_t i = 0; i < deep_terms; ++i) shared = shared && tag_exists("k");
+    for (int32_t i = 0; i < deep_terms; ++i) {
+        shared = shared && tag_exists("k");
+    }
     TagSet<16> with_k;
     EXPECT_TRUE(with_k.add("k", "1"));
 
@@ -520,7 +528,9 @@ TEST(PredicateTest, DeepChainsSharingNodesCanBeDestroyedOnTwoThreadsAtOnce) {
     // and destroys its own nodes while the other thread may be doing the same.
     const auto grow_evaluate_drop = [&shared, &with_k](bool& result) {
         Predicate own = shared;
-        for (int32_t i = 0; i < deep_terms; ++i) own = own && tag_exists("k");
+        for (int32_t i = 0; i < deep_terms; ++i) {
+            own = own && tag_exists("k");
+        }
         result = own.evaluate(with_k, LogLevel::Info);
     };
     bool first = false;

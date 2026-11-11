@@ -142,7 +142,7 @@ int main() {
 
     bool consistent = true;
     for (const PushMode mode : {PushMode::TryPush, PushMode::PushBlocking}) {
-        for (const uint32_t producers : {1u, 2u, 4u, 8u}) {
+        for (const uint32_t producers : {1U, 2U, 4U, 8U}) {
             const RunResult r = run(mode, producers, total_per_run / producers);
             consistent = consistent && r.delivered == r.accepted &&
                          r.accepted + r.rejected == r.offered;

@@ -13,7 +13,9 @@ namespace {
 
 TagSet<16> tags_of(std::initializer_list<std::pair<std::string_view, std::string_view>> kv) {
     TagSet<16> tags;
-    for (const auto& [k, v] : kv) EXPECT_TRUE(tags.add(k, v));
+    for (const auto& [k, v] : kv) {
+        EXPECT_TRUE(tags.add(k, v));
+    }
     return tags;
 }
 
@@ -194,13 +196,13 @@ TEST(PredicateParserTest, ParsedPredicateSurvivesCopy) {
 TEST(PredicateParserTest, ErrorsCarryCodeAndPosition) {
     const PredicateParseError err = parse_error("level >= WARN && sensor_id == ");
     EXPECT_EQ(err.code, make_error_code(LumenError::InvalidPredicate));
-    EXPECT_EQ(err.position, 30u);
+    EXPECT_EQ(err.position, 30U);
     EXPECT_FALSE(err.message.empty());
 }
 
 TEST(PredicateParserTest, EmptyQueryIsAnError) {
-    EXPECT_EQ(parse_error("").position, 0u);
-    EXPECT_EQ(parse_error("   ").position, 3u);
+    EXPECT_EQ(parse_error("").position, 0U);
+    EXPECT_EQ(parse_error("   ").position, 3U);
 }
 
 TEST(PredicateParserTest, RejectsMalformedQueries) {
@@ -279,8 +281,8 @@ private:
 void expect_rejects_latin1_letter() {
     // 0xE9 is 'e' with an acute accent in ISO-8859-1.
     const PredicateParseError err = parse_error("caf\xe9 == 1");
-    EXPECT_EQ(err.position, 3u);
-    EXPECT_EQ(err.message.rfind("unexpected character", 0), 0u) << err.message;
+    EXPECT_EQ(err.position, 3U);
+    EXPECT_EQ(err.message.rfind("unexpected character", 0), 0U) << err.message;
 }
 
 TEST(PredicateParserTest, NonAsciiLetterInKeyIsRejected) {
@@ -290,14 +292,18 @@ TEST(PredicateParserTest, NonAsciiLetterInKeyIsRejected) {
 TEST(PredicateParserTest, NonAsciiLetterInKeyIsRejectedUnderLatin1Locale) {
     const ScopedCLocale latin1({"de_DE.ISO-8859-1", "de_DE.iso88591", "en_US.ISO-8859-1",
                                 "en_US.iso88591"});
-    if (!latin1.active()) GTEST_SKIP() << "no ISO-8859-1 locale installed";
+    if (!latin1.active()) {
+        GTEST_SKIP() << "no ISO-8859-1 locale installed";
+    }
     // There, std::isalpha(0xE9) is true.
     expect_rejects_latin1_letter();
 }
 
 TEST(PredicateParserTest, KeywordsMatchAnyCaseUnderTurkishLocale) {
     const ScopedCLocale turkish({"tr_TR.ISO-8859-9", "tr_TR.iso88599"});
-    if (!turkish.active()) GTEST_SKIP() << "no ISO-8859-9 Turkish locale installed";
+    if (!turkish.active()) {
+        GTEST_SKIP() << "no ISO-8859-9 Turkish locale installed";
+    }
     // There, std::tolower('I') is the dotless i (0xFD), not 'i'.
     EXPECT_TRUE(eval("EXISTS(k)", tags_of({{"k", "1"}})));
     EXPECT_TRUE(eval("level == info", {}, LogLevel::Info));
