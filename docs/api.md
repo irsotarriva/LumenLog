@@ -64,11 +64,12 @@ if (!set && set.error() == lumen::LumenError::TagTableFull) {
 |---|---|
 | `InvalidSinkId` | `remove_sink`, `sink_exception_count`: no sink has this id |
 | `NullSink` | `add_sink`: the sink is null |
-| `SinkBusy` | `remove_sink` while a callback of that sink runs further up the calling thread's stack |
+| `SinkBusy` | `remove_sink` while a callback of that sink runs further up the calling thread's stack; `flush_for` from inside a callback of the same Core, or in a cycle of flushes between Cores |
 | `TagTableFull` | `set_process_tag`, `set_thread_tag`, `Tagged::lumen_tag`: the key is new and the table is full |
 | `InvalidPredicate` | `parse_predicate` (in `PredicateParseError::code`) |
 | `InvalidSinkConfig` | `TerminalSink::create`, `FileSink::create`, `DashboardSink::create`: a `Config` field is out of range |
 | `FileOpenFailed` | `FileSink::create`: the file cannot be opened for appending |
 | `IoError` | never returned: a failed write is reported through a sink's diagnostics and counted in its statistics |
 | `NotATerminal` | `DashboardSink::create`: the destination is not a terminal |
-| `CoreShutDown` | `add_sink` once the Core has begun shutting down |
+| `CoreShutDown` | `add_sink` once the Core has begun shutting down; `flush_for` after shutdown, or when shutdown gave up while it waited |
+| `FlushTimedOut` | `flush_for`: the time limit passed before the flush was done |

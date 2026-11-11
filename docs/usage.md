@@ -346,7 +346,10 @@ not supported; debug builds assert on it. The object of a
 
 `LUMEN_LOG_FATAL("...", args...)` is a statement, not an expression: it takes
 no `.tag()`. It delivers, on the calling thread, every record queued before
-it, then the fatal record, flushes every sink and calls `std::terminate()`.
+it, then the fatal record, flushes every sink and ends the process with
+SIGABRT: by `std::abort()`, or by `std::terminate()` when the program
+installed a terminate handler of its own (`lumen/core.hpp`, "Fatal
+records").
 Inside a sink callback of the same Core, the sink whose callback is running is
 skipped; every other sink receives the record and is flushed. After the Core
 has shut down the record is only counted, and the program still terminates.

@@ -324,9 +324,9 @@ the sinks' `Config`, except the builder's buffer
   other types). A record submitted by another thread while shutdown runs may
   be lost without being counted: stop your threads first.
 - **`LUMEN_LOG_FATAL`** delivers every record queued before it, then the fatal
-  record, flushes every sink and calls `std::terminate()`, which aborts the
-  process unless you installed another terminate handler. Destructors and
-  `atexit` functions do not run.
+  record, flushes every sink and aborts the process (SIGABRT); a terminate
+  handler you installed with `std::set_terminate` is called instead.
+  Destructors and `atexit` functions do not run.
 - **Compile-time level.** Statements below `LUMEN_MIN_LEVEL` (default
   `DEBUG`, so `LUMEN_LOG_TRACE` is removed by default) are discarded at
   compile time: they produce no code and their arguments are not evaluated.

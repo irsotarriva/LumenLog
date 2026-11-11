@@ -7,7 +7,13 @@ headers state the guarantees; this page says which file keeps them.
 
 | File | Owns |
 |---|---|
-| `include/lumen/core.hpp`, `src/core.cpp` | `Core`: its API, and `Core::Impl`, which composes the parts below and runs the sequences that span them (submission, the dispatch loop, `flush`, fatal records, shutdown) |
+| `include/lumen/core.hpp`, `src/core.cpp` | `Core`: its API, and `Core::Impl`, which composes the parts below and runs the sequences that span them (submission, the dispatch loop, `flush`, fatal records, shutdown, `fork()`) |
+| `include/lumen/diagnostics.hpp` | `DiagnosticHandler` and `stderr_diagnostics()`, shared by the Core and the sinks |
+| `src/dispatcher_thread.*` | The dispatch thread as a thread: starting it, and waiting for it to end with a limit |
+| `src/flush_requests.*` | The flushes `flush_for` asks the dispatch thread to make, and the waits for them |
+| `src/fork_handlers.*` | The one `pthread_atfork` registration and the objects it calls around `fork()` |
+| `src/termination.*` | How the process ends after a fatal record, and how a terminate handler of Lumen's hands over |
+| `src/portable_error.hpp` | Thread-start errors as `std::generic_category` codes on every standard library |
 | `src/record_queues.*` | The three queues of a Core and the per-type count of records refused after shutdown |
 | `src/record_preparation.hpp` | Stamping a submitted record, merging the context and copying its strings into its own block |
 | `src/wakeup.*` | How producers wake the sleeping dispatch thread, and how it waits |
@@ -19,7 +25,7 @@ headers state the guarantees; this page says which file keeps them.
 | `include/lumen/record_builder.hpp`, `include/lumen/detail/string_scratch.hpp` | Builders and their scratch buffer for strings |
 | `include/lumen/macros.hpp` | The logging front end: statements, compile-time elision, scopes, loops |
 | `include/lumen/context.hpp`, `include/lumen/detail/context.hpp`, `src/context.cpp` | All context state: the process table, each thread's tags and scope frames, and the merge into a record |
-| `include/lumen/detail/scope_stack.hpp` | `ScopeGuard` and `LoopScope`, behind `LUMEN_SCOPE` and `LUMEN_LOOP` |
+| `include/lumen/detail/scope_stack.hpp` | `LoopScope`, behind `LUMEN_LOOP` (`LUMEN_SCOPE` declares a `ScopedTag`, `include/lumen/context.hpp`) |
 | `include/lumen/tagged.hpp`, `src/tagged.cpp` | `Tagged` objects and their member scopes |
 | `include/lumen/detail/class_name.hpp` | The enclosing class, read from `std::source_location::function_name()` |
 | `include/lumen/progress.hpp`, `src/progress.cpp` | `ProgressHandle` |
@@ -33,7 +39,7 @@ headers state the guarantees; this page says which file keeps them.
 | `src/dashboard_sink.cpp`, `src/dashboard_frame.*` | `DashboardSink`; the only code that uses FTXUI (built with `LUMEN_ENABLE_DASHBOARD`) |
 | `include/lumen/detail/immortal.hpp` | Storage for the few objects that are never destroyed (also used by the Python module) |
 | `src/error.cpp` | The `"lumen"` error category |
-| `python/` | The pybind11 module, one file per area (`python/registration.hpp` lists them), and `logging_handler.py` |
+| `python/` | The pybind11 module, one file per area (`python/registration.hpp` lists them), and `logging_handler.py`; `python/interpreter_exit.*` the exit and fork hooks, `python/python_diagnostics.*` diagnostic handlers written in Python |
 | `cmake/build_settings.cmake`, `cmake/config.hpp.in` | The settings that change what the headers compile to (`LUMEN_MIN_LEVEL`, queue capacities), written into the generated and installed `lumen/config.hpp` |
 
 ## One submission path
@@ -102,6 +108,17 @@ asleep pays for the mutex and the notify. The comment on `Wakeup` in
 `Core::flush()` takes the same delivery lock as the dispatcher and delivers
 on the caller's thread up to the head positions it read, waiting for
 producers that had claimed a slot before it, then flushes every sink.
+`Core::flush_for()` instead takes a ticket (`src/flush_requests.hpp`) and
+wakes the dispatcher, whose next pass reads the latest ticket, delivers up
+to the heads it reads after it, flushes the sinks and completes every ticket
+up to that one; the caller waits on a condition variable with its deadline,
+so giving up never leaves it inside a callback.
+
+Cycles. A thread inside a callback of Core A that waits for Core B (for B's
+delivery lock in `flush()`, or for B's dispatcher in `flush_for()`) marks
+every Delivery it holds as waiting for B, and every 5 ms follows the marks
+from B: reaching a Delivery it holds itself means the wait would never end,
+and the call returns `SinkBusy` (`Delivery::Waiting` in `src/delivery.hpp`).
 
 ## The sink registry
 
@@ -173,6 +190,28 @@ dispatcher and keeps the sinks.
 
 If the dispatch thread cannot be started, the Core reports it and delivers
 each record on the submitting thread.
+
+Shutdown, and a fatal record, wait for the dispatch thread and the delivery
+lock only while `Delivery::progress()` moves; after the shutdown timeout
+without progress they give up (`StallWatch` in `src/core.cpp`). An abandoned
+Core reports its queued count, leaves its sinks and its thread alone, and a
+Core object that owned it moves its `Impl` to a never-destroyed list.
+
+fork(). `src/fork_handlers.cpp` registers one set of `pthread_atfork`
+handlers. Before the fork they take every short-held lock of every Core,
+line writer, dashboard and the process context (never the delivery lock,
+which a callback may hold while it waits for the forking thread); in the
+child they discard the queued records (the parent delivers them),
+re-initialise the delivery lock and the condition variables, clear the
+sinks' busy flags and forget the threads, which are started again at the
+first use. Python adds `os.register_at_fork` hooks for its own state and, in
+a `multiprocessing` child, runs its exit hook as a `multiprocessing`
+finalizer.
+
+After a fatal record the process ends with `std::abort()`, unless the
+program installed a terminate handler (`src/termination.hpp`): the C++
+library's default handler writes to standard error first, which never
+returns when standard error is blocked.
 
 The Python module has to detach its sinks earlier, while the interpreter is
 still running: an `atexit` function (`python/interpreter_exit.cpp`) delivers
