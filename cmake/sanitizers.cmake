@@ -2,11 +2,21 @@
 # compiles: none, address (ASan + UBSan) or thread (TSan). ASan and TSan cannot
 # be combined in one binary, hence a single choice rather than several options.
 #
-# The default is address for a top-level Debug build and none otherwise: an
-# instrumented static library forces every consumer to link the sanitizer
-# runtime too, so a parent project never gets one it did not ask for.
+# Which configuration it instruments:
+#   - single-configuration generators (Ninja, Unix Makefiles): the one build,
+#     whatever CMAKE_BUILD_TYPE is;
+#   - multi-configuration generators (Ninja Multi-Config, Visual Studio,
+#     Xcode): the Debug configuration only. Release, RelWithDebInfo and
+#     MinSizeRel are never instrumented.
+#
+# The default is address for a top-level build that has a Debug
+# configuration (CMAKE_BUILD_TYPE=Debug, or any multi-configuration
+# generator) and none otherwise: an instrumented static library forces every
+# consumer to link the sanitizer runtime too, so a parent project never gets
+# one it did not ask for.
 
-if(PROJECT_IS_TOP_LEVEL AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+get_property(lumen_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(PROJECT_IS_TOP_LEVEL AND (lumen_multi_config OR CMAKE_BUILD_TYPE STREQUAL "Debug"))
   set(lumen_sanitizer_default address)
 else()
   set(lumen_sanitizer_default none)
@@ -35,12 +45,21 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   else()
     set(lumen_sanitizer_flags -fsanitize=thread)
   endif()
-  add_compile_options(${lumen_sanitizer_flags} -fno-omit-frame-pointer)
-  add_link_options(${lumen_sanitizer_flags})
+  set(lumen_sanitizer_compile_flags ${lumen_sanitizer_flags} -fno-omit-frame-pointer)
+  set(lumen_sanitizer_link_flags ${lumen_sanitizer_flags})
 elseif(MSVC AND LUMEN_SANITIZER STREQUAL "address")
-  add_compile_options(/fsanitize=address)
+  set(lumen_sanitizer_compile_flags /fsanitize=address)
+  set(lumen_sanitizer_link_flags "")
 else()
   message(FATAL_ERROR "LUMEN_SANITIZER=${LUMEN_SANITIZER} is not supported with ${CMAKE_CXX_COMPILER_ID}")
 endif()
 
-message(STATUS "Lumen: sanitizer ${LUMEN_SANITIZER}")
+if(lumen_multi_config)
+  list(TRANSFORM lumen_sanitizer_compile_flags REPLACE "^(.+)$" "$<$<CONFIG:Debug>:\\1>")
+  list(TRANSFORM lumen_sanitizer_link_flags REPLACE "^(.+)$" "$<$<CONFIG:Debug>:\\1>")
+  message(STATUS "Lumen: sanitizer ${LUMEN_SANITIZER} (Debug configuration only)")
+else()
+  message(STATUS "Lumen: sanitizer ${LUMEN_SANITIZER}")
+endif()
+add_compile_options(${lumen_sanitizer_compile_flags})
+add_link_options(${lumen_sanitizer_link_flags})
