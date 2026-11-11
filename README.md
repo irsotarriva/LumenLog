@@ -101,24 +101,36 @@ examples are:
 ## Requirements
 
 - A C++23 compiler and standard library with `<expected>`, `<format>` and
-  `<source_location>`. The CI workflow (`.github/workflows/ci.yml`) builds
-  and tests with:
-  - GCC 13 with libstdc++ on Ubuntu 24.04 (Debug with ASan and UBSan, Debug
-    with ThreadSanitizer, Release, Release without vcpkg);
-  - Clang 18 with libc++ 18 on Ubuntu 24.04 (Debug with ASan and UBSan);
-  - Apple Clang on the `macos-latest` runner (Debug with ASan and UBSan).
+  `<source_location>`. Clang with GNU libstdc++ 13 does not work: Clang 18
+  does not see `std::expected` in that library.
+- Windows: experimental. MSVC is built and tested by one CI job that is
+  allowed to fail, with the dashboard off; the dashboard has never been
+  built on Windows.
 
-  Clang with GNU libstdc++ 13 does not work: Clang 18 does not see
-  `std::expected` in that library.
-- Windows: experimental. The CI job `windows-msvc-debug` (MSVC, Debug,
-  dashboard off) builds and passes its tests, but it is allowed to fail and
-  the dashboard has never been built on Windows.
+The CI workflow (`.github/workflows/ci.yml`) has these jobs. Every one of
+them fails the workflow when it fails, except
+`windows-msvc-debug (experimental)`:
+
+| Job | Toolchain | What it builds and runs |
+|---|---|---|
+| `linux-gcc-debug-asan` | GCC 13, libstdc++, Ubuntu 24.04, vcpkg | Debug, ASan + UBSan, dashboard; the Eigen and OpenMP bridge tests and the locale tests; fails if any test is skipped |
+| `linux-gcc-tsan` | GCC 13, vcpkg | Debug, ThreadSanitizer, dashboard |
+| `linux-gcc-release` | GCC 13, vcpkg | Release, dashboard; also the `build-settings` test preset |
+| `linux-gcc-release-no-dashboard` | GCC 13, apt packages, no vcpkg | Release without the dashboard |
+| `linux-clang-libcxx-debug-asan` | Clang 18, libc++ 18, vcpkg | Debug, ASan + UBSan, dashboard |
+| `macos-appleclang-debug-asan` | Apple Clang, `macos-latest`, vcpkg | Debug, ASan + UBSan, dashboard |
+| `python-bindings` | GCC 13, pybind11 from pip | Debug, ASan + UBSan, the Python module and its tests |
+| `lint (clang-format, clang-tidy)` | clang-format 18, clang-tidy 18 | the `format-check` and `lint` targets, dashboard and Python module included |
+| `coverage (gcovr)` | GCC 13, vcpkg | line and branch coverage of `src/` and `include/`, dashboard included; uploads the report and fails under its thresholds |
+| `bridges (torch)` | GCC 13, libtorch 2.5.1 (CPU), Eigen and OpenMP | the bridge tests and the bridge documentation blocks |
+| `bridges (root)` | conda-forge GCC 13 and ROOT 6.32 | the same for ROOT |
+| `windows-msvc-debug (experimental)` | MSVC, `windows-latest`, vcpkg | Debug, no sanitizer, dashboard off; allowed to fail |
 - CMake 3.28 or later.
 - For the tests: GoogleTest and a Python 3 interpreter (the example and
   documentation checks run in Python; no Python package is needed).
 - Optional: FTXUI for the terminal dashboard (`LUMEN_ENABLE_DASHBOARD`,
-  on by default except on Windows); pybind11 3.0 or later and Python 3.11 or
-  later for the Python module (`LUMEN_ENABLE_PYTHON`).
+  on by default when FTXUI is found); pybind11 3.0 or later and Python 3.11
+  or later for the Python module (`LUMEN_ENABLE_PYTHON`).
 
 ## Building
 
@@ -130,11 +142,16 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
-This needs FTXUI for the dashboard, from vcpkg or installed; without it, add
-`-DLUMEN_ENABLE_DASHBOARD=OFF` to the first command (see below).
+The dashboard is built when FTXUI is found (from vcpkg or installed) and
+left out otherwise; the configure output says which. `-DLUMEN_ENABLE_DASHBOARD=ON`
+makes FTXUI required, `-DLUMEN_ENABLE_DASHBOARD=OFF` skips looking for it.
 
-The presets are `debug`, `tsan` (ThreadSanitizer), `release` and `ci` (Debug,
-ASan + UBSan, warnings as errors). Each one builds in `build/<preset>`.
+The configure presets are `debug`, `tsan` (ThreadSanitizer), `release`, `ci`
+(Debug, ASan + UBSan, warnings as errors) and `coverage` (Debug with GCC's
+`--coverage`, for gcovr). Each one builds in `build/<preset>`. The test
+presets of the same names leave out the tests labelled `build-settings`,
+which build and install Lumen with non-default settings and take minutes;
+`ctest --preset build-settings` runs them against the `release` build.
 
 With vcpkg: set the environment variable `VCPKG_ROOT` to a vcpkg checkout. The
 presets then use its toolchain file, and vcpkg installs the manifest features
@@ -144,8 +161,7 @@ of `vcpkg.json` that the options select: `tests` (GoogleTest, with
 own dependencies; this repository is not a vcpkg port of Lumen.
 
 Without vcpkg: leave `VCPKG_ROOT` unset; CMake then finds installed packages
-(set `CMAKE_PREFIX_PATH` if they are not in a default location). Without FTXUI,
-turn the dashboard off:
+(set `CMAKE_PREFIX_PATH` if they are not in a default location):
 
 ```sh
 cmake --preset release -DLUMEN_ENABLE_DASHBOARD=OFF
@@ -154,10 +170,18 @@ cmake --build --preset release
 
 The CI job `linux-gcc-release-no-dashboard` builds this way.
 
+Sanitizers and multi-configuration generators (Ninja Multi-Config, Visual
+Studio, Xcode): `LUMEN_SANITIZER` instruments the Debug configuration only,
+and defaults to `address` for a top-level build; Release, RelWithDebInfo and
+MinSizeRel are never instrumented. With a single-configuration generator
+(the presets use one) it instruments the one build, whatever its
+`CMAKE_BUILD_TYPE`.
+
 ## Using Lumen from CMake
 
-As a subdirectory of your project (tests, examples and install rules are then
-off by default):
+As a subdirectory of your project (tests, examples, install rules and
+sanitizers are then off by default, and the dashboard is built only if FTXUI
+is found):
 
 ```cmake
 add_subdirectory(LumenLog)
@@ -177,8 +201,14 @@ target_link_libraries(my_program PRIVATE lumen::lumen)
 
 Both ways are tested by `Consumer.FindPackageAndAddSubdirectory`, which
 builds `tests/consumer/` against an install and against the source tree.
-`lumen::lumen` carries the C++23 requirement and every definition its headers
-need.
+`lumen::lumen` carries the include directories and the C++23 requirement.
+The build settings (`LUMEN_MIN_LEVEL`, the queue capacities) are written into
+the generated header `lumen/config.hpp`, which is installed with the others,
+so a build that does not use CMake (`-I<prefix>/include` and
+`<prefix>/lib/liblumen.a`) sees the values the library was built with, and
+one that defines a different queue capacity fails to compile.
+`Consumer.WarnLevelAndSmallQueues` and `Consumer.FatalLevel` (label
+`build-settings`) check this with non-default settings.
 
 ## Build options
 
@@ -189,9 +219,9 @@ need.
 | `LUMEN_LOG_CAPACITY` | `65536` | Log records the log queue holds (a power of two) |
 | `LUMEN_METRIC_CAPACITY` | `16384` | Metric records the metric queue holds (a power of two) |
 | `LUMEN_PROGRESS_CAPACITY` | `4096` | Progress records the progress queue holds (a power of two) |
-| `LUMEN_ENABLE_DASHBOARD` | `ON`, `OFF` on Windows | Build `DashboardSink` (needs FTXUI) |
+| `LUMEN_ENABLE_DASHBOARD` | `ON` if FTXUI is found, else `OFF` | Build `DashboardSink`. `ON` requires FTXUI |
 | `LUMEN_ENABLE_PYTHON` | `OFF` | Build the Python module `lumen_bindings` (needs pybind11 3.0+) |
-| `LUMEN_SANITIZER` | `address` for a top-level Debug build, else `none` | `none`, `address` (ASan + UBSan) or `thread` (TSan) |
+| `LUMEN_SANITIZER` | `address` for a top-level build with a Debug configuration, else `none` | `none`, `address` (ASan + UBSan) or `thread` (TSan); with a multi-configuration generator, for the Debug configuration only |
 | `LUMEN_BUILD_TESTS` | `ON` when top level | Build the tests (needs GoogleTest and Python 3) |
 | `LUMEN_BUILD_EXAMPLES` | `ON` when top level | Build the examples |
 | `LUMEN_INSTALL` | `ON` when top level | Install rules and the `lumen` CMake package |
@@ -200,8 +230,9 @@ need.
 | `LUMEN_REQUIRED_BRIDGE_FRAMEWORKS` | empty | Bridge frameworks whose tests must be built (`Eigen3;OpenMP;Torch;ROOT`); configuring fails if one is missing |
 
 `LUMEN_MIN_LEVEL` and the capacities change what the public headers compile
-to, so when they differ from the default they are passed as definitions to
-every target that links `lumen::lumen`.
+to. They are written into the generated header `lumen/config.hpp` (installed
+with the library), not passed as definitions, so every user of a build of
+Lumen sees the same values, with CMake or without.
 
 ## What is in the library
 

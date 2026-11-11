@@ -34,23 +34,29 @@
 ## Build and test
 
 Presets (`CMakePresets.json`): `debug` (ASan + UBSan), `tsan`, `release`,
-`ci` (Debug, ASan + UBSan, warnings as errors). They load vcpkg when
-`VCPKG_ROOT` is set and use installed packages otherwise.
+`ci` (Debug, ASan + UBSan, warnings as errors), `coverage` (GCC
+`--coverage`, for gcovr). They load vcpkg when `VCPKG_ROOT` is set and use
+installed packages otherwise.
 
 ```sh
-cmake --preset debug -DLUMEN_ENABLE_DASHBOARD=OFF   # drop the flag where FTXUI is installed
+cmake --preset debug          # the dashboard is built only where FTXUI is found
 cmake --build --preset debug
-ctest --preset debug
+ctest --preset debug          # every test except the label build-settings
 ctest --test-dir build/debug -R TestName --output-on-failure
 cmake --build --preset debug --target format-check  # or format, to rewrite
 cmake --build --preset debug --target lint          # clang-tidy 18
+ctest --preset build-settings # after building the release preset; slow
 cmake --preset debug -DLUMEN_ENABLE_DASHBOARD=OFF -DLUMEN_ENABLE_PYTHON=ON \
       -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)   # adds Python.Bindings, Example.Python
 ```
 
 The tests need GoogleTest and a Python 3 interpreter. `lumen_bench_transport`
 is built but not run by ctest. `Consumer.FindPackageAndAddSubdirectory`
-builds Lumen twice and is the slowest test.
+builds Lumen twice and is the slowest test of the default presets; the tests
+labelled `build-settings` (`Consumer.WarnLevelAndSmallQueues`,
+`Consumer.FatalLevel`) build Lumen with non-default settings and run only
+with the `build-settings` test preset. `lint` covers the dashboard and
+`python/` only when the build compiles them.
 
 ## Style
 
@@ -130,13 +136,19 @@ The owner's rules; `.clang-format` and `.clang-tidy` enforce part of them.
 ## Facts not to get wrong
 
 - The dashboard (`LUMEN_ENABLE_DASHBOARD`) compiles only where FTXUI is
-  installed. Where it is not, configure with `-DLUMEN_ENABLE_DASHBOARD=OFF`;
-  the CI jobs that use vcpkg are where the dashboard is compiled and tested.
+  installed. Left unset, the option is on where FTXUI is found and off
+  otherwise (configuring says which); `-DLUMEN_ENABLE_DASHBOARD=ON` without
+  FTXUI fails. The CI jobs that use vcpkg are where the dashboard is compiled,
+  tested and linted.
+- `lumen/config.hpp` is generated (from `cmake/config.hpp.in`) into the build
+  directory and installed; it carries `LUMEN_MIN_LEVEL` and the queue
+  capacities. Do not add them as compile definitions.
 - Clang with GNU libstdc++ 13 cannot build Lumen (`std::expected` is hidden).
   Use GCC 13 or later, or Clang with libc++.
-- Windows is experimental: the MSVC CI job builds and passes with the
-  dashboard off, but it is allowed to fail. Keep code portable (no POSIX-only
-  headers outside `PLATFORM_*` blocks).
+- Windows is experimental: the MSVC CI job,
+  `windows-msvc-debug (experimental)`, runs with the dashboard off and is the
+  only job allowed to fail. Keep code portable (no POSIX-only headers outside
+  `PLATFORM_*` blocks).
 - Never rename compiler or preprocessor built-ins (`__has_include`,
   `__COUNTER__`, `__VA_ARGS__`, `_OPENMP`, `__cpp_*`) in a mass rename.
 - `MILESTONES.md` and `audits/` are local, git-ignored planning files. Never
