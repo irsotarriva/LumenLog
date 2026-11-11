@@ -61,9 +61,27 @@ public:
     }
 
     // std::format(fmt, args...), stored like store() would store the result.
+    // Formatting can still fail at run time (std::format_error for a dynamic
+    // width that is not a valid integer; anything a user's formatter
+    // throws). Such an exception does not leave this function: the stored
+    // text then says that formatting failed, with the exception's text and
+    // the format string. std::bad_alloc from storing that text is the only
+    // exception that can leave it.
     template <typename... Args>
     [[nodiscard]] std::string_view store_formatted(std::format_string<Args...> fmt,
                                                    Args&&... args) {
+        try {
+            return format_(fmt, std::forward<Args>(args)...);
+        } catch (const std::exception& e) {
+            return store_format_failure_(fmt.get(), e.what());
+        } catch (...) {
+            return store_format_failure_(fmt.get(), "an exception that is not a std::exception");
+        }
+    }
+
+private:
+    template <typename... Args>
+    [[nodiscard]] std::string_view format_(std::format_string<Args...> fmt, Args&&... args) {
         const std::size_t available = inline_capacity - used_;
         char* const dst = inline_buf_.data() + used_;
         const auto result = std::format_to_n(dst, static_cast<std::ptrdiff_t>(available), fmt,
@@ -78,7 +96,15 @@ public:
         return overflow_.front();
     }
 
-private:
+    [[nodiscard]] std::string_view store_format_failure_(std::string_view fmt,
+                                                         std::string_view what) {
+        std::string text = "formatting failed: ";
+        text += what;
+        text += "; format string: ";
+        text += fmt;
+        return store(text);
+    }
+
     // Left uninitialised on purpose: only the first used_ bytes are ever
     // read, and zeroing 512 bytes per logging statement is measurable.
     std::array<char, inline_capacity> inline_buf_;

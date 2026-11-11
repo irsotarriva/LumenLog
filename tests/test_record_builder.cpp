@@ -3,10 +3,12 @@
 
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -49,6 +51,85 @@ TEST_F(RecordBuilderTest, FormattedMessageLongerThanTheInlineScratchBufferIsComp
     const std::string long_part(2000, 'x');
     log_formatted_to(_core, "[{}]", long_part);
     EXPECT_EQ(_only_log().message, "[" + long_part + "]");
+}
+
+// A type whose formatter fails at run time, as a user's formatter may.
+struct ThrowsWhenFormatted {
+    bool standard_exception = true;
+};
+
+}  // namespace
+}  // namespace lumen
+
+template <>
+struct std::formatter<lumen::ThrowsWhenFormatted> {
+    constexpr auto parse(std::format_parse_context& context) { return context.begin(); }
+    auto format(const lumen::ThrowsWhenFormatted& value,
+                std::format_context& context) const -> decltype(context.out()) {
+        if (value.standard_exception) {
+            throw std::runtime_error("formatter refused");
+        }
+        throw 42;  // NOLINT(hicpp-exception-baseclass): what a careless user formatter may do
+    }
+};
+
+namespace lumen {
+namespace {
+
+TEST_F(RecordBuilderTest, RuntimeFormatErrorSendsARecordNamingTheErrorAndTheFormatString) {
+    const int negative_width = -1;
+    log_formatted_to(_core, "width {:{}}", 5, negative_width);
+    const LogRecord record = _only_log();
+    EXPECT_TRUE(record.message.starts_with("formatting failed: ")) << record.message;
+    EXPECT_TRUE(record.message.ends_with("; format string: width {:{}}")) << record.message;
+    EXPECT_EQ(record.level, LogLevel::Info);
+    EXPECT_EQ(_core.statistics().logs.accepted, 1U);
+}
+
+TEST_F(RecordBuilderTest, ThrowingUserFormatterSendsARecordWithTheExceptionText) {
+    log_formatted_to(_core, "value {}", ThrowsWhenFormatted{}).tag("kept", "yes");
+    const LogRecord record = _only_log();
+    EXPECT_EQ(record.message, "formatting failed: formatter refused; format string: value {}");
+    EXPECT_EQ(tag_of(record.tags, "kept"), "yes");
+}
+
+TEST_F(RecordBuilderTest, FormatterThrowingANonStandardExceptionIsReportedToo) {
+    log_formatted_to(_core, "value {}", ThrowsWhenFormatted{.standard_exception = false});
+    EXPECT_EQ(_only_log().message,
+              "formatting failed: an exception that is not a std::exception; format string: "
+              "value {}");
+}
+
+TEST_F(RecordBuilderTest, NullCStringMessageAndTagValueAreLoggedAsNull) {
+    const char* const missing = nullptr;
+    RecordBuilder(_core, LogLevel::Info, std::source_location::current(), missing)
+        .tag("value", missing);
+    const LogRecord record = _only_log();
+    EXPECT_EQ(record.message, "(null)");
+    EXPECT_EQ(tag_of(record.tags, "value"), "(null)");
+}
+
+TEST_F(RecordBuilderTest, NonNullCStringMessageAndTagValueAreLoggedVerbatim) {
+    const char* const message = "plain {} text";
+    const char* const value = "v";
+    RecordBuilder(_core, LogLevel::Info, std::source_location::current(), message)
+        .tag("value", value);
+    const LogRecord record = _only_log();
+    EXPECT_EQ(record.message, "plain {} text");
+    EXPECT_EQ(tag_of(record.tags, "value"), "v");
+}
+
+TEST_F(RecordBuilderTest, EveryStringOfADeliveredRecordIsFollowedByANul) {
+    log_to(_core, "message").tag("key", "value").tag("empty", "");
+    const LogRecord record = _only_log();
+    // Reading one past each view stays inside the record's storage, which
+    // holds a NUL after every string (lumen/record.hpp).
+    EXPECT_EQ(record.message.data()[record.message.size()], '\0');
+    ASSERT_EQ(record.tags.count(), 2U);
+    for (const auto& tag : record.tags) {
+        EXPECT_EQ(tag.key.data()[tag.key.size()], '\0') << tag.key;
+        EXPECT_EQ(tag.value.data()[tag.value.size()], '\0') << tag.key;
+    }
 }
 
 TEST_F(RecordBuilderTest, ManyLongTagsOverflowingTheScratchBufferAllArriveIntact) {
