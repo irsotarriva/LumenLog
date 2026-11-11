@@ -11,8 +11,8 @@
 #include <system_error>
 #include <vector>
 
-#include "lumen/core.hpp"
 #include "lumen/dashboard_model.hpp"
+#include "lumen/diagnostics.hpp"
 #include "lumen/sink.hpp"
 #include "lumen/terminal_style.hpp"
 
@@ -43,18 +43,24 @@ namespace lumen {
 // cursor and switches back, which brings back what was on the screen):
 //   - the destructor;
 //   - a fatal record (LUMEN_LOG_FATAL), which Core follows with flush() and
-//     std::terminate, so that no destructor runs. If the fatal record reached
-//     this sink, flush() stops drawing, restores the terminal and writes the
-//     log lines it holds (the fatal one last) as plain text to the normal
-//     screen, where they stay after the process ends. If the sink's
-//     predicate filtered the record out, the terminate handler below does
-//     the same;
+//     the end of the process (lumen/core.hpp, "Fatal records"), so that no
+//     destructor runs. If the fatal record reached this sink, flush() stops
+//     drawing, restores the terminal and writes the log lines it holds (the
+//     fatal one last) as plain text to the normal screen, where they stay
+//     after the process ends. If the sink's predicate filtered the record
+//     out, the terminate handler below does the same (Core ends the process
+//     through std::terminate while a handler other than the C++ library's
+//     default is installed, as Lumen's is);
 //   - std::terminate for any other reason (an uncaught exception): while a
 //     DashboardSink exists, Lumen's terminate handler restores the terminal
 //     of every live dashboard, writes their log lines as above, and then
 //     calls the handler that was installed before it (by default the one that
-//     aborts). An application that calls std::set_terminate after creating a
-//     dashboard replaces Lumen's handler and with it this step;
+//     aborts, after a message on standard error about the exception; with
+//     no exception active, Lumen calls std::abort() itself instead of that
+//     default, whose message would then say nothing and could block on a
+//     blocked standard error). An application that calls std::set_terminate
+//     after creating a dashboard replaces Lumen's handler and with it this
+//     step;
 //   - std::exit, and a return from main, while the sink is still alive (in a
 //     Core that is never destroyed, or one whose destructor does not run):
 //     a function registered with std::atexit restores the terminal of every
@@ -62,6 +68,10 @@ namespace lumen {
 //     except on macOS, whose C library has no at_quick_exit.
 // Each of these waits for the drawing thread to finish its frame, at most
 // about one second.
+//
+// fork(). The child does not draw: the terminal belongs to the parent. In the
+// child the sink takes records and does nothing else; its flush() returns
+// at once and its destruction writes nothing.
 //
 // Signals are not handled: installing signal handlers is the application's
 // decision, and Lumen installs none. A signal whose default action ends the
@@ -107,9 +117,10 @@ public:
     // Fails with LumenError::NotATerminal if the destination is not a
     // terminal and assume_terminal is false, with
     // LumenError::InvalidSinkConfig for an invalid time_format or a
-    // refresh_interval below 1 ms, and with the error std::thread reports
+    // refresh_interval below 1 ms, and with the error std::thread reports, as
+    // a std::generic_category code on every standard library
     // (std::errc::resource_unavailable_try_again when the system is out of
-    // threads) if the drawing thread cannot be started; the terminal is then
+    // threads), if the drawing thread cannot be started; the terminal is then
     // left as it was.
     [[nodiscard]] static std::expected<std::unique_ptr<DashboardSink>, std::error_code> create(
         Config config);

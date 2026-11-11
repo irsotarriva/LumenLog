@@ -10,7 +10,7 @@
 #include <system_error>
 
 #include "line_writer.hpp"
-#include "lumen/core.hpp"
+#include "lumen/diagnostics.hpp"
 
 // The file behind a FileSink: appends lines and rotates by size, as
 // documented with FileSink (lumen/file_sink.hpp). Used by the writer thread

@@ -18,9 +18,8 @@ struct TerminalSink::Impl {
     Impl(detail::OutputStream output_stream, bool use_color, detail::TextStyle text_style)
         : output(std::move(output_stream)), colored(use_color), style(std::move(text_style)) {}
 
-    // Queues the line of `record`: one that a builder makes, or a progress record.
-    template <typename R>
-        requires BuiltRecord<R> || std::same_as<R, ProgressRecord>
+    // Queues the line of `record`.
+    template <RecordType R>
     void enqueue(const R& record) {
         writer->enqueue(detail::text_line(record, style));
     }

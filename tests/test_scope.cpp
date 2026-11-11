@@ -81,11 +81,10 @@ TEST_F(ScopeTest, NestedScopesAllContributeAndTheInnerValueWinsForASharedKey) {
 }
 
 TEST_F(ScopeTest, TwentyNestedScopesFillTheRecordInnermostFirstAndCountTheRest) {
-    std::vector<std::unique_ptr<detail::ScopeGuard>> guards;
+    std::vector<std::unique_ptr<ScopedTag>> guards;
     guards.reserve(20);
     for (int i = 0; i < 20; ++i) {
-        guards.push_back(
-            std::make_unique<detail::ScopeGuard>("s" + std::to_string(i), std::to_string(i)));
+        guards.push_back(std::make_unique<ScopedTag>("s" + std::to_string(i), std::to_string(i)));
     }
     log_to(_core, "deep");
     while (!guards.empty()) {
@@ -129,8 +128,8 @@ TEST(ScopeDeathTest, DestroyingScopeGuardsOutOfOrderAssertsInDebugBuilds) {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_DEATH(
         {
-            auto first = std::make_unique<detail::ScopeGuard>("a", "1");
-            auto second = std::make_unique<detail::ScopeGuard>("b", "2");
+            auto first = std::make_unique<ScopedTag>("a", "1");
+            auto second = std::make_unique<ScopedTag>("b", "2");
             first.reset();
         },
         "out of order");
@@ -140,7 +139,7 @@ TEST(ScopeDeathTest, DestroyingAScopeGuardOnAnotherThreadAssertsInDebugBuilds) {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_DEATH(
         {
-            auto guard = std::make_unique<detail::ScopeGuard>("a", "1");
+            auto guard = std::make_unique<ScopedTag>("a", "1");
             std::thread other([&guard] { guard.reset(); });
             other.join();
         },
@@ -153,7 +152,7 @@ TEST(ScopeDeathTest, DestroyingAScopeGuardOnAnotherThreadAssertsInDebugBuilds) {
 TEST_F(ScopeTest, GuardDestroyedOnAnotherThreadKeepsItsTagUntilAnEnclosingScopeEnds) {
     {
         LUMEN_SCOPE("enclosing", "1");
-        auto guard = std::make_unique<detail::ScopeGuard>(
+        auto guard = std::make_unique<ScopedTag>(
             "request", "a-value-long-enough-to-live-on-the-heap-0123456789");
         std::thread other([&guard] { guard.reset(); });
         other.join();
@@ -169,8 +168,8 @@ TEST_F(ScopeTest, GuardDestroyedOnAnotherThreadKeepsItsTagUntilAnEnclosingScopeE
 }
 
 TEST_F(ScopeTest, GuardDestroyedOutOfOrderAlsoRemovesTheFramesPushedAfterIt) {
-    auto first = std::make_unique<detail::ScopeGuard>("a", "1");
-    auto second = std::make_unique<detail::ScopeGuard>("b", "2");
+    auto first = std::make_unique<ScopedTag>("a", "1");
+    auto second = std::make_unique<ScopedTag>("b", "2");
     first.reset();
     log_to(_core, "after the first guard");
     second.reset();

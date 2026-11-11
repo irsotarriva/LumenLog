@@ -92,10 +92,10 @@ writes batches of lines and flushes the stream (`lumen/writer_statistics.hpp`).
 - `flush()` waits as long as the stream blocks, except after the sink
   received a fatal record: then it gives up after `lumen::fatal_flush_timeout`
   (2 s), and the lines not written by then are lost with the process. With
-  standard error on a pipe nobody reads, the fatal path still reaches
-  `std::terminate`; the C++ library's default terminate handler then writes
-  its own message to standard error, which can block in turn (that handler
-  is the application's choice).
+  standard error on a pipe nobody reads, the fatal path still ends the
+  process: unless the application installed a terminate handler of its own,
+  Lumen calls `std::abort()` rather than the C++ library's default terminate
+  handler, whose message to standard error would block.
 - The destructor writes what is still queued, then stops the thread. It
   waits for the stream as long as the stream blocks.
 - `create` fails with the error `std::thread` reports
@@ -342,7 +342,9 @@ flight, above the most recent log lines in their level's colour.
   dashboard exists, Lumen's terminate handler restores the terminal of every
   live dashboard and writes their log lines (this covers a fatal record that
   the dashboard's predicate filtered out, and an uncaught exception), then
-  calls the handler installed before it; an application that calls
+  calls the handler installed before it (with no exception active and the
+  C++ library's default handler before it, `std::abort()` instead, for the
+  reason above); an application that calls
   `std::set_terminate` after creating a dashboard replaces it. A function
   registered with `std::atexit` restores the terminal when the process exits
   with the sink still alive (`std::exit`, or a Core that is never

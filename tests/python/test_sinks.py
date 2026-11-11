@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import tempfile
+import threading
 import unittest
 
 from support import Capture, LumenTestCase, lumen
@@ -211,6 +212,37 @@ class LibrarySinkTest(LumenTestCase):
         after = sink.statistics()
         self.assertEqual((after.lines_queued, after.lines_written, after.lines_dropped,
                           after.lines_failed), (1, 1, 0, 0))
+
+    def test_sink_diagnostics_reach_a_python_handler_on_the_writer_thread(self):
+        lines = []
+        config = lumen.FileConfig(self._path("diagnosed"), max_queued_lines=1)
+        config.diagnostics = lambda line: lines.append((line, threading.get_ident()))
+        sink = lumen.FileSink(config)
+        sink_id = self.add_sink(sink)
+        del sink
+        for i in range(2000):
+            lumen.info(f"line {i}")
+        lumen.core().flush()
+        sink = lumen.core().remove_sink(sink_id)
+        self.assertGreater(sink.statistics().lines_dropped, 0)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("lumen: FileSink: output queue full", lines[0][0])
+        self.assertNotEqual(lines[0][1], threading.get_ident())
+
+    def test_sink_diagnostics_field_reads_back_the_handler_none_or_the_default(self):
+        def handler(line):
+            pass
+
+        for config in (lumen.TerminalConfig(), lumen.FileConfig(self._path("fields"))):
+            self.assertIs(config.diagnostics, lumen.stderr_diagnostics)
+            config.diagnostics = handler
+            self.assertIs(config.diagnostics, handler)
+            config.diagnostics = None
+            self.assertIsNone(config.diagnostics)
+            config.diagnostics = lumen.stderr_diagnostics
+            self.assertIs(config.diagnostics, lumen.stderr_diagnostics)
+            with self.assertRaises(TypeError):
+                config.diagnostics = "not callable"
 
     def test_file_sink_in_a_missing_directory_raises_file_open_error(self):
         missing = os.path.join(self.directory.name, "no such dir", "x.log")

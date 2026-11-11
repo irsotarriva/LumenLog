@@ -19,6 +19,16 @@ bool RecordQueues::has_pending() const noexcept {
            progress_.queue.head_position() != progress_.queue.tail_position();
 }
 
+uint64_t RecordQueues::queued() const noexcept {
+    return logs_.queue.size() + metrics_.queue.size() + progress_.queue.size();
+}
+
+void RecordQueues::discard_in_fork_child() noexcept {
+    logs_.queue.discard_in_fork_child();
+    metrics_.queue.discard_in_fork_child();
+    progress_.queue.discard_in_fork_child();
+}
+
 uint64_t RecordQueues::refused_when_full() const noexcept {
     return logs_.queue.rejected_count() + metrics_.queue.rejected_count() +
            progress_.queue.rejected_count();

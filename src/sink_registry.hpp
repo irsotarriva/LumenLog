@@ -43,12 +43,6 @@ struct SinkEntry {
 
 using Registry = std::vector<std::shared_ptr<SinkEntry>>;
 
-// The registry at one version.
-struct RegistrySnapshot {
-    std::shared_ptr<const Registry> sinks;
-    uint64_t version = 0;
-};
-
 // The sinks of one Core. The registry is an immutable vector replaced on
 // every change and versioned, so the delivering thread can keep a snapshot
 // and refresh it only when the version moved. Its mutex is held only to read
@@ -77,9 +71,20 @@ public:
     void destroy_sinks() noexcept;
 
     // For the delivering thread's snapshot: the version alone, without the
-    // lock, and the registry with its version, read together under it.
+    // lock; and, under it, `held` and `version` replaced by the registry and
+    // its version. Returns the snapshot `held` had, for the caller to
+    // release after the lock (it may hold the last reference to an entry).
     [[nodiscard]] uint64_t version() const noexcept;
-    [[nodiscard]] RegistrySnapshot snapshot() const;
+    [[nodiscard]] std::shared_ptr<const Registry> refresh(std::shared_ptr<const Registry>& held,
+                                                          uint64_t& version) const;
+
+    // Fork handlers (src/fork_handlers.hpp). In the child, the caller holds
+    // the lock lock_for_fork() returned; a callback that was running in the
+    // parent is not running in the child, so no registered sink is busy.
+    // (Not for a child whose forking thread was inside a callback of this
+    // Core: that callback is still running there.)
+    [[nodiscard]] std::unique_lock<std::mutex> lock_for_fork();
+    void clear_busy_in_fork_child() noexcept;
 
 private:
     // Caller holds mutex_.

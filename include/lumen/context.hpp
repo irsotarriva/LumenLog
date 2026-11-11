@@ -5,6 +5,8 @@
 #include <string_view>
 #include <system_error>
 
+#include "lumen/detail/context.hpp"
+
 // Ambient context: tags that Core adds to every record without the logging
 // statement naming them, in four layers (2-5 below) under the record's own
 // explicit tags (1). When a record is submitted,
@@ -73,6 +75,28 @@ void clear_process_tags();
 
 // Removes every tag of the calling thread's layer.
 void clear_thread_tags();
+
+// Adds key=value to the calling thread's scope layer (3 above) for its
+// lifetime: what LUMEN_SCOPE(key, value) declares, as an object that other
+// code (a binding to another language) can hold. Both strings are copied.
+// It must be destroyed on the thread that created it, after every ScopedTag
+// created after it on that thread; lumen/macros.hpp ("Scope rules") states
+// what happens otherwise. After the calling thread's context has been
+// destroyed (see Lifetime above) it adds nothing.
+class ScopedTag {
+public:
+    ScopedTag(std::string_view key, std::string_view value)
+        : frame_(detail::push_scope(key, value)) {}
+    ~ScopedTag() { detail::pop_scope(frame_); }
+
+    ScopedTag(const ScopedTag&) = delete;
+    ScopedTag& operator=(const ScopedTag&) = delete;
+    ScopedTag(ScopedTag&&) = delete;
+    ScopedTag& operator=(ScopedTag&&) = delete;
+
+private:
+    detail::FrameToken frame_;
+};
 
 }  // namespace lumen
 

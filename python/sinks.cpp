@@ -3,14 +3,15 @@
 // here alone.
 //
 // The configurations own their strings and paths, so binding their fields
-// directly copies Python's values. The configurations' `output` stream and
-// `diagnostics` handler are not bound: terminal output goes to stderr, and
-// a sink's diagnostics go to the default handler (stderr).
+// directly copies Python's values. The configurations' `output` stream is
+// not bound: terminal output goes to stderr. Their `diagnostics` handler is
+// a Python callable, None or stderr_diagnostics (python/python_diagnostics.hpp).
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl/filesystem.h>
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -27,12 +28,29 @@
 #include "lumen/terminal_sink.hpp"
 #include "lumen/terminal_style.hpp"
 #include "lumen/writer_statistics.hpp"
+#include "python_diagnostics.hpp"
 #include "registration.hpp"
 
 namespace py = pybind11;
 
 namespace lumen::python {
 namespace {
+
+// The `diagnostics` property of a sink configuration. A Python handler is
+// called on the sink's writer thread, with the rules of PythonDiagnostics.
+template <typename Config>
+    requires std::same_as<Config, TerminalSink::Config> || std::same_as<Config, FileSink::Config>
+void bind_diagnostics(py::class_<Config>& config) {
+    config.def_property(
+        "diagnostics", [](const Config& c) { return diagnostics_to_python(c.diagnostics); },
+        [](Config& c, const py::object& value) {
+            bool calls_python = false;
+            c.diagnostics = diagnostics_from_python(value, calls_python);
+        },
+        "Receives one str about the first lost line and the first failed write, on the "
+        "sink's writer thread (an exception it raises goes to sys.unraisablehook); None "
+        "discards them; stderr_diagnostics, the default, writes them to stderr.");
+}
 
 void register_enums(py::module_& m) {
     py::enum_<AnsiColor>(m, "AnsiColor")
@@ -63,10 +81,11 @@ void register_enums(py::module_& m) {
 
 void register_configs(py::module_& m) {
     using TerminalConfig = TerminalSink::Config;
-    py::class_<TerminalConfig>(m, "TerminalConfig",
-                               "Settings of a TerminalSink (lumen/terminal_sink.hpp). Lines go "
-                               "to stderr.")
-        .def(py::init<>())
+    py::class_<TerminalConfig> terminal(m, "TerminalConfig",
+                                        "Settings of a TerminalSink (lumen/terminal_sink.hpp). "
+                                        "Lines go to stderr.");
+    bind_diagnostics(terminal);
+    terminal.def(py::init<>())
         .def_readwrite("color", &TerminalConfig::color)
         .def_readwrite("colors", &TerminalConfig::colors)
         .def_readwrite("time_format", &TerminalConfig::time_format)
@@ -77,10 +96,11 @@ void register_configs(py::module_& m) {
 
     using FileConfig = FileSink::Config;
     const FileConfig defaults;
-    py::class_<FileConfig>(m, "FileConfig",
-                           "Settings of a FileSink (lumen/file_sink.hpp). `path` is a str or "
-                           "os.PathLike; \"{date}\" in it becomes the UTC date.")
-        .def(py::init([](std::filesystem::path path, FileFormat format, uint64_t max_file_bytes,
+    py::class_<FileConfig> file(m, "FileConfig",
+                                "Settings of a FileSink (lumen/file_sink.hpp). `path` is a str "
+                                "or os.PathLike; \"{date}\" in it becomes the UTC date.");
+    bind_diagnostics(file);
+    file.def(py::init([](std::filesystem::path path, FileFormat format, uint64_t max_file_bytes,
                          uint32_t max_files, std::size_t max_queued_lines) {
                  FileConfig c;
                  c.path = std::move(path);

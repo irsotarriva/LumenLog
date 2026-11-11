@@ -1,7 +1,10 @@
 #include "delivery.hpp"
 
+#include <chrono>
 #include <concepts>
+#include <cstdint>
 #include <exception>
+#include <memory>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -77,8 +80,61 @@ void offer_to_remaining_sinks(const R& record, InFlight& in_flight, FirstReports
 
 }  // namespace
 
+// Cycles longer than this are not looked for; none of that length is
+// expected between the Cores of one program.
+inline constexpr uint32_t max_cycle_length = 64;
+
+Delivery::Waiting::Waiting(const Delivery& target) noexcept : target_(&target) {
+    for (DeliveryFrame* frame = innermost_delivery_frame(); frame != nullptr;
+         frame = frame->outer) {
+        frame->owner->waits_for_.store(&target, std::memory_order_seq_cst);
+        marked_ = true;
+    }
+}
+
+Delivery::Waiting::~Waiting() {
+    for (DeliveryFrame* frame = innermost_delivery_frame(); frame != nullptr;
+         frame = frame->outer) {
+        frame->owner->waits_for_.store(nullptr, std::memory_order_seq_cst);
+    }
+}
+
+bool Delivery::Waiting::in_cycle() const noexcept {
+    const Delivery* current = target_;
+    for (uint32_t step = 0; step < max_cycle_length; ++step) {
+        const Delivery* const next = current->waits_for_.load(std::memory_order_seq_cst);
+        if (next == nullptr) {
+            return false;
+        }
+        if (delivery_frame_for(*next) != nullptr) {
+            return true;
+        }
+        current = next;
+    }
+    return false;
+}
+
+bool Delivery::Session::try_lock_within_(std::unique_lock<std::mutex>& lock,
+                                         std::chrono::milliseconds limit) {
+    constexpr std::chrono::microseconds poll_interval{200};
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    while (!lock.try_lock()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(poll_interval);
+    }
+    return true;
+}
+
 bool Delivery::delivering_here() const noexcept {
     return delivery_frame_for(*this) != nullptr;
+}
+
+void Delivery::reset_in_fork_child() noexcept {
+    std::construct_at(&mutex_);
+    waits_for_.store(nullptr, std::memory_order_relaxed);
+    snapshot_loops_ = 0;
 }
 
 uint64_t Delivery::deliver_up_to(const QueuePositions& targets) {
@@ -109,6 +165,7 @@ void Delivery::flush_sinks() {
     ++snapshot_loops_;
     for (const std::shared_ptr<SinkEntry>& entry : sinks) {
         call_sink(*entry, "flush", *reports_, [&] { entry->sink->flush(); });
+        count_progress_();
     }
     --snapshot_loops_;
 }
@@ -129,6 +186,7 @@ void Delivery::dispatch_(InFlight::Record record) {
     const InFlight outer = std::exchange(frame->in_flight, InFlight{record, &snapshot_(), 0});
     continue_(frame->in_flight);
     frame->in_flight = outer;
+    count_progress_();
 }
 
 void Delivery::continue_(InFlight& in_flight) {
@@ -146,9 +204,10 @@ void Delivery::continue_(InFlight& in_flight) {
 
 const Registry& Delivery::snapshot_() {
     if (snapshot_loops_ == 0 && registry_->version() != snapshot_version_) {
-        RegistrySnapshot current = registry_->snapshot();
-        snapshot_sinks_ = std::move(current.sinks);
-        snapshot_version_ = current.version;
+        // The replaced snapshot is released here, after the registry's lock:
+        // it may hold the last reference to a removed sink's entry.
+        const std::shared_ptr<const Registry> replaced =
+            registry_->refresh(snapshot_sinks_, snapshot_version_);
     }
     return *snapshot_sinks_;
 }

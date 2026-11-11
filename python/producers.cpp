@@ -115,8 +115,9 @@ void register_logging(py::module_& m) {
     }
     m.def("fatal", &fatal, py::arg("message"), py::kw_only(), py::arg("tags") = py::none(),
           "Log `message` at FATAL and terminate the process: every record queued before it "
-          "and then this one are delivered to every sink, the sinks are flushed, and "
-          "std::terminate() aborts the process (SIGABRT). Never returns; Python cleanup "
+          "and then this one are delivered to every sink, the sinks are flushed, and the "
+          "process ends with SIGABRT (std::abort(), or std::terminate() when a C++ terminate "
+          "handler other than the default is installed). Never returns; Python cleanup "
           "(finally blocks, atexit) does not run.");
     m.def("set_source_capture", &set_source_capture, py::arg("enabled"),
           "Turn recording of the calling file, line and function on (the default) or off. "

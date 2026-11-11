@@ -1,10 +1,13 @@
 #ifndef LUMEN_SRC_DELIVERY_HPP
 #define LUMEN_SRC_DELIVERY_HPP
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 #include "delivery_stack.hpp"
 #include "first_reports.hpp"
@@ -30,21 +33,79 @@ public:
     // this Delivery, for its lifetime.
     class Session {
     public:
-        explicit Session(Delivery& delivery) : lock_(delivery.mutex_), scope_(delivery) {}
+        explicit Session(Delivery& delivery) : lock_(delivery.mutex_) { scope_.emplace(delivery); }
+        // Tries for at most `limit`; owns() says whether it got the lock.
+        Session(Delivery& delivery, std::chrono::milliseconds limit)
+            : lock_(delivery.mutex_, std::defer_lock) {
+            if (try_lock_within_(lock_, limit)) {
+                scope_.emplace(delivery);
+            }
+        }
         ~Session() = default;
         Session(const Session&) = delete;
         Session& operator=(const Session&) = delete;
         Session(Session&&) = delete;
         Session& operator=(Session&&) = delete;
 
+        [[nodiscard]] bool owns() const noexcept { return lock_.owns_lock(); }
+
     private:
-        std::scoped_lock<std::mutex> lock_;
-        DeliveryScope scope_;
+        // Polls try_lock() rather than using a std::timed_mutex: GCC 13's
+        // ThreadSanitizer does not see a lock taken by try_lock_for
+        // (pthread_mutex_clocklock) and reports its unlock as an error. The
+        // wait is bounded only on paths that give up (shutdown, a fatal
+        // record, a flush looking for a cycle), so polling costs nothing
+        // on the hot path.
+        [[nodiscard]] static bool try_lock_within_(std::unique_lock<std::mutex>& lock,
+                                                   std::chrono::milliseconds limit);
+
+        std::unique_lock<std::mutex> lock_;
+        std::optional<DeliveryScope> scope_;
+    };
+
+    // While it lives, marks every Delivery the calling thread holds a
+    // Session of (none, for a thread outside any callback) as waiting for
+    // `target`, so that in_cycle() can see a cycle of waits between Cores:
+    // the thread delivering for X waits for Y, whose delivering thread waits
+    // for X. The marks are stored and read sequentially consistently, so of
+    // two threads that mark and then look, at least one sees the other.
+    class Waiting {
+    public:
+        explicit Waiting(const Delivery& target) noexcept;
+        ~Waiting();
+        Waiting(const Waiting&) = delete;
+        Waiting& operator=(const Waiting&) = delete;
+        Waiting(Waiting&&) = delete;
+        Waiting& operator=(Waiting&&) = delete;
+
+        // Whether the calling thread delivers for any Delivery (so that it
+        // can be part of a cycle at all).
+        [[nodiscard]] bool can_be_in_cycle() const noexcept { return marked_; }
+        // Whether following the marks from `target` leads back to a Delivery
+        // the calling thread holds: waiting would then never end.
+        [[nodiscard]] bool in_cycle() const noexcept;
+
+    private:
+        const Delivery* target_;  // non-owning
+        bool marked_ = false;
     };
 
     // Whether the calling thread holds a Session of this Delivery anywhere on
     // its stack.
     [[nodiscard]] bool delivering_here() const noexcept;
+
+    // Records delivered and sink flushes made so far; it moves while
+    // delivery makes progress. Any thread.
+    [[nodiscard]] uint64_t progress() const noexcept {
+        return progress_.load(std::memory_order_relaxed);
+    }
+
+    // Fork handler (src/fork_handlers.hpp), for a child in which the calling
+    // thread holds no Session of this Delivery: whoever held one was a
+    // thread of the parent, so the lock is re-initialised. The snapshot is
+    // kept; SinkRegistry replaces it under its own lock, which the fork
+    // handlers hold, so it is whole.
+    void reset_in_fork_child() noexcept;
 
     // One pass up to `targets`; stops early at a record not yet published.
     // Returns how many records were delivered.
@@ -71,12 +132,19 @@ private:
     // Hands the frame's record to the sinks it has not been offered to yet.
     void continue_(InFlight& in_flight);
     [[nodiscard]] const Registry& snapshot_();
+    void count_progress_() noexcept {
+        progress_.store(progress_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+    }
 
     RecordQueues* queues_;    // non-owning: the Core's
     SinkRegistry* registry_;  // non-owning: the Core's
     FirstReports* reports_;   // non-owning: the Core's
 
     std::mutex mutex_;  // held by a Session
+    // The Delivery whose progress the thread holding a Session of this one
+    // waits for (see Waiting), or null.
+    mutable std::atomic<const Delivery*> waits_for_{nullptr};
+    std::atomic<uint64_t> progress_{0};  // written by the Session holder
     // The registry as the delivering thread sees it: a snapshot refreshed
     // when the registry's version moves, so delivering a record takes no
     // lock. A callback that adds or removes a sink replaces the registry,

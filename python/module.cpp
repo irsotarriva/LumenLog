@@ -17,7 +17,8 @@ PYBIND11_MODULE(lumen_bindings, m) {
         "Sinks: subclass Sink or use CallbackSink, or use the library's sinks; register them "
         "with core().add_sink(sink, predicate).\n\n"
         "Errors are raised as LumenError subclasses: InvalidSinkIdError (also a LookupError), "
-        "SinkBusyError, TagTableFullError, InvalidPredicateError and InvalidSinkConfigError "
+        "SinkBusyError, FlushTimedOutError (also a TimeoutError), TagTableFullError, "
+        "InvalidPredicateError and InvalidSinkConfigError "
         "(both also ValueErrors) and FileOpenError (also an OSError); an operating-system "
         "error as OSError. A wrong argument type, or an int its parameter cannot hold, raises "
         "TypeError; a tag value int outside int64 and uint64 raises OverflowError.\n\n"
@@ -27,6 +28,7 @@ PYBIND11_MODULE(lumen_bindings, m) {
         "ends.";
 
     lumen::python::register_errors(m);
+    lumen::python::register_diagnostics(m);
     lumen::python::register_records(m);
     lumen::python::register_predicates(m);
     lumen::python::register_python_sinks(m);

@@ -16,6 +16,7 @@
 #include "lumen/error.hpp"
 #include "lumen/file_sink.hpp"
 #include "lumen/terminal_sink.hpp"
+#include "next_pthread_create.hpp"
 #include "sink_test_support.hpp"
 
 #ifdef LUMEN_TEST_DASHBOARD
@@ -30,8 +31,6 @@ namespace {
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<bool> refuse_threads{false};
 
-using PthreadCreate = int (*)(pthread_t*, const pthread_attr_t*, void* (*)(void*), void*);
-
 }  // namespace
 
 // The C library's declaration names its parameters with reserved identifiers.
@@ -41,9 +40,7 @@ extern "C" int pthread_create(pthread_t* thread, const pthread_attr_t* attribute
     if (refuse_threads.load()) {
         return EAGAIN;
     }
-    // The next definition: the C library's, or a sanitizer's interceptor.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): dlsym returns void*
-    static const auto next = reinterpret_cast<PthreadCreate>(dlsym(RTLD_NEXT, "pthread_create"));
+    static const lumen::test::PthreadCreate next = lumen::test::next_pthread_create();
     return next(thread, attributes, start, argument);
 }
 

@@ -30,6 +30,7 @@ constexpr std::array error_messages = std::to_array<ErrorMessage>({
     {LumenError::IoError, "write to the sink's destination failed"},
     {LumenError::NotATerminal, "destination is not a terminal"},
     {LumenError::CoreShutDown, "the core has shut down"},
+    {LumenError::FlushTimedOut, "the flush did not finish in time"},
 });
 
 [[nodiscard]] consteval bool indexed_by_value() {

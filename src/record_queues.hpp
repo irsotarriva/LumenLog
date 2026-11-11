@@ -61,13 +61,22 @@ public:
     // Whether every queue's tail has reached `targets`.
     [[nodiscard]] bool reached(const QueuePositions& targets) const noexcept;
     [[nodiscard]] bool has_pending() const noexcept;
+    // Records queued and not yet popped, over the three queues.
+    [[nodiscard]] uint64_t queued() const noexcept;
     [[nodiscard]] uint64_t refused_when_full() const noexcept;
+
+    // Fork handler (src/fork_handlers.hpp), in the child: the records queued
+    // at the fork are the parent's to deliver, so the child's copies are
+    // destroyed undelivered (and not counted again), and the queues start
+    // empty at the positions they had reached.
+    void discard_in_fork_child() noexcept;
 
     template <RecordType R>
     [[nodiscard]] QueueStatistics statistics() const noexcept {
         const auto& lane = lane_<R>();
         return QueueStatistics{lane.queue.head_position(), lane.queue.rejected_count(),
-                               lane.after_shutdown.load(std::memory_order_relaxed)};
+                               lane.after_shutdown.load(std::memory_order_relaxed),
+                               lane.queue.size()};
     }
 
 private:

@@ -41,14 +41,14 @@
 //
 // Fatal. A builder for a LogLevel::Fatal record does not queue it. Its
 // destructor delivers, on the calling thread, every record queued before it,
-// then the fatal record, then flushes every sink, and then calls
-// std::terminate(). If it runs inside a sink callback of the same Core, the
-// sink whose callback is running is skipped (it is in the middle of a call
-// and may hold its own locks); every other sink first receives the record
-// that callback was being given, then the fatal record, and is flushed.
-// After the Core has shut down the record is only counted, and the program
-// still terminates. lumen/core.hpp ("Fatal records") states the order when
-// several threads raise fatal records at once.
+// then the fatal record, then flushes every sink, and then ends the
+// process with SIGABRT (std::abort(), or std::terminate() when the program
+// installed a terminate handler; lumen/core.hpp, "Fatal records"). If it runs inside a sink
+// callback of the same Core, the sink whose callback is running is skipped (it is in the middle of
+// a call and may hold its own locks); every other sink first receives the record that callback was
+// being given, then the fatal record, and is flushed. After the Core has shut down the record is
+// only counted, and the program still terminates. lumen/core.hpp ("Fatal records") states the order
+// when several threads raise fatal records at once.
 
 namespace lumen {
 

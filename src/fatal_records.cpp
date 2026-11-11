@@ -52,6 +52,17 @@ void FatalRecords::deliver_announced_(Delivery& delivery) {
     }
 }
 
+std::unique_lock<std::mutex> FatalRecords::lock_for_fork() {
+    return std::unique_lock(mutex_);
+}
+
+void FatalRecords::reset_in_fork_child() noexcept {
+    mailbox_.clear();
+    // The child delivers from here on as if every earlier fatal record had
+    // been delivered; statistics() still counts them (announced()).
+    delivered_ = announced_.load(std::memory_order_relaxed);
+}
+
 uint64_t FatalRecords::announced() const noexcept {
     return announced_.load(std::memory_order_relaxed);
 }

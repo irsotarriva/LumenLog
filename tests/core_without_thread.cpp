@@ -16,6 +16,7 @@
 
 #include "lumen/core.hpp"
 #include "lumen/thread_clock.hpp"
+#include "next_pthread_create.hpp"
 #include "test_support.hpp"
 
 namespace {
@@ -33,11 +34,8 @@ extern "C" int pthread_create(pthread_t* thread, const pthread_attr_t* attribute
     if (refuse_threads.load()) {
         return EAGAIN;
     }
-    using Create = int (*)(pthread_t*, const pthread_attr_t*, void* (*)(void*), void*);
-    // dlsym returns the next definition as an untyped pointer.
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    static const auto real = reinterpret_cast<Create>(dlsym(RTLD_NEXT, "pthread_create"));
-    return real(thread, attributes, start, argument);
+    static const lumen::test::PthreadCreate next = lumen::test::next_pthread_create();
+    return next(thread, attributes, start, argument);
 }
 
 namespace lumen {

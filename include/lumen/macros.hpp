@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "lumen/config.hpp"
+#include "lumen/context.hpp"
 #include "lumen/core.hpp"
 #include "lumen/detail/scope_stack.hpp"
 #include "lumen/level.hpp"
@@ -150,7 +151,7 @@ inline constexpr LogLevel compiled_min_level = static_cast<LogLevel>(LUMEN_MIN_L
 #endif
 
 #define LUMEN_SCOPE(key, value) \
-    const lumen::detail::ScopeGuard LUMEN_CONCAT(lumen_scope_, __COUNTER__)(key, value)
+    const lumen::ScopedTag LUMEN_CONCAT(lumen_scope_, __COUNTER__)(key, value)
 
 #define LUMEN_MEMBER_SCOPE const auto LUMEN_CONCAT(lumen_member_, __COUNTER__) = lumen_scope()
 

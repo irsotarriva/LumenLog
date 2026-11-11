@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "lumen/core.hpp"
+#include "lumen/diagnostics.hpp"
 
 namespace lumen::detail {
 
@@ -28,6 +28,13 @@ public:
 
     // An empty handler discards the lines.
     void set_handler(DiagnosticHandler handler);
+
+    // Fork handlers (src/fork_handlers.hpp). In the child, the caller holds
+    // the lock lock_for_fork() returned. A line still pending was reported
+    // in the parent, whose drainer passes it on; the child drops it, and
+    // nobody drains in the child yet.
+    [[nodiscard]] std::unique_lock<std::mutex> lock_for_fork();
+    void reset_in_fork_child() noexcept;
 
 private:
     void drain_();
