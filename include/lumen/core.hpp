@@ -74,8 +74,13 @@
 // destroys its sinks. A record submitted after that (for instance from the
 // destructor of a static object that was constructed before the first use of
 // core()) is not delivered: it is counted in
-// statistics().<kind>.dropped_after_shutdown, and that is all. This is well
-// defined; nothing touches a destroyed object.
+// statistics().<kind>.dropped_after_shutdown, and that is all; it is neither
+// stamped nor merged with the ambient context. The Core object itself is
+// never destroyed, so a record submitted at any point of static destruction
+// reaches a valid Core. A record submitted before the shutdown point (from a
+// static destroyed earlier, or from a thread_local destructor) is submitted
+// as usual, which reads the calling thread's ambient context: whether that
+// context is still readable then is stated in lumen/context.hpp, not here.
 //
 // A Core you construct yourself shuts down the same way in its destructor.
 // Producers must not use it after that (they hold a reference to it).
