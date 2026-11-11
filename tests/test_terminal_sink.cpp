@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -22,21 +23,43 @@ using test::log_record;
 using test::metric_record;
 using test::progress_record;
 
-// Diagnostic lines a sink reported, shared with its handler.
-struct Reported {
-    std::mutex mutex;
-    std::vector<std::string> lines;  // guarded by mutex
-
-    [[nodiscard]] DiagnosticHandler handler() {
-        return [this](std::string_view line) {
-            const std::scoped_lock lock(mutex);
-            lines.emplace_back(line);
+// Diagnostic lines a sink reported. The handler shares ownership, so a sink
+// that outlives the test body (one owned by a Core) never reports into a
+// destroyed object.
+class Reported {
+public:
+    [[nodiscard]] DiagnosticHandler handler() const {
+        return [state = state_](std::string_view line) {
+            const std::scoped_lock lock(state->mutex);
+            state->lines.emplace_back(line);
         };
     }
-    [[nodiscard]] std::vector<std::string> all() {
-        const std::scoped_lock lock(mutex);
-        return lines;
+    [[nodiscard]] std::vector<std::string> all() const {
+        const std::scoped_lock lock(state_->mutex);
+        return state_->lines;
     }
+
+private:
+    struct State {
+        std::mutex mutex;
+        std::vector<std::string> lines;  // guarded by mutex
+    };
+    std::shared_ptr<State> state_ = std::make_shared<State>();
+};
+
+// Opens the gate when the test body ends, however it ends, so that a failed
+// assertion does not leave the sink's writer blocked while the Core flushes.
+class OpenAtExit {
+public:
+    explicit OpenAtExit(test::GateBuffer& gate) : gate_(gate) {}
+    ~OpenAtExit() { gate_.open(); }
+    OpenAtExit(const OpenAtExit&) = delete;
+    OpenAtExit& operator=(const OpenAtExit&) = delete;
+    OpenAtExit(OpenAtExit&&) = delete;
+    OpenAtExit& operator=(OpenAtExit&&) = delete;
+
+private:
+    test::GateBuffer& gate_;
 };
 
 class TerminalSinkTest : public ::testing::Test {
@@ -191,7 +214,7 @@ TEST_F(TerminalSinkTest, FailingStreamCountsEachLostLineAndReportsTheFirstFailur
     config.output = test::as_ostream(failing);
     const auto sink = _sink(std::move(config));
     ASSERT_NE(sink, nullptr);
-    for (int i = 0; i < 3; ++i) {
+    for (uint32_t i = 0; i < 3; ++i) {
         sink->on_log(log_record("lost"));
         sink->flush();
     }
@@ -230,7 +253,8 @@ TEST_F(TerminalSinkOnCoreTest, RecordsLoggedThroughACoreAreWrittenInOrderWhenFlu
 TEST_F(TerminalSinkOnCoreTest,
        BlockedOutputDelaysNoOtherSinkAndItsOverflowIsCountedAndReportedOnce) {
     const auto gate = test::make_stream_over<test::GateBuffer>();
-    Reported reported;
+    const OpenAtExit open_at_exit(gate->buffer);
+    const Reported reported;
     TerminalSink::Config config;
     config.output = test::as_ostream(gate);
     config.color = ColorMode::Never;
@@ -246,7 +270,7 @@ TEST_F(TerminalSinkOnCoreTest,
     test::log_to(_core, "1");
     ASSERT_TRUE(after->wait_for_logs(1, std::chrono::seconds(10)));
     gate->buffer.wait_until_entered();
-    for (int i = 2; i <= 10; ++i) {
+    for (uint32_t i = 2; i <= 10; ++i) {
         test::log_to(_core, std::to_string(i));
     }
     EXPECT_TRUE(after->wait_for_logs(10, std::chrono::seconds(10)));

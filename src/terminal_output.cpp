@@ -25,6 +25,8 @@ namespace {
 #endif
 }
 
+// Not on Windows, where Auto never colours (see ColorMode::Auto).
+#ifndef PLATFORM_WINDOWS
 // Read once per sink, at creation, from the thread creating it; nothing in
 // Lumen writes the environment.
 [[nodiscard]] std::string_view environment(const char* name) noexcept {
@@ -36,6 +38,7 @@ namespace {
     // https://no-color.org: set and not empty.
     return !environment("NO_COLOR").empty() || environment("TERM") == "dumb";
 }
+#endif
 
 }  // namespace
 

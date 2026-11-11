@@ -230,6 +230,7 @@ TEST_F(FileSinkTest, LineLongerThanTheLimitIsWrittenWholeIntoAnEmptyFile) {
     _log_numbered(*sink, 0, 2);
     EXPECT_EQ(_messages(_path("out.log")), (Messages{"m1"}));
     EXPECT_EQ(_messages(_path("out.log.1")), (Messages{"m0"}));
+    EXPECT_FALSE(std::filesystem::exists(_path("out.log.2")));  // the empty file was not rotated
 }
 
 // /dev/full accepts the open and fails every write with ENOSPC.
@@ -247,7 +248,7 @@ TEST_F(FileSinkTest, WriteErrorsAreCountedPerLineAndTheFirstIsReportedOnce) {
     };
     const auto sink = _sink(std::move(config));
     ASSERT_NE(sink, nullptr);
-    for (int i = 0; i < 3; ++i) {
+    for (uint32_t i = 0; i < 3; ++i) {
         sink->on_log(log_record("lost"));
         sink->flush();
     }

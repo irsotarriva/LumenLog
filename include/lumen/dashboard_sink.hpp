@@ -64,7 +64,8 @@ public:
         std::string time_format = "%H:%M:%S";
         TimeZone time_zone = TimeZone::Local;
         std::vector<std::string> inline_tags;
-        // Receives the first failed frame write and the first failed draw.
+        // Receives one line about the first failed draw or write; later
+        // failures are only counted (frames_failed()).
         DiagnosticHandler diagnostics = stderr_diagnostics();
     };
 
@@ -93,8 +94,9 @@ public:
     void on_progress(const ProgressRecord& record) override;
     void flush() override;
 
-    // Frames written without an error, and frames lost to a failed draw or
-    // write. Safe to call from any thread.
+    // Frames written without an error, and writes lost to a failed draw or a
+    // stream error (frames, and the escapes that switch screens). Safe to
+    // call from any thread.
     [[nodiscard]] uint64_t frames_written() const noexcept;
     [[nodiscard]] uint64_t frames_failed() const noexcept;
 
