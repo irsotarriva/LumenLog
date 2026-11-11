@@ -1,11 +1,11 @@
 #ifndef LUMEN_SRC_RECORD_PREPARATION_HPP
 #define LUMEN_SRC_RECORD_PREPARATION_HPP
 
-#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -44,7 +44,11 @@ void own_strings(R& record, std::span<std::string_view* const> texts) {
     auto block = std::make_shared_for_overwrite<char[]>(total);
     std::span<char> out(block.get(), total);
     auto copy = [&out](std::string_view s) {
-        std::ranges::copy(s, out.begin());
+        // memcpy rather than std::ranges::copy, which GCC compiles to a
+        // byte-by-byte loop here.
+        if (!s.empty()) {
+            std::memcpy(out.data(), s.data(), s.size());
+        }
         out[s.size()] = '\0';
         const std::string_view owned(out.data(), s.size());
         out = out.subspan(s.size() + 1);
