@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "lumen/error.hpp"
+#include "text_encoding.hpp"
 
 namespace lumen::detail {
 
@@ -22,8 +23,18 @@ constexpr uint64_t ns_per_millisecond = 1'000'000;
 constexpr uint64_t seconds_per_day = 86'400;
 
 // The std::strftime conversions that take no E or O modifier. Anything else
-// after '%' is undefined behaviour for std::strftime, so it is refused.
-constexpr std::string_view strftime_conversions = "aAbBcCdDeFgGhHIjmMnprRStTuUVwWxXyYzZ%";
+// after '%' is undefined behaviour for std::strftime, so it is refused. %n
+// and %t are left out too: they write a newline and a tab, and a record is
+// one line whose control characters are escaped.
+constexpr std::string_view strftime_conversions = "aAbBcCdDeFgGhHIjmMprRSTuUVwWxXyYzZ%";
+
+// A buffer of this size holds what std::strftime writes for a run of
+// ordinary length; a longer run is retried in a buffer of the run's own size.
+constexpr std::size_t short_result = 256;
+// The most one character of a pattern can produce: %c, the longest
+// conversion, writes about 25 characters per two pattern characters in the
+// "C" locale; locale names (%B, %Z) stay well below this per character.
+constexpr std::size_t max_result_per_pattern_char = 64;
 
 [[nodiscard]] std::optional<std::tm> calendar_time(uint64_t timestamp_ns, TimeZone zone) noexcept {
     const auto seconds = static_cast<std::time_t>(timestamp_ns / ns_per_second);
@@ -41,19 +52,26 @@ constexpr std::string_view strftime_conversions = "aAbBcCdDeFgGhHIjmMnprRStTuUVw
     return calendar;
 }
 
-// Returns false if the result does not fit the buffer. std::strftime returns
-// 0 both for that and for an empty result (%p in some locales), so a trailing
-// space is added to the pattern and removed from the result.
+// Returns false if the result does not fit even the large buffer, which a
+// run of accepted conversions cannot fill. std::strftime returns 0 both for
+// a result that does not fit and for an empty one (%p in some locales), so a
+// trailing space is added to the pattern and removed from the result.
 [[nodiscard]] bool append_strftime(std::string& out, const std::string& pattern,
                                    const std::tm& calendar) {
     const std::string padded = pattern + ' ';
-    std::array<char, 256> buffer{};
-    const std::size_t written =
-        std::strftime(buffer.data(), buffer.size(), padded.c_str(), &calendar);
+    std::array<char, short_result> buffer{};
+    std::size_t written = std::strftime(buffer.data(), buffer.size(), padded.c_str(), &calendar);
+    if (written > 0) {
+        out.append(buffer.data(), written - 1);
+        return true;
+    }
+    // Rare: a run of more than about 250 characters.
+    std::string large(padded.size() * max_result_per_pattern_char, '\0');
+    written = std::strftime(large.data(), large.size(), padded.c_str(), &calendar);
     if (written == 0) {
         return false;
     }
-    out.append(buffer.data(), written - 1);
+    out.append(large.data(), written - 1);
     return true;
 }
 
@@ -84,8 +102,20 @@ std::expected<TimeFormat, std::error_code> TimeFormat::parse(std::string_view pa
     return TimeFormat(std::move(*pieces), zone);
 }
 
+std::optional<TimeFormat::PieceKind> TimeFormat::subsecond_kind_(char conversion) noexcept {
+    switch (conversion) {
+        case 'L': return PieceKind::Milliseconds;
+        case 'N': return PieceKind::Nanoseconds;
+        default:  return std::nullopt;
+    }
+}
+
 std::expected<std::vector<TimeFormat::Piece>, std::error_code> TimeFormat::split_(
     std::string_view pattern) {
+    if (pattern.find('\0') != std::string_view::npos) {
+        // std::strftime would stop at it and silently drop the rest.
+        return std::unexpected(make_error_code(LumenError::InvalidSinkConfig));
+    }
     std::vector<Piece> pieces;
     std::string run;
     const auto end_run = [&] {
@@ -94,19 +124,24 @@ std::expected<std::vector<TimeFormat::Piece>, std::error_code> TimeFormat::split
             run.clear();
         }
     };
-    for (std::size_t i = 0; i < pattern.size(); ++i) {
-        if (pattern[i] != '%') {
-            run += pattern[i];
-            continue;
+    std::size_t next = 0;
+    while (next < pattern.size()) {
+        const std::size_t percent = std::min(pattern.find('%', next), pattern.size());
+        // Literal text is escaped once, here, as a message is, so that the
+        // time column can neither break the line nor drive a terminal. The
+        // escapes contain no '%'.
+        append_text_escaped(run, pattern.substr(next, percent - next));
+        if (percent == pattern.size()) {
+            break;
         }
-        if (++i == pattern.size()) {
+        if (percent + 1 == pattern.size()) {
             return std::unexpected(make_error_code(LumenError::InvalidSinkConfig));
         }
-        const char conversion = pattern[i];
-        if (conversion == 'L' || conversion == 'N') {
+        const char conversion = pattern[percent + 1];
+        next = percent + 2;
+        if (const std::optional<PieceKind> subsecond = subsecond_kind_(conversion)) {
             end_run();
-            pieces.push_back(
-                {conversion == 'L' ? PieceKind::Milliseconds : PieceKind::Nanoseconds, {}});
+            pieces.push_back({*subsecond, {}});
             continue;
         }
         if (strftime_conversions.find(conversion) == std::string_view::npos) {
@@ -119,9 +154,11 @@ std::expected<std::vector<TimeFormat::Piece>, std::error_code> TimeFormat::split
     return pieces;
 }
 
-// A run that does not fit the buffer for a sample time is too long for any
+// A run whose result does not fit for a sample time would not fit for any
 // time: the conversions' widths do not depend on the value, except for the
-// names (%Z, %B, ...), which are short.
+// names (%Z, %B, ...), which are short. With the large buffer of
+// append_strftime this does not happen for accepted conversions; the check
+// keeps a platform's surprise from reaching append().
 bool TimeFormat::fits_(const std::vector<Piece>& pieces) {
     // 1970-01-01: a zero-filled std::tm has day-of-month 0, which is not a
     // date, and std::strftime's behaviour is undefined for it.

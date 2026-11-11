@@ -1,15 +1,28 @@
 #include "terminal_output.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
+#include <optional>
 #include <streambuf>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #ifdef PLATFORM_WINDOWS
 #include <io.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #else
+#include <sys/ioctl.h>
 #include <unistd.h>
 #endif
 
@@ -23,6 +36,43 @@ namespace {
 #else
     return isatty(STDERR_FILENO) == 1;
 #endif
+}
+
+// The window size of the terminal on standard error, if it is one.
+[[nodiscard]] std::optional<TerminalSize> standard_error_size() noexcept {
+#ifdef PLATFORM_WINDOWS
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    const HANDLE console = GetStdHandle(STD_ERROR_HANDLE);
+    if (console == INVALID_HANDLE_VALUE || console == nullptr ||
+        GetConsoleScreenBufferInfo(console, &info) == 0) {
+        return std::nullopt;
+    }
+    const int32_t columns = int32_t{info.srWindow.Right} - int32_t{info.srWindow.Left} + 1;
+    const int32_t rows = int32_t{info.srWindow.Bottom} - int32_t{info.srWindow.Top} + 1;
+    if (columns <= 0 || rows <= 0 || columns > UINT16_MAX || rows > UINT16_MAX) {
+        return std::nullopt;
+    }
+    return TerminalSize{.columns = static_cast<uint16_t>(columns),
+                        .rows = static_cast<uint16_t>(rows)};
+#else
+    winsize size{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): ioctl(2) is variadic
+    if (ioctl(STDERR_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_col == 0 || size.ws_row == 0) {
+        return std::nullopt;
+    }
+    return TerminalSize{.columns = size.ws_col, .rows = size.ws_row};
+#endif
+}
+
+// Clears the stream's error state. With exceptions() enabled, clear() to
+// goodbit cannot throw; the guard is for a stream type that would.
+void clear_state(std::ostream& stream) noexcept {
+    try {
+        stream.clear();
+    } catch (...) {
+        // Nothing else can be done; the next write reports the state again.
+        return;
+    }
 }
 
 // Not on Windows, where Auto never colours (see ColorMode::Auto).
@@ -61,16 +111,44 @@ bool resolve_color(ColorMode mode, const OutputStream& output) noexcept {
 #endif
 }
 
-BatchOutcome write_and_flush(std::ostream& stream, std::span<const std::string> lines) {
-    for (const std::string& line : lines) {
-        stream.write(line.data(), static_cast<std::streamsize>(line.size()));
+std::optional<std::string> write_text(std::ostream& stream,
+                                      std::span<const std::string_view> pieces) noexcept {
+    std::optional<std::string> failure;
+    try {
+        for (const std::string_view piece : pieces) {
+            stream.write(piece.data(), static_cast<std::streamsize>(piece.size()));
+        }
+        stream.flush();
+        if (!stream.good()) {
+            failure = "the stream reported an error";
+        }
+    } catch (const std::exception& e) {
+        // A stream with exceptions() enabled throws instead of only setting
+        // its state; the state still has to be cleared below.
+        failure = std::string("the stream threw: ") + e.what();
+    } catch (...) {
+        failure = "the stream threw an exception";
     }
-    stream.flush();
-    if (stream.good()) {
+    if (failure) {
+        clear_state(stream);
+    }
+    return failure;
+}
+
+BatchOutcome write_and_flush(std::ostream& stream, std::span<const std::string> lines) {
+    std::vector<std::string_view> pieces(lines.begin(), lines.end());
+    std::optional<std::string> failure = write_text(stream, pieces);
+    if (!failure) {
         return {};
     }
-    stream.clear();
-    return {.failed_lines = lines.size(), .failure = "the stream reported an error"};
+    return {.failed_lines = lines.size(), .failure = std::move(*failure)};
+}
+
+std::optional<TerminalSize> OutputStream::terminal_size() const noexcept {
+    if (owned_) {
+        return std::nullopt;  // a caller's stream: no descriptor to ask
+    }
+    return standard_error_size();
 }
 
 }  // namespace lumen::detail

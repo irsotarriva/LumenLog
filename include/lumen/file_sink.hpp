@@ -24,9 +24,10 @@ enum class FileFormat : uint8_t {
     //   2026-11-11T10:00:00.123456789Z METRIC loss=0.25 epoch=3 [t3]
     //   2026-11-11T10:00:00.123456789Z PROGRESS files 3/10 [t3]
     // Fields as in TerminalSink (lumen/terminal_sink.hpp), with every tag in
-    // record order, then [t<thread id>], then the source for logs. Bytes
-    // below 0x20 and 0x7F are written as \n, \r, \t or \xHH; nothing else is
-    // escaped, so a tag value containing a space or '=' is ambiguous. Use
+    // record order, then [t<thread id>], then the source for logs. Text is
+    // escaped as on the terminal (control bytes, bytes that are not UTF-8,
+    // C1 controls and bidirectional overrides; see TerminalSink); nothing
+    // else is, so a tag value containing a space or '=' is ambiguous. Use
     // KeyValue or Json for files a program reads.
     Text,
     // logfmt: space-separated key=value pairs, fixed keys first.
@@ -52,18 +53,25 @@ enum class FileFormat : uint8_t {
     //   ts      integer nanoseconds since the Unix epoch (system_clock, UTC).
     //   level   the plain level name; "UNKNOWN" for a value outside the enum.
     //   value   the shortest decimal that reads back as the same double
-    //           (std::to_chars). NaN and infinities have no JSON number: for
+    //           (std::to_chars); -0.0 is written "-0.0", so that a parser
+    //           that reads "-0" as an integer keeps the sign. NaN and
+    //           infinities have no JSON number: for
     //           them "value" is null and "value_text" is "NaN", "Infinity"
     //           or "-Infinity". value_text is present only then.
     //   tags    an object nested under "tags", so tag keys never collide with
     //           the record's own keys. Every tag value is a JSON string, as
-    //           in the record: no type is guessed (the tag 3 is "3").
+    //           in the record: no type is guessed (the tag 3 is "3"). Two
+    //           different keys that are written alike (each invalid byte
+    //           becomes U+FFFD, so "\xff" and "\xfe" both read "\ufffd")
+    //           would make a duplicate key: the later one gets the suffix
+    //           "#2", or "#3" and so on, the first that is not taken
+    //           ("\ufffd#2"). KeyValue does the same for its keys.
     // Strings: '"' and '\' are escaped, \b \f \n \r \t use their short
     // escapes and every other byte below 0x20 is written as \u00XX. Valid
     // UTF-8 is written as it is; each byte that is not part of a valid UTF-8
     // sequence (including overlong forms and surrogates) is replaced by
-    // U+FFFD (the escape \ufffd), so every line is valid JSON whatever the
-    // record holds.
+    // U+FFFD, written as the escape \ufffd (as is a U+FFFD in the record), so
+    // every line is valid JSON whatever the record holds.
     Json,
 };
 
@@ -71,9 +79,10 @@ enum class FileFormat : uint8_t {
 // optional size-based rotation.
 //
 // Threads. As TerminalSink: on_* formats on the calling thread and queues the
-// line; the sink's writer thread writes it (lumen/writer_statistics.hpp).
-// flush() returns when every line queued before it is written and the
-// stream flushed to the operating system (no fsync).
+// line; the sink's writer thread writes it and reports diagnostics
+// (lumen/writer_statistics.hpp). flush() returns when every line queued
+// before it is written and the stream flushed to the operating system (no
+// fsync); after a Fatal record it waits at most fatal_flush_timeout.
 //
 // Rotation. With max_file_bytes > 0, a line that would take the active file
 // past max_file_bytes starts a new file first (unless the active file is
@@ -84,9 +93,20 @@ enum class FileFormat : uint8_t {
 // active file is deleted and started again. The size of a file that already
 // exists when the sink is created counts towards the limit, since the sink
 // appends to it. A rotation step that fails is reported as a write failure
-// and writing continues in the file that is open. A path that is not a
+// (no line is lost by it) and writing continues in the file that is open.
+// If the active file could not be moved away, the next attempt is made only
+// once it has grown by another max_file_bytes: a file whose rotation keeps
+// failing grows without limit, with one rename attempt per max_file_bytes
+// written, and only the first failure is reported. A path that is not a
 // regular file when the sink is created (/dev/null, a named pipe) is never
 // rotated.
+//
+// Named pipes. A FIFO is opened only if a process has it open for reading
+// when create() is called; otherwise create() fails at once with
+// LumenError::FileOpenFailed instead of waiting for a reader (POSIX; on
+// Windows a path is opened as it is). Once open, writes wait while the pipe
+// is full; a reader that goes away makes the next write fail (with SIGPIPE
+// ignored) or ends the process (SIGPIPE's default action), as for any pipe.
 class FileSink final : public Sink {
 public:
     struct Config {
@@ -101,14 +121,20 @@ public:
         uint32_t max_files = 5;
         // Lines that may wait for the writer thread; at least 1.
         std::size_t max_queued_lines = 65536;
-        // As TerminalSink::Config::diagnostics.
+        // As TerminalSink::Config::diagnostics; also receives the cause of a
+        // failed open, on the thread that calls create().
         DiagnosticHandler diagnostics = stderr_diagnostics();
     };
 
     // Opens (creates or appends to) the file. Fails with
     // LumenError::InvalidSinkConfig if max_files or max_queued_lines is 0 or
-    // the path is empty, and with LumenError::FileOpenFailed if the file
-    // cannot be opened for appending.
+    // the path is empty; with LumenError::FileOpenFailed if the file cannot
+    // be opened for appending, after passing one line with the cause, as the
+    // platform words it, to config.diagnostics on the calling thread
+    // ("lumen: FileSink: cannot open <path>: No such file or directory");
+    // and with the error std::thread reports
+    // (std::errc::resource_unavailable_try_again when the system is out of
+    // threads) if the writer thread cannot be started.
     [[nodiscard]] static std::expected<std::unique_ptr<FileSink>, std::error_code> create(
         Config config);
 

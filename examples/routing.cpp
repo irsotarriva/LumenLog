@@ -53,9 +53,9 @@ template <typename S>
 }
 
 void show_expected_errors() {
-    // A directory that does not exist: FileSink::create fails, nothing is opened.
-    lumen::FileSink::Config missing_directory;
-    missing_directory.path = "/nonexistent-directory/run.log";
+    // A missing directory: create fails; the cause, worded by the OS, is discarded.
+    lumen::FileSink::Config missing_directory{.path = "/nonexistent-directory/run.log",
+                                              .diagnostics = {}};
     if (const auto sink = lumen::FileSink::create(std::move(missing_directory)); !sink) {
         std::cout << "FileSink::create: " << sink.error().message() << '\n';
     }

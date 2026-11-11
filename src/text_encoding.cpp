@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -16,6 +18,7 @@ namespace {
 
 constexpr std::string_view hex_digits = "0123456789abcdef";
 constexpr std::string_view replacement_escape = "\\ufffd";
+constexpr uint32_t replacement_character = 0xFFFD;
 
 [[nodiscard]] constexpr bool is_control(uint8_t byte) noexcept {
     return byte < 0x20 || byte == 0x7F;
@@ -52,25 +55,56 @@ struct LeadByte {
     return code_point <= 0x10FFFF && (code_point < 0xD800 || code_point > 0xDFFF);
 }
 
-// Length of the valid multi-byte UTF-8 sequence at text[pos], or 0 if there
-// is none there.
-[[nodiscard]] std::size_t utf8_sequence_length(std::string_view text, std::size_t pos) noexcept {
+// A valid multi-byte UTF-8 sequence: its length and the code point it
+// encodes. length 0: there is none.
+struct Utf8Sequence {
+    std::size_t length = 0;
+    uint32_t code_point = 0;
+};
+
+// The valid multi-byte UTF-8 sequence at text[pos], if there is one. Reads
+// nothing past the end of `text`, which need not be NUL-terminated.
+[[nodiscard]] Utf8Sequence decode_utf8(std::string_view text, std::size_t pos) noexcept {
     const LeadByte lead = decode_lead(static_cast<uint8_t>(text[pos]));
     if (lead.length == 0 || text.size() - pos < lead.length) {
-        return 0;
+        return {};
     }
     uint32_t code_point = lead.bits;
     for (std::size_t k = 1; k < lead.length; ++k) {
         const auto byte = static_cast<uint8_t>(text[pos + k]);
         if ((byte & 0xC0U) != 0x80U) {
-            return 0;
+            return {};
         }
         code_point = (code_point << 6U) | (byte & 0x3FU);
     }
     if (code_point < lead.min_code_point || !is_scalar_value(code_point)) {
-        return 0;
+        return {};
     }
-    return lead.length;
+    return {.length = lead.length, .code_point = code_point};
+}
+
+// Code points that a terminal may act on rather than show: the C1 controls
+// (U+009B is CSI, like ESC '[') and the bidirectional overrides and isolates,
+// which reorder the text shown after them.
+[[nodiscard]] constexpr bool drives_terminal(uint32_t code_point) noexcept {
+    return (code_point >= 0x80 && code_point <= 0x9F) ||
+           (code_point >= 0x202A && code_point <= 0x202E) ||
+           (code_point >= 0x2066 && code_point <= 0x2069);
+}
+
+void append_text_ascii(std::string& out, uint8_t byte) {
+    switch (byte) {
+        case '\n': out += "\\n"; return;
+        case '\r': out += "\\r"; return;
+        case '\t': out += "\\t"; return;
+        default:   break;
+    }
+    if (is_control(byte)) {
+        out += "\\x";
+        append_hex_byte(out, byte);
+        return;
+    }
+    out += static_cast<char>(byte);
 }
 
 void append_json_ascii(std::string& out, uint8_t byte) {
@@ -114,21 +148,34 @@ std::string_view level_name(LogLevel level) noexcept {
 }
 
 void append_text_escaped(std::string& out, std::string_view text) {
-    for (const char c : text) {
-        const auto byte = static_cast<uint8_t>(c);
-        if (!is_control(byte)) {
-            out += c;
-        } else if (c == '\n') {
-            out += "\\n";
-        } else if (c == '\r') {
-            out += "\\r";
-        } else if (c == '\t') {
-            out += "\\t";
-        } else {
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        const auto byte = static_cast<uint8_t>(text[pos]);
+        if (byte < 0x80) {
+            append_text_ascii(out, byte);
+            ++pos;
+            continue;
+        }
+        const Utf8Sequence sequence = decode_utf8(text, pos);
+        if (sequence.length == 0) {
             out += "\\x";
             append_hex_byte(out, byte);
+            ++pos;
+            continue;
         }
+        if (drives_terminal(sequence.code_point)) {
+            std::format_to(std::back_inserter(out), "\\u{:04x}", sequence.code_point);
+        } else {
+            out += text.substr(pos, sequence.length);
+        }
+        pos += sequence.length;
     }
+}
+
+std::string text_escaped(std::string_view text) {
+    std::string out;
+    append_text_escaped(out, text);
+    return out;
 }
 
 void append_json_string(std::string& out, std::string_view text) {
@@ -141,14 +188,20 @@ void append_json_string(std::string& out, std::string_view text) {
             ++pos;
             continue;
         }
-        const std::size_t length = utf8_sequence_length(text, pos);
-        if (length == 0) {
+        const Utf8Sequence sequence = decode_utf8(text, pos);
+        if (sequence.length == 0) {
             out += replacement_escape;
             ++pos;
             continue;
         }
-        out += text.substr(pos, length);
-        pos += length;
+        if (sequence.code_point == replacement_character) {
+            // Written like a replaced byte, so that two strings that read
+            // back the same are always written alike.
+            out += replacement_escape;
+        } else {
+            out += text.substr(pos, sequence.length);
+        }
+        pos += sequence.length;
     }
     out += '"';
 }
@@ -159,6 +212,16 @@ void append_logfmt_value(std::string& out, std::string_view text) {
     } else {
         out += text;
     }
+}
+
+void append_json_number(std::string& out, double value) {
+    // "-0" is a JSON number, but a parser may read it as the integer 0 and
+    // lose the sign; "-0.0" is read as the double -0.0.
+    if (value == 0.0 && std::signbit(value)) {
+        out += "-0.0";
+        return;
+    }
+    append_double(out, value);
 }
 
 bool has_json_number(double value) noexcept {
