@@ -80,8 +80,8 @@ struct ProgressRecord {
 // narrower sets (such as the records a builder makes) are written in terms
 // of it.
 template <typename R>
-concept RecordType = std::same_as<R, LogRecord> || std::same_as<R, MetricRecord> ||
-                     std::same_as<R, ProgressRecord>;
+concept RecordType =
+    std::same_as<R, LogRecord> || std::same_as<R, MetricRecord> || std::same_as<R, ProgressRecord>;
 
 }  // namespace lumen
 

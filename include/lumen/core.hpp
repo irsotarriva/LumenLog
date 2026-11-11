@@ -138,7 +138,7 @@ using DiagnosticHandler = std::function<void(std::string_view line)>;
 [[nodiscard]] DiagnosticHandler stderr_diagnostics();
 
 struct QueueStatistics {
-    uint64_t accepted = 0;  // queued for delivery (for logs, fatal records included)
+    uint64_t accepted = 0;                // queued for delivery (for logs, fatal records included)
     uint64_t dropped_queue_full = 0;      // refused: the queue was full
     uint64_t dropped_after_shutdown = 0;  // submitted after the Core shut down
 };

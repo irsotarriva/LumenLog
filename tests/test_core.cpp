@@ -338,7 +338,8 @@ TEST(CoreFlushAcrossCoresTest, FlushReachedThroughAnotherCoresCallbackReturnsAtO
     Core first([](std::string_view /*line*/) {});
     Core second([](std::string_view /*line*/) {});
     auto returned = std::make_shared<std::atomic<int>>(0);
-    ASSERT_TRUE(second.add_sink(std::make_unique<FlushesOtherCore>(first, returned)));
+    const auto flushes_first = second.add_sink(std::make_unique<FlushesOtherCore>(first, returned));
+    ASSERT_TRUE(flushes_first);
     const auto in_second = capture(second);
     ASSERT_TRUE(first.add_sink(callback_sink([&second](const LogRecord& r) {
         if (r.message == "flush the second core") {
@@ -351,6 +352,10 @@ TEST(CoreFlushAcrossCoresTest, FlushReachedThroughAnotherCoresCallbackReturnsAtO
 
     EXPECT_EQ(returned->load(), 1);
     EXPECT_EQ(in_second->messages(), (std::vector<std::string>{"for the second core"}));
+    // Otherwise the second core's shutdown would flush the first from its
+    // sink, the opposite lock order, which ThreadSanitizer reports as a
+    // potential deadlock (two threads doing both would deadlock).
+    EXPECT_TRUE(second.remove_sink(*flushes_first));
 }
 
 // Loss accounting.
@@ -907,7 +912,7 @@ TEST(CoreFatalDeathTest, SinkReceivingAFatalRaisedByAnotherSinkCannotRemoveItAnd
             log_to(core, "trigger");
             core.flush();
         },
-        "remove_sink: sink cannot be removed while its callback runs on this thread");
+        "remove_sink: sink is busy in a callback on this thread");
 }
 
 }  // namespace

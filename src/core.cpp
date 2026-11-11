@@ -274,10 +274,10 @@ struct Core::Impl {
             dispatcher = std::thread([this] { run_dispatcher(); });
         } catch (const std::exception& e) {
             delivers_on_submit = true;
-            report(std::format(
-                "lumen: the dispatch thread could not be started ({}); each record is "
-                "delivered on the thread that submits it",
-                e.what()));
+            report(
+                std::format("lumen: the dispatch thread could not be started ({}); each record is "
+                            "delivered on the thread that submits it",
+                            e.what()));
         }
     }
 
