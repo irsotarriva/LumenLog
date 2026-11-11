@@ -51,6 +51,16 @@ add_test(NAME LateLogging.StaticDestructorLogsAreCountedAfterShutdown
 set_tests_properties(LateLogging.StaticDestructorLogsAreCountedAfterShutdown
                      PROPERTIES TIMEOUT 60)
 
+# Logging from destructors that run after the calling thread's context was
+# destroyed, while the global core still runs. One process per mode.
+add_executable(lumen_test_teardown_logging teardown_logging.cpp)
+target_link_libraries(lumen_test_teardown_logging PRIVATE lumen)
+foreach(mode IN ITEMS static thread_local)
+  set(name "TeardownLogging.RecordsAfterTheThreadContextKeepExplicitAndProcessTags_${mode}")
+  add_test(NAME ${name} COMMAND lumen_test_teardown_logging ${mode})
+  set_tests_properties(${name} PROPERTIES TIMEOUT 60)
+endforeach()
+
 # The Json lines of a FileSink, parsed by a real JSON parser: Python's json
 # module, which every CI runner has. No JSON library is added to the build.
 add_executable(lumen_json_sample json_sample.cpp)

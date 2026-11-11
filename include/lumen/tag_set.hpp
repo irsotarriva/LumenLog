@@ -4,10 +4,19 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
 namespace lumen {
+
+// A tag that owns its strings: what the context tables (lumen/context.hpp)
+// and Tagged::lumen_tags() (lumen/tagged.hpp) hold, as opposed to the views
+// of a TagSet.
+struct OwnedTag {
+    std::string key;
+    std::string value;
+};
 
 // A fixed-capacity list of key/value pairs. It stores views only: whoever
 // fills a TagSet keeps the strings alive (a record's tags point into the
@@ -17,8 +26,9 @@ namespace lumen {
 // is what a caller building a test input, or copying another set, wants;
 // set() replaces the value of an existing key. Readers (find, contains and
 // the predicates) use the first entry with a key. The builders and the
-// context layers only ever use set(), so a record that went through Core
-// never holds a key twice.
+// context merge never add a key the set already holds (they test contains()
+// before add(), or call set()), so a record that went through Core never
+// holds a key twice.
 template <std::size_t N>
 class TagSet {
 public:

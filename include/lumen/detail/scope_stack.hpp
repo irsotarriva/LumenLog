@@ -19,15 +19,12 @@
 
 namespace lumen::detail {
 
-// Adds key=value to the calling thread's context while it lives. Owns copies
-// of both strings, so LUMEN_SCOPE("run", std::to_string(n)) is safe.
+// Adds key=value to the calling thread's context while it lives. The context
+// keeps copies of both strings, so LUMEN_SCOPE("run", std::to_string(n)) is
+// safe.
 class ScopeGuard {
 public:
-    ScopeGuard(std::string_view key, std::string_view value) : key_(key), value_(value) {
-        frame_.key = key_;
-        frame_.value = value_;
-        push_scope(frame_);
-    }
+    ScopeGuard(std::string_view key, std::string_view value) : frame_(push_scope(key, value)) {}
     ~ScopeGuard() { pop_scope(frame_); }
 
     ScopeGuard(const ScopeGuard&) = delete;
@@ -36,13 +33,12 @@ public:
     ScopeGuard& operator=(ScopeGuard&&) = delete;
 
 private:
-    std::string key_;
-    std::string value_;
-    ScopeFrame frame_;
+    FrameToken frame_;
 };
 
-// The state of one LUMEN_LOOP: a progress bar and the scope tag
-// label=<index of the iteration running>.
+// The state of one LUMEN_LOOP: a progress bar, and the scope tag
+// label=<index> while a body runs. The tag is pushed before each body and
+// popped after it, so the loop's own progress records do not carry it.
 template <std::integral T>
     requires(!std::same_as<T, bool>)
 class LoopScope {
@@ -50,10 +46,7 @@ public:
     LoopScope(Core& core, std::string_view label, T total)
         : total_(total > T{0} ? static_cast<uint64_t>(total) : 0)
         , label_(label)
-        , progress_(core, label, total_) {
-        frame_.key = label_;
-        push_scope(frame_);
-    }
+        , progress_(core, label, total_) {}
     ~LoopScope() { pop_scope(frame_); }
 
     LoopScope(const LoopScope&) = delete;
@@ -67,6 +60,8 @@ public:
     [[nodiscard]] bool advance() {
         if (started_) {
             ++completed_;
+            pop_scope(frame_);
+            frame_ = FrameToken{};
         }
         started_ = true;
         if (completed_ >= total_) {
@@ -74,11 +69,7 @@ public:
             return false;
         }
         progress_.update(completed_);
-        const auto [end, ec] =
-            std::to_chars(index_.data(), index_.data() + index_.size(), completed_);
-        // 24 characters hold every uint64_t, so to_chars cannot fail.
-        frame_.value =
-            ec == std::errc{} ? std::string_view(index_.data(), end) : std::string_view{};
+        frame_ = push_scope(label_, index_text_());
         return true;
     }
 
@@ -86,13 +77,20 @@ public:
     [[nodiscard]] T index() const noexcept { return static_cast<T>(completed_); }
 
 private:
+    [[nodiscard]] std::string_view index_text_() {
+        const auto [end, ec] =
+            std::to_chars(index_.data(), index_.data() + index_.size(), completed_);
+        // 24 characters hold every uint64_t, so to_chars cannot fail.
+        return ec == std::errc{} ? std::string_view(index_.data(), end) : std::string_view{};
+    }
+
     uint64_t total_;
     uint64_t completed_ = 0;
     bool started_ = false;
     std::string label_;
     std::array<char, 24> index_{};
     ProgressHandle progress_;
-    ScopeFrame frame_;
+    FrameToken frame_;
 };
 
 }  // namespace lumen::detail

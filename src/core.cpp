@@ -209,7 +209,9 @@ struct Core::Impl {
     void finalize(R& record, uint32_t tags_dropped_explicit, SourceStrings source) {
         record.timestamp_ns = now_ns();
         record.thread_id = this_thread_id();
-        const uint32_t dropped = tags_dropped_explicit + detail::merge_context(record.tags);
+        // Keeps the merged strings alive until own_strings() has copied them.
+        detail::ContextPin pin;
+        const uint32_t dropped = tags_dropped_explicit + detail::merge_context(record.tags, pin);
         if (dropped != 0) {
             tags_dropped.fetch_add(dropped, std::memory_order_relaxed);
         }

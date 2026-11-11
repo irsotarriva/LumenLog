@@ -6,9 +6,10 @@
 #include <span>
 #include <string_view>
 #include <system_error>
-#include <vector>
 
 #include "lumen/detail/context.hpp"
+#include "lumen/detail/tag_table.hpp"
+#include "lumen/tag_set.hpp"
 
 namespace lumen {
 
@@ -40,7 +41,10 @@ namespace lumen {
 // scope applies to the records after it. Scopes nest: the innermost object's
 // tags win. The guard follows the scope rules of lumen/macros.hpp (destroyed
 // on the thread that created it, in reverse order), and the object must
-// outlive the guard.
+// outlive the guard; a guard destroyed on another thread leaves the object in
+// its thread's context longer (lumen/macros.hpp), and the object must then
+// live that long too. Constructing a scope may allocate; std::bad_alloc is
+// the only exception it can throw.
 //
 // Threads. A Tagged is not synchronised, like any other object: lumen_tag()
 // and copying or moving the object must not run while another thread is
@@ -53,7 +57,7 @@ public:
     // is destroyed. Not copyable or movable: it lives where it was created.
     class Scope {
     public:
-        explicit Scope(const Tagged& object) noexcept;
+        explicit Scope(const Tagged& object);
         ~Scope();
         Scope(const Scope&) = delete;
         Scope& operator=(const Scope&) = delete;
@@ -61,7 +65,7 @@ public:
         Scope& operator=(Scope&&) = delete;
 
     private:
-        detail::InstanceFrame frame_;
+        detail::FrameToken frame_;
     };
 
     // Sets `key` to `value` on this object, replacing an existing value. Both
@@ -75,9 +79,9 @@ public:
     [[nodiscard]] bool lumen_untag(std::string_view key);
 
     // This object's tags, in the order they were first set.
-    [[nodiscard]] std::span<const detail::OwnedTag> lumen_tags() const noexcept;
+    [[nodiscard]] std::span<const OwnedTag> lumen_tags() const noexcept;
 
-    [[nodiscard]] Scope lumen_scope() const noexcept { return Scope(*this); }
+    [[nodiscard]] Scope lumen_scope() const { return Scope(*this); }
 
 protected:
     Tagged() = default;
@@ -88,7 +92,7 @@ protected:
     Tagged& operator=(Tagged&& other) noexcept = default;
 
 private:
-    std::unique_ptr<std::vector<detail::OwnedTag>> tags_;  // null until first tagged
+    std::unique_ptr<detail::TagTable> tags_;  // null until first tagged
 };
 
 }  // namespace lumen
