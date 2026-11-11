@@ -27,6 +27,7 @@ headers state the guarantees; this page says which file keeps them.
 | `src/immortal.hpp` | Storage for the few objects that are never destroyed |
 | `src/error.cpp` | The `"lumen"` error category |
 | `python/` | The pybind11 module, one file per area (`python/registration.hpp` lists them), and `logging_handler.py` |
+| `cmake/build_settings.cmake`, `cmake/config.hpp.in` | The settings that change what the headers compile to (`LUMEN_MIN_LEVEL`, queue capacities), written into the generated and installed `lumen/config.hpp` |
 
 ## One submission path
 

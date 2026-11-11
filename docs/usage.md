@@ -68,8 +68,11 @@ if constexpr (lumen::level_compiled_in(lumen::LogLevel::Trace)) {
 }
 ```
 
-When it is not `DEBUG`, `LUMEN_MIN_LEVEL_VALUE` is defined for every target
-that links `lumen::lumen`, so the library and its users agree. Do not
+The value is written into the generated header `lumen/config.hpp`, which is
+installed with the other headers, so every user of a build of Lumen gets its
+threshold, with CMake or without. A translation unit may still define
+`LUMEN_MIN_LEVEL_VALUE` itself, before its first Lumen include, to compile
+more or fewer of its own statements. Do not
 define `LUMEN_MIN_LEVEL` in your own code: `lumen/macros.hpp` stops with an
 error, because the CMake option of that name takes a level name, not a number.
 There is no run-time level setting: use a [predicate](predicates.md) on each

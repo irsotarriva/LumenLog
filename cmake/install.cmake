@@ -21,6 +21,8 @@ install(DIRECTORY include/lumen
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   FILES_MATCHING PATTERN "*.hpp"
 )
+# The settings the library was built with (cmake/build_settings.cmake).
+install(FILES "${lumen_config_header}" DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lumen)
 
 install(EXPORT lumenTargets
   NAMESPACE lumen::

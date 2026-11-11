@@ -1,16 +1,15 @@
 # Compile-time settings that change what the public headers compile to.
 #
-# Each one is passed as a PUBLIC definition, so that the library and every
-# consumer agree, but only when it differs from the default written in the
-# header. A default build therefore puts no Lumen macro on a consumer's command
-# line, and the installed package works for a consumer that does not use CMake.
-# The *_default values below must equal the fallbacks in the headers named.
+# They reach the code through one generated header, lumen/config.hpp
+# (template: cmake/config.hpp.in), which is installed with the other headers.
+# No definition is put on the command line of the library or of a consumer,
+# so a consumer that does not use CMake sees the same values as one that
+# links lumen::lumen.
 
 # Lowest level compiled in. The header receives the level's numeric value, not
 # its name: a name would be macro-expanded in every consumer that defines DEBUG
-# or ERROR itself. Header default: LUMEN_MIN_LEVEL_VALUE in lumen/macros.hpp.
+# or ERROR itself.
 set(lumen_level_names TRACE DEBUG INFO WARN ERROR FATAL)
-set(lumen_min_level_value_default 1)
 set(LUMEN_MIN_LEVEL "DEBUG" CACHE STRING
     "Elides records below this level at compile time (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)")
 set_property(CACHE LUMEN_MIN_LEVEL PROPERTY STRINGS ${lumen_level_names})
@@ -21,21 +20,23 @@ if(lumen_min_level_value EQUAL -1)
   message(FATAL_ERROR "LUMEN_MIN_LEVEL='${LUMEN_MIN_LEVEL}' is not a level name."
                       " Use one of: ${lumen_level_list}")
 endif()
-if(NOT lumen_min_level_value EQUAL lumen_min_level_value_default)
-  target_compile_definitions(lumen PUBLIC LUMEN_MIN_LEVEL_VALUE=${lumen_min_level_value})
-endif()
 
-# Ring buffer slot counts. Consumers see them through lumen/limits.hpp, so
-# they are PUBLIC to keep the library and its users in agreement. Header
-# defaults: lumen/limits.hpp.
+# Ring buffer slot counts, read by lumen/limits.hpp.
 set(LUMEN_LOG_CAPACITY "65536" CACHE STRING "LogBuffer slot count (power of two)")
 set(LUMEN_METRIC_CAPACITY "16384" CACHE STRING "MetricBuffer slot count (power of two)")
 set(LUMEN_PROGRESS_CAPACITY "4096" CACHE STRING "ProgressBuffer slot count (power of two)")
-set(lumen_LOG_CAPACITY_default 65536)
-set(lumen_METRIC_CAPACITY_default 16384)
-set(lumen_PROGRESS_CAPACITY_default 4096)
 foreach(kind IN ITEMS LOG METRIC PROGRESS)
-  if(NOT LUMEN_${kind}_CAPACITY EQUAL lumen_${kind}_CAPACITY_default)
-    target_compile_definitions(lumen PUBLIC LUMEN_${kind}_CAPACITY=${LUMEN_${kind}_CAPACITY})
+  set(capacity "${LUMEN_${kind}_CAPACITY}")
+  if(NOT capacity MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "LUMEN_${kind}_CAPACITY='${capacity}' is not a positive integer")
+  endif()
+  # A power of two has a single bit set: n & (n - 1) is 0.
+  math(EXPR lumen_low_bits "${capacity} & (${capacity} - 1)")
+  if(NOT lumen_low_bits EQUAL 0)
+    message(FATAL_ERROR "LUMEN_${kind}_CAPACITY=${capacity} is not a power of two")
   endif()
 endforeach()
+
+set(lumen_config_header "${PROJECT_BINARY_DIR}/include/lumen/config.hpp")
+configure_file("${CMAKE_CURRENT_LIST_DIR}/config.hpp.in" "${lumen_config_header}" @ONLY)
+target_include_directories(lumen PUBLIC $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>)

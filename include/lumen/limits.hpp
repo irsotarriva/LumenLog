@@ -3,6 +3,8 @@
 
 #include <cstddef>
 
+#include "lumen/config.hpp"
+
 // Every fixed capacity in Lumen. Nothing allocates beyond these, so nothing
 // grows without bound; what does not fit is refused and reported:
 //
@@ -17,20 +19,6 @@
 // Scopes (LUMEN_SCOPE, LUMEN_LOOP) have no limit of their own: each one adds
 // one tag, at any nesting depth, and only max_record_tags bounds how many of
 // them reach a record.
-
-// The queue capacities are build settings (CMake LUMEN_LOG_CAPACITY etc.,
-// powers of two). The fallbacks here must equal the CMake defaults
-// (cmake/build_settings.cmake); tests/compile_checks/header_defaults.cpp
-// checks that they do.
-#ifndef LUMEN_LOG_CAPACITY
-#define LUMEN_LOG_CAPACITY 65536
-#endif
-#ifndef LUMEN_METRIC_CAPACITY
-#define LUMEN_METRIC_CAPACITY 16384
-#endif
-#ifndef LUMEN_PROGRESS_CAPACITY
-#define LUMEN_PROGRESS_CAPACITY 4096
-#endif
 
 namespace lumen {
 
@@ -47,7 +35,8 @@ inline constexpr std::size_t max_thread_tags = 8;
 // Distinct keys on one Tagged object (Tagged::lumen_tag).
 inline constexpr std::size_t max_instance_tags = 8;
 
-// Records each queue holds between submission and delivery.
+// Records each queue holds between submission and delivery. Build settings
+// (CMake LUMEN_LOG_CAPACITY etc., powers of two), read from lumen/config.hpp.
 inline constexpr std::size_t log_queue_capacity = LUMEN_LOG_CAPACITY;
 inline constexpr std::size_t metric_queue_capacity = LUMEN_METRIC_CAPACITY;
 inline constexpr std::size_t progress_queue_capacity = LUMEN_PROGRESS_CAPACITY;

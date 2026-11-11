@@ -13,21 +13,16 @@ add_executable(lumen_check_no_short_macros no_short_macros.cpp)
 target_link_libraries(lumen_check_no_short_macros PRIVATE lumen)
 add_test(NAME CompileCheck.NoShortMacros COMMAND lumen_check_no_short_macros)
 
-# Without LUMEN_MIN_LEVEL_VALUE the header must fall back to Debug.
-add_executable(lumen_check_default_min_level default_min_level.cpp)
-target_link_libraries(lumen_check_default_min_level PRIVATE lumen)
-add_test(NAME CompileCheck.DefaultMinLevel COMMAND lumen_check_default_min_level)
-
-# The CMake defaults of the level threshold and buffer capacities equal the
-# header fallbacks, which is what lets a default build omit the definitions.
-add_executable(lumen_check_header_defaults header_defaults.cpp)
-target_link_libraries(lumen_check_header_defaults PRIVATE lumen)
-target_compile_definitions(lumen_check_header_defaults PRIVATE
-  LUMEN_CHECK_MIN_LEVEL_VALUE=${lumen_min_level_value_default}
-  LUMEN_CHECK_LOG_CAPACITY=${lumen_LOG_CAPACITY_default}
-  LUMEN_CHECK_METRIC_CAPACITY=${lumen_METRIC_CAPACITY_default}
-  LUMEN_CHECK_PROGRESS_CAPACITY=${lumen_PROGRESS_CAPACITY_default})
-add_test(NAME CompileCheck.HeaderDefaultsMatchCMake COMMAND lumen_check_header_defaults)
+# lumen/config.hpp carries the values CMake was configured with. Other
+# settings are built and run by the Consumer.* tests (tests/consumer).
+add_executable(lumen_check_config_header config_header.cpp)
+target_link_libraries(lumen_check_config_header PRIVATE lumen)
+target_compile_definitions(lumen_check_config_header PRIVATE
+  LUMEN_CHECK_MIN_LEVEL_VALUE=${lumen_min_level_value}
+  LUMEN_CHECK_LOG_CAPACITY=${LUMEN_LOG_CAPACITY}
+  LUMEN_CHECK_METRIC_CAPACITY=${LUMEN_METRIC_CAPACITY}
+  LUMEN_CHECK_PROGRESS_CAPACITY=${LUMEN_PROGRESS_CAPACITY})
+add_test(NAME CompileCheck.ConfigHeaderHoldsTheConfiguredSettings COMMAND lumen_check_config_header)
 
 # macros.hpp alone is enough to expand every logging and scope macro. The
 # header-alone check below cannot see this, since it expands no macro.

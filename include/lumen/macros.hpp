@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "lumen/config.hpp"
 #include "lumen/core.hpp"
 #include "lumen/detail/scope_stack.hpp"
 #include "lumen/level.hpp"
@@ -32,9 +33,10 @@
 // discarded at compile time: they emit nothing and their arguments are not
 // evaluated (they sit in the discarded branch of an `if constexpr`).
 // LUMEN_MIN_LEVEL_VALUE is the numeric LogLevel (0 = Trace ... 5 = Fatal);
-// CMake's LUMEN_MIN_LEVEL sets it from a level name. A number rather than a
-// name, so that a consumer's own DEBUG or ERROR macro cannot change its
-// meaning. Fatal is never discarded.
+// CMake's LUMEN_MIN_LEVEL sets it from a level name, in lumen/config.hpp. A
+// number rather than a name, so that a consumer's own DEBUG or ERROR macro
+// cannot change its meaning. A translation unit that defines it before its
+// first Lumen include uses its own threshold. Fatal is never discarded.
 //
 // Scopes
 //
@@ -67,10 +69,6 @@
 #ifdef LUMEN_MIN_LEVEL
 #error \
     "LUMEN_MIN_LEVEL is the CMake option; define LUMEN_MIN_LEVEL_VALUE (0 = Trace ... 5 = Fatal) instead"
-#endif
-
-#ifndef LUMEN_MIN_LEVEL_VALUE
-#define LUMEN_MIN_LEVEL_VALUE 1
 #endif
 
 static_assert(LUMEN_MIN_LEVEL_VALUE >= 0 && LUMEN_MIN_LEVEL_VALUE <= 5,

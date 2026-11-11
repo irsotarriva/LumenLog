@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "lumen/detail/ring_buffer.hpp"
+#include "lumen/limits.hpp"
 #include "lumen/record.hpp"
 
 namespace {
@@ -34,7 +35,7 @@ struct Payload {
     std::array<std::byte, sizeof(lumen::LogRecord) - sizeof(uint64_t)> padding{};
 };
 
-using Buffer = lumen::RingBuffer<Payload, LUMEN_LOG_CAPACITY>;
+using Buffer = lumen::RingBuffer<Payload, lumen::log_queue_capacity>;
 using Clock = std::chrono::steady_clock;
 
 enum class PushMode : uint8_t {
