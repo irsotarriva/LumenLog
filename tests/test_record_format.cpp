@@ -3,8 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <bit>
-#include <charconv>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <string>
@@ -154,11 +154,10 @@ TEST_F(RecordFormatTest, JsonMetricValueIsTheShortestTextThatReadsBackBitForBit)
     };
     for (const double value : values) {
         const std::string text = _json_value_text(value);
-        double parsed = 0.0;
-        const char* const text_end = std::to_address(text.cend());
-        const auto [end, ec] = std::from_chars(text.data(), text_end, parsed);
-        EXPECT_EQ(ec, std::errc{}) << text;
-        EXPECT_EQ(end, text_end) << text;
+        // strtod, not std::from_chars: libc++ has no floating-point from_chars.
+        char* end = nullptr;
+        const double parsed = std::strtod(text.c_str(), &end);
+        EXPECT_EQ(end, text.c_str() + text.size()) << text;
         EXPECT_EQ(std::bit_cast<uint64_t>(parsed), std::bit_cast<uint64_t>(value)) << text;
     }
 }
