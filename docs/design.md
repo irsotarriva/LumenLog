@@ -7,7 +7,14 @@ headers state the guarantees; this page says which file keeps them.
 
 | File | Owns |
 |---|---|
-| `include/lumen/core.hpp`, `src/core.cpp` | `Core`: the queues, the dispatch thread, the sink registry, `flush`, fatal records, shutdown, statistics, diagnostics |
+| `include/lumen/core.hpp`, `src/core.cpp` | `Core`: its API, and `Core::Impl`, which composes the parts below and runs the sequences that span them (submission, the dispatch loop, `flush`, fatal records, shutdown) |
+| `src/record_queues.*` | The three queues of a Core and the per-type count of records refused after shutdown |
+| `src/record_preparation.hpp` | Stamping a submitted record, merging the context and copying its strings into its own block |
+| `src/wakeup.*` | How producers wake the sleeping dispatch thread, and how it waits |
+| `src/sink_registry.*` | The registered sinks, their removal handshake and the registry's versions |
+| `src/delivery.*`, `src/delivery_stack.*` | Handing records to sinks under the delivery lock; the per-thread stack of deliveries in progress and their records in flight |
+| `src/fatal_records.*` | Fatal records: announcing, posting and delivering them all before termination |
+| `src/diagnostic_reporter.*`, `src/first_reports.*` | Passing diagnostic lines to the handler one at a time; "report the first, then count" for queue drops, tag drops and sink exceptions |
 | `include/lumen/detail/ring_buffer.hpp` | `RingBuffer`, the bounded multi-producer single-consumer queue |
 | `include/lumen/record_builder.hpp`, `include/lumen/detail/string_scratch.hpp` | Builders and their scratch buffer for strings |
 | `include/lumen/macros.hpp` | The logging front end: statements, compile-time elision, scopes, loops |
@@ -87,10 +94,10 @@ to come in bursts. To sleep it sets an atomic flag, checks the queues once
 more and waits on a condition variable. A producer, after pushing, clears the
 flag with an atomic exchange and notifies only if it was set: every record
 costs one atomic exchange, and only a producer that finds the dispatcher
-asleep pays for the mutex and the notify. The comment on `wake_if_sleeping`
-in `src/core.cpp` argues why no record can wait for a sleeping dispatcher.
+asleep pays for the mutex and the notify. The comment on `Wakeup` in
+`src/wakeup.hpp` argues why no record can wait for a sleeping dispatcher.
 
-`Core::flush()` takes the same consume mutex as the dispatcher and delivers
+`Core::flush()` takes the same delivery lock as the dispatcher and delivers
 on the caller's thread up to the head positions it read, waiting for
 producers that had claimed a slot before it, then flushes every sink.
 
@@ -107,8 +114,8 @@ another) and, per frame, the record being handed out and the next sink to
 offer it to. With it `flush`, `remove_sink` and fatal records recognise a
 call from inside a callback and do not wait for themselves, and a fatal
 record or a shutdown started in a callback can finish the record in flight.
-Exceptions from callbacks are caught in one place (`call_sink`), counted per
-sink and reported once.
+Exceptions from callbacks are caught in one place (`call_sink` in
+`src/delivery.cpp`), counted per sink and reported once.
 
 Diagnostic lines go through one queue per Core: the thread that finds nobody
 passing lines to the handler does so until the queue is empty, and the

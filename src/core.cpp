@@ -1,202 +1,35 @@
 #include "lumen/core.hpp"
 
-#include <algorithm>
-#include <array>
 #include <atomic>
-#include <chrono>
-#include <concepts>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <exception>
+#include <expected>
 #include <format>
-#include <iostream>
-#include <limits>
 #include <memory>
-#include <mutex>
-#include <span>
-#include <string>
-#include <string_view>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
-#include <variant>
-#include <vector>
 
+#include "delivery.hpp"
+#include "diagnostic_reporter.hpp"
+#include "fatal_records.hpp"
+#include "first_reports.hpp"
 #include "immortal.hpp"
-#include "lumen/detail/context.hpp"
-#include "lumen/detail/ring_buffer.hpp"
-#include "lumen/error.hpp"
-#include "lumen/limits.hpp"
-#include "lumen/thread_clock.hpp"
+#include "record_preparation.hpp"
+#include "record_queues.hpp"
+#include "sink_registry.hpp"
+#include "wakeup.hpp"
 
 namespace lumen {
 
-namespace {
-
-using LogQueue = RingBuffer<LogRecord, log_queue_capacity>;
-using MetricQueue = RingBuffer<MetricRecord, metric_queue_capacity>;
-using ProgressQueue = RingBuffer<ProgressRecord, progress_queue_capacity>;
-
-// One registered sink. Entries are shared between the registry and the
-// snapshots the delivering thread holds, so an entry outlives its removal
-// until no snapshot refers to it.
-//
-// Removal handshake (busy/removed, both sequentially consistent): the
-// delivering thread sets busy and then reads removed before each callback;
-// remove_sink sets removed and then waits while busy. Either the deliverer
-// sees removed and skips the sink, or remove_sink sees busy and waits for the
-// callback to end. After that, nothing reads `sink` again, and `owner` can be
-// handed back.
-struct SinkEntry {
-    SinkEntry(SinkId id_in, std::unique_ptr<Sink> owner_in, Predicate predicate_in)
-        : id(id_in)
-        , owner(std::move(owner_in))
-        , sink(owner.get())
-        , predicate(std::move(predicate_in)) {}
-
-    const SinkId id;
-    std::unique_ptr<Sink> owner;  // moved out by remove_sink once no callback can run
-    Sink* const sink;             // non-owning: owner.get() at registration
-    const Predicate predicate;
-    std::atomic<bool> busy{false};     // written only by the delivering thread
-    std::atomic<bool> removed{false};  // written only by remove_sink
-    std::atomic<uint64_t> exceptions{0};
-};
-
-using Registry = std::vector<std::shared_ptr<SinkEntry>>;
-
-// A record being handed to the sinks of one snapshot, and the index of the
-// next sink to try. A fatal record raised from a callback (or a shutdown run
-// from one) finishes this record for the remaining sinks, because the loop
-// that was handing it out will never resume.
-struct InFlight {
-    std::variant<std::monostate, const LogRecord*, const MetricRecord*, const ProgressRecord*>
-        record;                       // non-owning
-    const Registry* sinks = nullptr;  // non-owning: the delivery snapshot
-    std::size_t next = 0;
-};
-
-// One delivery in progress on the calling thread: the thread holds this
-// Core's consume mutex. A sink of one Core may flush another, so a thread can
-// deliver for several Cores at once; the frames form a stack, innermost
-// first. Lets flush, remove_sink and fatal records recognise a call made
-// from inside a callback, however many Cores lie in between.
-struct DeliveryFrame {
-    const void* core = nullptr;      // non-owning: the Core::Impl
-    DeliveryFrame* outer = nullptr;  // non-owning: the frame below it on this thread
-    InFlight in_flight;
-};
-
-// The calling thread's innermost delivery frame; this file is its only user.
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-thread_local DeliveryFrame* tls_innermost_delivery = nullptr;
-
-class DeliveryScope {
-public:
-    explicit DeliveryScope(const void* core) noexcept : frame_{core, tls_innermost_delivery, {}} {
-        tls_innermost_delivery = &frame_;
-    }
-    ~DeliveryScope() { tls_innermost_delivery = frame_.outer; }
-    DeliveryScope(const DeliveryScope&) = delete;
-    DeliveryScope& operator=(const DeliveryScope&) = delete;
-    DeliveryScope(DeliveryScope&&) = delete;
-    DeliveryScope& operator=(DeliveryScope&&) = delete;
-
-private:
-    DeliveryFrame frame_;
-};
-
-// This thread's frame for `core`, or null if it does not deliver for it.
-[[nodiscard]] DeliveryFrame* delivery_frame_for(const void* core) noexcept {
-    for (DeliveryFrame* frame = tls_innermost_delivery; frame != nullptr; frame = frame->outer) {
-        if (frame->core == core) {
-            return frame;
-        }
-    }
-    return nullptr;
-}
-
-[[nodiscard]] std::string_view& text_of(LogRecord& r) {
-    return r.message;
-}
-[[nodiscard]] std::string_view& text_of(MetricRecord& r) {
-    return r.name;
-}
-[[nodiscard]] std::string_view& text_of(ProgressRecord& r) {
-    return r.label;
-}
-
-[[nodiscard]] bool matches(const Predicate& p, const LogRecord& r) {
-    return p.evaluate(r.tags, r.level);
-}
-[[nodiscard]] bool matches(const Predicate& p, const MetricRecord& r) {
-    return p.evaluate(r.tags);
-}
-[[nodiscard]] bool matches(const Predicate& p, const ProgressRecord& r) {
-    return p.evaluate(r.tags);
-}
-
-void deliver_to(Sink& s, const LogRecord& r) {
-    s.on_log(r);
-}
-void deliver_to(Sink& s, const MetricRecord& r) {
-    s.on_metric(r);
-}
-void deliver_to(Sink& s, const ProgressRecord& r) {
-    s.on_progress(r);
-}
-
-template <RecordType R>
-constexpr std::string_view callback_name = "on_log";
-template <>
-constexpr std::string_view callback_name<MetricRecord> = "on_metric";
-template <>
-constexpr std::string_view callback_name<ProgressRecord> = "on_progress";
-
-// Copies `texts` (the record's text, and for some log records its source
-// strings) and every tag string into one NUL-terminated block and re-points
-// the views at it.
-template <RecordType R>
-void own_strings(R& record, std::span<std::string_view* const> texts) {
-    std::size_t total = 0;
-    for (const std::string_view* const text : texts) {
-        total += text->size() + 1;
-    }
-    for (const auto& e : record.tags) {
-        total += e.key.size() + 1 + e.value.size() + 1;
-    }
-    // The array form of make_shared: one allocation for all the strings.
-    // NOLINTNEXTLINE(*-avoid-c-arrays)
-    auto block = std::make_shared_for_overwrite<char[]>(total);
-    std::span<char> out(block.get(), total);
-    auto copy = [&out](std::string_view s) {
-        std::ranges::copy(s, out.begin());
-        out[s.size()] = '\0';
-        const std::string_view owned(out.data(), s.size());
-        out = out.subspan(s.size() + 1);
-        return owned;
-    };
-    for (std::string_view* const text : texts) {
-        *text = copy(*text);
-    }
-    record.tags.remap(copy);
-    record.storage = std::move(block);
-}
-
-// See Core::Impl::wait_for_work().
-constexpr std::chrono::microseconds idle_check_interval{100};
-constexpr uint32_t idle_check_count = 5;
-
-}  // namespace
-
-DiagnosticHandler stderr_diagnostics() {
-    return [](std::string_view line) { std::cerr << line << '\n' << std::flush; };
-}
-
+// Composes the parts of a Core (src/*.hpp, one responsibility each) and runs
+// the sequences that span them: submission, the dispatch loop, flush, fatal
+// records and shutdown.
 struct Core::Impl {
-    explicit Impl(DiagnosticHandler handler) : diagnostics(share(std::move(handler))) {
-        start_dispatcher();
+public:
+    explicit Impl(DiagnosticHandler handler) : reporter_(std::move(handler)) {
+        start_dispatcher_();
     }
     ~Impl() { shut_down(); }
     Impl(const Impl&) = delete;
@@ -204,671 +37,207 @@ struct Core::Impl {
     Impl(Impl&&) = delete;
     Impl& operator=(Impl&&) = delete;
 
-    template <RecordType R>
-    [[nodiscard]] auto& queue() {
-        if constexpr (std::same_as<R, LogRecord>) {
-            return logs;
-        } else if constexpr (std::same_as<R, MetricRecord>) {
-            return metrics;
-        } else {
-            return progress;
-        }
-    }
-
-    template <RecordType R>
-    [[nodiscard]] std::atomic<uint64_t>& after_shutdown() {
-        if constexpr (std::same_as<R, LogRecord>) {
-            return logs_after_shutdown;
-        } else if constexpr (std::same_as<R, MetricRecord>) {
-            return metrics_after_shutdown;
-        } else {
-            return progress_after_shutdown;
-        }
-    }
-
-    template <RecordType R>
-    void finalize(R& record, uint32_t tags_dropped_explicit, SourceStrings source) {
-        record.timestamp_ns = now_ns();
-        record.thread_id = this_thread_id();
-        const uint32_t dropped = tags_dropped_explicit + detail::merge_context(record.tags);
-        if (dropped != 0) {
-            tags_dropped.fetch_add(dropped, std::memory_order_relaxed);
-        }
-        if constexpr (std::same_as<R, LogRecord>) {
-            if (source == SourceStrings::Copied) {
-                const std::array texts{&record.message, &record.source.file,
-                                       &record.source.function, &record.source.class_name};
-                own_strings(record, texts);
-                return;
-            }
-        }
-        const std::array texts{&text_of(record)};
-        own_strings(record, texts);
-    }
-
     // R is named explicitly by the caller, so `record` is an rvalue
     // reference, not a forwarding one. `source` matters for log records only.
     template <RecordType R>
     void submit(std::type_identity_t<R>&& record, uint32_t tags_dropped_explicit,
                 SourceStrings source = SourceStrings::Static) {
-        if (!accepting.load(std::memory_order_acquire)) {
-            after_shutdown<R>().fetch_add(1, std::memory_order_relaxed);
+        if (!accepting_.load(std::memory_order_acquire)) {
+            queues_.count_after_shutdown<R>();
             return;
         }
-        finalize(record, tags_dropped_explicit, source);
-        // A refused record is counted by the queue (rejected_count) and
-        // reported once by the dispatcher.
-        static_cast<void>(queue<R>().try_push(std::move(record)));
-        if (delivers_on_submit) {
-            deliver_on_this_thread();
+        prepare_(record, tags_dropped_explicit, source);
+        // A refused record is counted by its queue and reported once, after
+        // the next delivery.
+        static_cast<void>(queues_.push<R>(std::move(record)));
+        if (delivers_on_submit_) {
+            deliver_on_this_thread_();
             return;
         }
-        wake_if_sleeping();
+        wakeup_.wake_if_sleeping();
     }
 
-    // A Core whose dispatch thread could not be started is still usable: its
-    // records are delivered by the threads that submit them.
-    void start_dispatcher() {
-        try {
-            // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
-            dispatcher = std::thread([this] { run_dispatcher(); });
-        } catch (const std::exception& e) {
-            delivers_on_submit = true;
-            report(
-                std::format("lumen: the dispatch thread could not be started ({}); each record is "
-                            "delivered on the thread that submits it",
-                            e.what()));
-        }
-    }
-
-    // Without a dispatch thread. A record submitted from inside a callback is
-    // left for the next submission or flush(): this thread is delivering
-    // already, further up its stack.
-    void deliver_on_this_thread() {
-        if (delivering_here()) {
-            return;
-        }
-        {
-            const std::scoped_lock consume(consume_mutex);
-            const DeliveryScope scope(this);
-            deliver_everything_queued();
-        }
-        report_first_losses();
-    }
-
-    // Wake-up protocol. Both sides update `sleeping` with a read-modify-write
-    // (acq_rel), so the two updates are ordered in its modification order and
-    // the later one sees the earlier:
-    //   - the dispatcher sets it with an exchange, then checks the queues once
-    //     more, and only then blocks;
-    //   - a producer, after publishing its record, clears it with an exchange
-    //     and notifies if it was set.
-    // If the producer's exchange comes second, it sees `true` and wakes the
-    // dispatcher. If it comes first, the dispatcher's exchange reads from it
-    // (acquire), so the record published before it is visible to the second
-    // check. Either way no record waits for a sleeping dispatcher. (A
-    // seq_cst fence on each side would do the same, but ThreadSanitizer does
-    // not support fences.)
-    // Cost on every emit: one atomic exchange on a shared cache line (a
-    // locked instruction, a few tens of cycles; producers on several cores
-    // also move that line between them). The mutex and the notify (a system
-    // call) are only paid by a producer that finds the dispatcher asleep.
-    void wake_if_sleeping() noexcept {
-        if (!sleeping.exchange(false, std::memory_order_acq_rel)) {
-            return;
-        }
-        {
-            // Empty critical section: the dispatcher tests `sleeping` and
-            // starts waiting under wake_mutex, so after this the notify
-            // cannot fall between its test and its wait.
-            const std::scoped_lock lock(wake_mutex);
-        }
-        wake_cv.notify_one();
-    }
-
-    [[nodiscard]] bool has_pending() const noexcept {
-        return logs.head_position() != logs.tail_position() ||
-               metrics.head_position() != metrics.tail_position() ||
-               progress.head_position() != progress.tail_position();
-    }
-
-    // Returns false when the Core is stopping.
-    //
-    // Before blocking, a dispatcher that has just delivered records checks
-    // the queues a few more times, idle_check_interval apart. Records tend to
-    // come in bursts; a dispatcher that blocked as soon as it caught up would
-    // make the producer of the next record pay for waking it (a system call),
-    // over and over within one burst. Sleeping between the checks, rather
-    // than spinning, keeps it off the producers' cache lines meanwhile. An
-    // idle dispatcher wakes up only these few times after its last record.
-    [[nodiscard]] bool wait_for_work() {
-        if (stopping.load(std::memory_order_acquire)) {
-            return false;
-        }
-        for (uint32_t check = 0; check < idle_check_count && !has_pending(); ++check) {
-            std::this_thread::sleep_for(idle_check_interval);
-        }
-        if (has_pending()) {
-            return true;
-        }
-        static_cast<void>(sleeping.exchange(true, std::memory_order_acq_rel));
-        if (has_pending()) {
-            sleeping.store(false, std::memory_order_relaxed);
-            return true;
-        }
-        std::unique_lock lock(wake_mutex);
-        wake_cv.wait(lock, [this] {
-            return !sleeping.load(std::memory_order_relaxed) ||
-                   stopping.load(std::memory_order_relaxed);
-        });
-        sleeping.store(false, std::memory_order_relaxed);
-        return !stopping.load(std::memory_order_relaxed);
-    }
-
-    void run_dispatcher() {
-        while (wait_for_work()) {
-            uint64_t delivered = 0;
-            {
-                const std::scoped_lock consume(consume_mutex);
-                const DeliveryScope scope(this);
-                delivered = deliver_up_to(logs.head_position(), metrics.head_position(),
-                                          progress.head_position());
-            }
-            report_first_losses();
-            // A claimed record that is not yet published cannot be popped;
-            // let its producer run instead of spinning on it.
-            if (delivered == 0) {
-                std::this_thread::yield();
-            }
-        }
-    }
-
-    // Caller holds consume_mutex. Delivers records until each queue's tail
-    // reaches its target or the next record is not yet published. Returns
-    // how many were delivered.
-    [[nodiscard]] uint64_t deliver_up_to(uint64_t log_target, uint64_t metric_target,
-                                         uint64_t progress_target) {
-        return deliver_queue(progress, progress_target) + deliver_queue(metrics, metric_target) +
-               deliver_queue(logs, log_target);
-    }
-
-    template <RecordType R, std::size_t N>
-    [[nodiscard]] uint64_t deliver_queue(RingBuffer<R, N>& q, uint64_t target) {
-        uint64_t delivered = 0;
-        R record;
-        while (q.tail_position() < target && q.try_pop(record)) {
-            dispatch(record);
-            ++delivered;
-        }
-        return delivered;
-    }
-
-    // Caller holds consume_mutex. Waits for producers that claimed a slot
-    // before the targets were read to publish it.
-    void deliver_all_up_to(uint64_t log_target, uint64_t metric_target, uint64_t progress_target) {
-        while (true) {
-            static_cast<void>(deliver_up_to(log_target, metric_target, progress_target));
-            if (logs.tail_position() >= log_target && metrics.tail_position() >= metric_target &&
-                progress.tail_position() >= progress_target) {
-                return;
-            }
-            std::this_thread::yield();
-        }
-    }
-
-    void deliver_everything_queued() {
-        deliver_all_up_to(logs.head_position(), metrics.head_position(), progress.head_position());
-    }
-
-    // Caller holds consume_mutex. The registry as the delivering thread sees
-    // it: a snapshot refreshed when registry_version moves, so delivering a
-    // record takes no lock. A callback that adds or removes a sink replaces
-    // `registry`, not this snapshot. A delivery nested inside a callback (a
-    // fatal record) keeps the snapshot, so the loops further up the stack
-    // never see theirs freed.
-    [[nodiscard]] const Registry& delivery_registry() {
-        if (snapshot_loops == 0 &&
-            registry_version.load(std::memory_order_acquire) != delivery_version) {
-            const std::scoped_lock lock(registry_mutex);
-            delivery_snapshot = registry;
-            delivery_version = registry_version.load(std::memory_order_relaxed);
-        }
-        return *delivery_snapshot;
-    }
-
-    // Caller holds consume_mutex.
-    template <RecordType R>
-    void dispatch(const R& record) {
-        DeliveryFrame* const frame = delivery_frame_for(this);
-        const InFlight outer =
-            std::exchange(frame->in_flight, InFlight{&record, &delivery_registry(), 0});
-        continue_in_flight(frame->in_flight);
-        frame->in_flight = outer;
-    }
-
-    // Hands the frame's record to the sinks it has not been offered to yet.
-    void continue_in_flight(InFlight& in_flight) {
-        ++snapshot_loops;
-        std::visit(
-            [&]<typename P>(const P record) {
-                if constexpr (!std::same_as<P, std::monostate>) {
-                    offer_to_remaining_sinks(*record, in_flight);
-                }
-            },
-            in_flight.record);
-        in_flight.record = std::monostate{};
-        --snapshot_loops;
-    }
-
-    template <RecordType R>
-    void offer_to_remaining_sinks(const R& record, InFlight& in_flight) {
-        while (in_flight.sinks != nullptr && in_flight.next < in_flight.sinks->size()) {
-            SinkEntry& entry = *(*in_flight.sinks)[in_flight.next++];
-            if (matches(entry.predicate, record)) {
-                call_sink(entry, callback_name<R>, [&] { deliver_to(*entry.sink, record); });
-            }
-        }
-    }
-
-    // Caller holds consume_mutex. Finishes the record this thread was handing
-    // out when a callback raised a fatal record or shut the Core down.
-    void finish_in_flight() {
-        DeliveryFrame* const frame = delivery_frame_for(this);
-        if (frame != nullptr) {
-            continue_in_flight(frame->in_flight);
-        }
-    }
-
-    void flush_sinks() {
-        const Registry& sinks = delivery_registry();
-        ++snapshot_loops;
-        for (const std::shared_ptr<SinkEntry>& entry : sinks) {
-            call_sink(*entry, "flush", [&] { entry->sink->flush(); });
-        }
-        --snapshot_loops;
-    }
-
-    // Runs one callback. A sink that is already busy is in a callback further
-    // up this thread's stack (only a fatal record re-enters delivery), so it
-    // is skipped. Exceptions are contained here; e.what() is read inside the
-    // handler because it dies with the exception.
-    template <std::invocable F>
-    void call_sink(SinkEntry& entry, std::string_view callback, F&& fn) noexcept {
-        if (entry.busy.exchange(true, std::memory_order_seq_cst)) {
-            return;
-        }
-        if (entry.removed.load(std::memory_order_seq_cst)) {
-            entry.busy.store(false, std::memory_order_release);
-            return;
-        }
-        try {
-            std::forward<F>(fn)();
-        } catch (const std::exception& e) {
-            note_exception(entry, callback, e.what());
-        } catch (...) {
-            note_exception(entry, callback, "unknown exception");
-        }
-        entry.busy.store(false, std::memory_order_release);
-    }
-
-    void note_exception(SinkEntry& entry, std::string_view callback, std::string_view what) {
-        if (entry.exceptions.fetch_add(1, std::memory_order_relaxed) == 0) {
-            report(
-                std::format("lumen: sink {} threw from {}: {} (further exceptions from this "
-                            "sink are only counted)",
-                            entry.id, callback, what));
-        }
-    }
-
-    // Lines reach the handler one at a time, in the order they were
-    // reported. The thread that finds nobody draining becomes the drainer and
-    // passes on every pending line, its own and those other threads (or the
-    // handler itself, re-entering) add meanwhile; the others only queue their
-    // line. No lock is held while the handler runs, so a handler may replace
-    // itself, log, or flush.
-    void report(std::string_view line) {
-        {
-            const std::scoped_lock lock(diagnostics_mutex);
-            pending_lines.emplace_back(line);
-            if (draining) {
-                return;
-            }
-            draining = true;
-        }
-        drain_diagnostics();
-    }
-
-    void drain_diagnostics() {
-        while (true) {
-            std::string line;
-            std::shared_ptr<const DiagnosticHandler> handler;
-            {
-                const std::scoped_lock lock(diagnostics_mutex);
-                if (pending_lines.empty()) {
-                    draining = false;
-                    return;
-                }
-                line = std::move(pending_lines.front());
-                pending_lines.pop_front();
-                handler = diagnostics;
-            }
-            if (handler) {
-                call_handler(*handler, line);
-            }
-        }
-    }
-
-    // A handler that throws loses neither the line nor the process: both the
-    // line and what was thrown go to std::cerr instead.
-    static void call_handler(const DiagnosticHandler& handler, std::string_view line) noexcept {
-        try {
-            handler(line);
-        } catch (const std::exception& e) {
-            write_after_handler_failure(line, e.what());
-        } catch (...) {
-            write_after_handler_failure(line, "an exception not derived from std::exception");
-        }
-    }
-
-    static void write_after_handler_failure(std::string_view line, std::string_view what) noexcept {
-        std::cerr << line << "\nlumen: the diagnostic handler threw (" << what
-                  << "); the line above is written to std::cerr instead\n"
-                  << std::flush;
-    }
-
-    [[nodiscard]] static std::shared_ptr<const DiagnosticHandler> share(DiagnosticHandler handler) {
-        if (!handler) {
-            return nullptr;
-        }
-        return std::make_shared<const DiagnosticHandler>(std::move(handler));
-    }
-
-    void report_first_losses() {
-        const uint64_t refused =
-            logs.rejected_count() + metrics.rejected_count() + progress.rejected_count();
-        if (refused != 0 && !reported_queue_full.exchange(true, std::memory_order_relaxed)) {
-            report(
-                "lumen: a record was dropped because its queue was full; further drops are "
-                "only counted (Core::statistics())");
-        }
-        if (tags_dropped.load(std::memory_order_relaxed) != 0 &&
-            !reported_tags_dropped.exchange(true, std::memory_order_relaxed)) {
-            report(
-                "lumen: a tag was dropped because its record already had the maximum number "
-                "of tags; further drops are only counted (Core::statistics())");
-        }
-    }
-
-    [[nodiscard]] bool delivering_here() const noexcept {
-        return delivery_frame_for(this) != nullptr;
-    }
-
-    void flush() {
-        if (delivering_here() || !accepting.load(std::memory_order_acquire)) {
-            return;
-        }
-        const uint64_t log_target = logs.head_position();
-        const uint64_t metric_target = metrics.head_position();
-        const uint64_t progress_target = progress.head_position();
-        {
-            const std::scoped_lock consume(consume_mutex);
-            const DeliveryScope scope(this);
-            deliver_all_up_to(log_target, metric_target, progress_target);
-            flush_sinks();
-        }
-        report_first_losses();
-    }
-
-    // Several threads may raise fatal records at once. Each is announced
-    // (counted) before it is stamped and posted, and the one thread that
-    // delivers does not terminate until every announced record has been
-    // delivered, so a fatal record raised while another is being delivered
-    // is delivered too.
     [[noreturn]] void submit_fatal(LogRecord& record, uint32_t tags_dropped_explicit,
-                                   SourceStrings source) {
-        if (!accepting.load(std::memory_order_acquire)) {
-            logs_after_shutdown.fetch_add(1, std::memory_order_relaxed);
-            std::terminate();
-        }
-        fatals_announced.fetch_add(1, std::memory_order_acq_rel);
-        finalize(record, tags_dropped_explicit, source);
-        {
-            const std::scoped_lock lock(fatal_mutex);
-            fatal_mailbox.push_back(std::move(record));
-        }
-        if (delivering_here()) {
-            // Inside a callback: this thread already holds consume_mutex.
-            deliver_fatal_records();
-            std::terminate();
-        }
-        const std::scoped_lock consume(consume_mutex);
-        const DeliveryScope scope(this);
-        deliver_fatal_records();
-        std::terminate();
-    }
-
-    // Caller holds consume_mutex.
-    void deliver_fatal_records() {
-        finish_in_flight();
-        while (true) {
-            deliver_everything_queued();
-            for (const LogRecord& fatal : take_fatal_records()) {
-                dispatch(fatal);
-                ++fatals_delivered;
-            }
-            if (fatals_delivered == fatals_announced.load(std::memory_order_acquire)) {
-                break;
-            }
-            // Another thread has announced a fatal record and is posting it.
-            std::this_thread::yield();
-        }
-        flush_sinks();
-        report_first_losses();
-    }
-
-    [[nodiscard]] std::vector<LogRecord> take_fatal_records() {
-        const std::scoped_lock lock(fatal_mutex);
-        return std::exchange(fatal_mailbox, {});
-    }
-
-    void shut_down() noexcept {
-        if (!accepting.exchange(false, std::memory_order_acq_rel)) {
-            return;
-        }
-        close_registry();
-        {
-            const std::scoped_lock lock(wake_mutex);
-            stopping.store(true, std::memory_order_release);
-        }
-        wake_cv.notify_one();
-        if (delivering_here()) {
-            shut_down_from_delivery();
-            return;
-        }
-        if (dispatcher.joinable()) {
-            dispatcher.join();
-        }
-        {
-            const std::scoped_lock consume(consume_mutex);
-            const DeliveryScope scope(this);
-            deliver_everything_queued();
-            flush_sinks();
-            delivery_snapshot.reset();
-        }
-        report_first_losses();
-        destroy_sinks();
-    }
-
-    // Shutdown started inside a sink callback of this Core: the callback
-    // called exit(), so static destruction runs on the delivering thread.
-    // That thread holds consume_mutex further up its stack and never returns
-    // there, so it delivers what is left itself, cannot join the dispatcher
-    // (which may be this thread, or be waiting for that mutex) and does not
-    // destroy the sinks (some are in a call on this stack).
-    void shut_down_from_delivery() noexcept {
-        finish_in_flight();
-        deliver_everything_queued();
-        flush_sinks();
-        report_first_losses();
-        if (dispatcher.joinable()) {
-            dispatcher.detach();
-        }
-    }
-
-    // Caller: shut_down(). No sink is registered after this.
-    void close_registry() noexcept {
-        const std::scoped_lock lock(registry_mutex);
-        registry_closed = true;
-    }
-
-    // No snapshot refers to the sinks any more. They are destroyed without
-    // registry_mutex held: a sink's destructor may call add_sink, remove_sink
-    // or sink_exception_count, which take it.
-    void destroy_sinks() noexcept {
-        std::shared_ptr<const Registry> retired;
-        {
-            const std::scoped_lock lock(registry_mutex);
-            retired = std::exchange(registry, std::make_shared<const Registry>());
-            registry_version.fetch_add(1, std::memory_order_release);
-        }
-        retired.reset();
-    }
-
-    // Caller holds registry_mutex.
-    void replace_registry(std::shared_ptr<const Registry> next) {
-        registry = std::move(next);
-        registry_version.fetch_add(1, std::memory_order_release);
-    }
+                                   SourceStrings source);
+    void flush();
+    void shut_down() noexcept;
 
     [[nodiscard]] std::expected<SinkId, std::error_code> add_sink(std::unique_ptr<Sink> sink,
                                                                   Predicate predicate) {
-        if (!sink) {
-            return std::unexpected(make_error_code(LumenError::NullSink));
-        }
-        const SinkId id = next_sink_id.fetch_add(1, std::memory_order_relaxed);
-        // Declared before the lock, so a refused sink is destroyed after the
-        // lock is released (its destructor may call back into this Core).
-        auto entry = std::make_shared<SinkEntry>(id, std::move(sink), std::move(predicate));
-        const std::scoped_lock lock(registry_mutex);
-        if (registry_closed) {
-            return std::unexpected(make_error_code(LumenError::CoreShutDown));
-        }
-        auto next = std::make_shared<Registry>(*registry);
-        next->push_back(std::move(entry));
-        replace_registry(std::move(next));
-        return id;
+        return registry_.add(std::move(sink), std::move(predicate));
+    }
+    [[nodiscard]] std::expected<std::unique_ptr<Sink>, std::error_code> remove_sink(SinkId id) {
+        return registry_.remove(id, delivery_.delivering_here());
+    }
+    [[nodiscard]] std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id) const {
+        return registry_.exception_count(id);
+    }
+    [[nodiscard]] CoreStatistics statistics() const noexcept;
+    void set_diagnostic_handler(DiagnosticHandler handler) {
+        reporter_.set_handler(std::move(handler));
     }
 
-    [[nodiscard]] std::expected<std::unique_ptr<Sink>, std::error_code> remove_sink(SinkId id) {
-        std::shared_ptr<SinkEntry> entry;
-        {
-            const std::scoped_lock lock(registry_mutex);
-            const auto it = std::ranges::find_if(
-                *registry, [id](const std::shared_ptr<SinkEntry>& e) { return e->id == id; });
-            if (it == registry->end()) {
-                return std::unexpected(make_error_code(LumenError::InvalidSinkId));
-            }
-            // This thread holds the consume mutex, so a busy sink is in a
-            // callback further up this thread's stack: waiting for it would
-            // never end.
-            if (delivering_here() && (*it)->busy.load(std::memory_order_seq_cst)) {
-                return std::unexpected(make_error_code(LumenError::SinkBusy));
-            }
-            entry = *it;
-            entry->removed.store(true, std::memory_order_seq_cst);
-            auto next = std::make_shared<Registry>(*registry);
-            std::erase(*next, entry);
-            replace_registry(std::move(next));
+private:
+    template <RecordType R>
+    void prepare_(R& record, uint32_t tags_dropped_explicit, SourceStrings source) {
+        const uint32_t dropped =
+            tags_dropped_explicit + detail::prepare_record(record, source == SourceStrings::Copied);
+        if (dropped != 0) {
+            tags_dropped_.fetch_add(dropped, std::memory_order_relaxed);
         }
-        // Only a callback on another thread can be running; wait for it.
-        while (entry->busy.load(std::memory_order_seq_cst)) {
+    }
+
+    void start_dispatcher_();
+    void run_dispatcher_();
+    void deliver_on_this_thread_();
+    void shut_down_from_delivery_() noexcept;
+    void report_first_losses_();
+
+    detail::DiagnosticReporter reporter_;
+    detail::FirstReports first_reports_{reporter_};
+    detail::RecordQueues queues_;
+    detail::Wakeup wakeup_;
+    detail::SinkRegistry registry_;
+    detail::Delivery delivery_{queues_, registry_, first_reports_};
+    detail::FatalRecords fatals_;
+
+    std::atomic<bool> accepting_{true};  // false once shut_down() began
+    std::atomic<uint64_t> tags_dropped_{0};
+    // Set by the constructor, before any other thread can see this Core.
+    bool delivers_on_submit_ = false;
+    std::thread dispatcher_;  // last: it starts in the constructor and uses everything above
+};
+
+// A Core whose dispatch thread could not be started is still usable: its
+// records are delivered by the threads that submit them.
+void Core::Impl::start_dispatcher_() {
+    try {
+        // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
+        dispatcher_ = std::thread([this] { run_dispatcher_(); });
+    } catch (const std::exception& e) {
+        delivers_on_submit_ = true;
+        reporter_.report(
+            std::format("lumen: the dispatch thread could not be started ({}); each record is "
+                        "delivered on the thread that submits it",
+                        e.what()));
+    }
+}
+
+void Core::Impl::run_dispatcher_() {
+    while (wakeup_.wait_for_work(queues_)) {
+        uint64_t delivered = 0;
+        {
+            const detail::Delivery::Session session(delivery_);
+            delivered = delivery_.deliver_up_to(queues_.heads());
+        }
+        report_first_losses_();
+        // A claimed record that is not yet published cannot be popped; let
+        // its producer run instead of spinning on it.
+        if (delivered == 0) {
             std::this_thread::yield();
         }
-        return std::move(entry->owner);
     }
+}
 
-    [[nodiscard]] std::expected<uint64_t, std::error_code> sink_exception_count(SinkId id) const {
-        const std::scoped_lock lock(registry_mutex);
-        for (const std::shared_ptr<SinkEntry>& entry : *registry) {
-            if (entry->id == id) {
-                return entry->exceptions.load(std::memory_order_relaxed);
-            }
-        }
-        return std::unexpected(make_error_code(LumenError::InvalidSinkId));
+// Without a dispatch thread. A record submitted from inside a callback is
+// left for the next submission or flush(): this thread is delivering
+// already, further up its stack.
+void Core::Impl::deliver_on_this_thread_() {
+    if (delivery_.delivering_here()) {
+        return;
     }
-
-    [[nodiscard]] CoreStatistics statistics() const noexcept {
-        auto of = [](const auto& q, const std::atomic<uint64_t>& after) {
-            return QueueStatistics{q.head_position(), q.rejected_count(),
-                                   after.load(std::memory_order_relaxed)};
-        };
-        QueueStatistics log_statistics = of(logs, logs_after_shutdown);
-        log_statistics.accepted += fatals_announced.load(std::memory_order_relaxed);
-        return CoreStatistics{log_statistics, of(metrics, metrics_after_shutdown),
-                              of(progress, progress_after_shutdown),
-                              tags_dropped.load(std::memory_order_relaxed)};
+    {
+        const detail::Delivery::Session session(delivery_);
+        delivery_.deliver_everything_queued();
     }
+    report_first_losses_();
+}
 
-    void set_diagnostic_handler(DiagnosticHandler handler) {
-        std::shared_ptr<const DiagnosticHandler> previous = share(std::move(handler));
-        {
-            const std::scoped_lock lock(diagnostics_mutex);
-            diagnostics.swap(previous);
-        }
-        // `previous` is released here, without the lock.
+void Core::Impl::flush() {
+    if (delivery_.delivering_here() || !accepting_.load(std::memory_order_acquire)) {
+        return;
     }
+    const detail::QueuePositions targets = queues_.heads();
+    {
+        const detail::Delivery::Session session(delivery_);
+        delivery_.deliver_all_up_to(targets);
+        delivery_.flush_sinks();
+    }
+    report_first_losses_();
+}
 
-    LogQueue logs;
-    MetricQueue metrics;
-    ProgressQueue progress;
+void Core::Impl::submit_fatal(LogRecord& record, uint32_t tags_dropped_explicit,
+                              SourceStrings source) {
+    if (!accepting_.load(std::memory_order_acquire)) {
+        queues_.count_after_shutdown<LogRecord>();
+        std::terminate();
+    }
+    fatals_.announce();
+    prepare_(record, tags_dropped_explicit, source);
+    fatals_.post(std::move(record));
+    if (delivery_.delivering_here()) {
+        // Inside a callback: this thread already holds a Session.
+        fatals_.deliver_all(delivery_);
+        report_first_losses_();
+        std::terminate();
+    }
+    const detail::Delivery::Session session(delivery_);
+    fatals_.deliver_all(delivery_);
+    report_first_losses_();
+    std::terminate();
+}
 
-    std::atomic<bool> accepting{true};  // false once shut_down() began
-    std::atomic<uint64_t> logs_after_shutdown{0};
-    std::atomic<uint64_t> metrics_after_shutdown{0};
-    std::atomic<uint64_t> progress_after_shutdown{0};
-    std::atomic<uint64_t> tags_dropped{0};
+void Core::Impl::shut_down() noexcept {
+    if (!accepting_.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    registry_.close();
+    wakeup_.stop();
+    if (delivery_.delivering_here()) {
+        shut_down_from_delivery_();
+        return;
+    }
+    if (dispatcher_.joinable()) {
+        dispatcher_.join();
+    }
+    {
+        const detail::Delivery::Session session(delivery_);
+        delivery_.deliver_everything_queued();
+        delivery_.flush_sinks();
+        delivery_.release_snapshot();
+    }
+    report_first_losses_();
+    registry_.destroy_sinks();
+}
 
-    std::mutex wake_mutex;
-    std::condition_variable wake_cv;    // waits on wake_mutex
-    std::atomic<bool> sleeping{false};  // see wake_if_sleeping()
-    std::atomic<bool> stopping{false};  // set under wake_mutex
+// Shutdown started inside a sink callback of this Core: the callback called
+// exit(), so static destruction runs on the delivering thread. That thread
+// holds the delivery lock further up its stack and never returns there, so
+// it delivers what is left itself, cannot join the dispatcher (which may be
+// this thread, or be waiting for that lock) and does not destroy the sinks
+// (some are in a call on this stack).
+void Core::Impl::shut_down_from_delivery_() noexcept {
+    delivery_.finish_in_flight();
+    delivery_.deliver_everything_queued();
+    delivery_.flush_sinks();
+    report_first_losses_();
+    if (dispatcher_.joinable()) {
+        dispatcher_.detach();
+    }
+}
 
-    // Held by whichever thread delivers records (the dispatcher, flush(), a
-    // fatal record, shutdown): the queues have a single consumer, and sinks
-    // are never called concurrently.
-    std::mutex consume_mutex;
+void Core::Impl::report_first_losses_() {
+    first_reports_.report_new_losses(queues_.refused_when_full(),
+                                     tags_dropped_.load(std::memory_order_relaxed));
+}
 
-    // Held only to read or replace `registry`, never during a callback.
-    mutable std::mutex registry_mutex;
-    std::shared_ptr<const Registry> registry =
-        std::make_shared<const Registry>();             // guarded by registry_mutex
-    std::atomic<uint64_t> registry_version{0};          // bumped under registry_mutex
-    bool registry_closed = false;                       // guarded by registry_mutex
-    std::shared_ptr<const Registry> delivery_snapshot;  // guarded by consume_mutex
-    uint32_t snapshot_loops = 0;  // loops over delivery_snapshot running; guarded by consume_mutex
-    uint64_t delivery_version = std::numeric_limits<uint64_t>::max();  // guarded by consume_mutex
-    std::atomic<SinkId> next_sink_id{1};
-
-    // Shared, so that the drainer copies a pointer, which cannot throw, and
-    // a replaced handler lives until its last call returns.
-    std::mutex diagnostics_mutex;
-    std::shared_ptr<const DiagnosticHandler> diagnostics;  // guarded by diagnostics_mutex
-    std::deque<std::string> pending_lines;                 // guarded by diagnostics_mutex
-    bool draining = false;                                 // guarded by diagnostics_mutex
-    std::atomic<bool> reported_queue_full{false};
-    std::atomic<bool> reported_tags_dropped{false};
-
-    // Fatal records: posted by any thread, delivered by the thread that holds
-    // consume_mutex.
-    std::atomic<uint64_t> fatals_announced{0};
-    uint64_t fatals_delivered = 0;  // guarded by consume_mutex
-    std::mutex fatal_mutex;
-    std::vector<LogRecord> fatal_mailbox;  // guarded by fatal_mutex
-
-    // Set by the constructor, before any other thread can see this Core.
-    bool delivers_on_submit = false;
-    std::thread dispatcher;  // last: it starts in the constructor and uses everything above
-};
+CoreStatistics Core::Impl::statistics() const noexcept {
+    QueueStatistics logs = queues_.statistics<LogRecord>();
+    logs.accepted += fatals_.announced();
+    return CoreStatistics{logs, queues_.statistics<MetricRecord>(),
+                          queues_.statistics<ProgressRecord>(),
+                          tags_dropped_.load(std::memory_order_relaxed)};
+}
 
 Core::Core(DiagnosticHandler diagnostics) : impl_(std::make_unique<Impl>(std::move(diagnostics))) {}
 
