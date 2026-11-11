@@ -57,6 +57,10 @@ jobs:
             cc: clang-18
             cxx: clang++-18
             apt: libc++-18-dev libc++abi-18-dev
+            # The distro libc++ frees std::runtime_error's message with free()
+            # although it was allocated with operator new; ASan reports that
+            # as a mismatch whenever any exception is thrown and caught.
+            asan_options: alloc_dealloc_mismatch=0
             cmake_args: >-
               -DCMAKE_CXX_FLAGS=-stdlib=libc++
               -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
@@ -157,6 +161,8 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel
 
       - name: Test
+        env:
+          ASAN_OPTIONS: ${{ matrix.asan_options }}
         run: ctest --preset ${{ matrix.preset }} --parallel 4
 
       - name: Benchmark (informational)
