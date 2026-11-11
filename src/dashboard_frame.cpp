@@ -133,6 +133,7 @@ struct Size {
     uint16_t height = 0;
 };
 
+// `measured` is an int because ftxui::Dimensions holds ints.
 [[nodiscard]] uint16_t or_fallback(int measured, uint16_t fallback) {
     constexpr int largest = std::numeric_limits<uint16_t>::max();
     return measured > 0 ? static_cast<uint16_t>(std::min(measured, largest)) : fallback;

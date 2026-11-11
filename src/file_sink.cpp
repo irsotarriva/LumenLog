@@ -1,6 +1,10 @@
 #include "lumen/file_sink.hpp"
 
 #include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>

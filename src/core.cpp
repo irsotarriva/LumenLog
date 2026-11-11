@@ -162,15 +162,15 @@ void own_strings(R& record, std::span<std::string_view* const> texts) {
     record.storage = std::move(block);
 }
 
+// See Core::Impl::wait_for_work().
+constexpr std::chrono::microseconds idle_check_interval{100};
+constexpr uint32_t idle_check_count = 5;
+
 }  // namespace
 
 DiagnosticHandler stderr_diagnostics() {
     return [](std::string_view line) { std::cerr << line << '\n' << std::flush; };
 }
-
-// See Core::Impl::wait_for_work().
-constexpr std::chrono::microseconds idle_check_interval{100};
-constexpr int idle_check_count = 5;
 
 struct Core::Impl {
     explicit Impl(DiagnosticHandler handler) : diagnostics(std::move(handler)) {
@@ -290,7 +290,7 @@ struct Core::Impl {
         if (stopping.load(std::memory_order_acquire)) {
             return false;
         }
-        for (int check = 0; check < idle_check_count && !has_pending(); ++check) {
+        for (uint32_t check = 0; check < idle_check_count && !has_pending(); ++check) {
             std::this_thread::sleep_for(idle_check_interval);
         }
         if (has_pending()) {
