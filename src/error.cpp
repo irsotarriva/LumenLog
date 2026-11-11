@@ -14,6 +14,10 @@ std::string LumenErrorCategory::message(int ev) const {
         case LumenError::SinkBusy:         return "sink cannot be removed from its own callback";
         case LumenError::TagTableFull:     return "tag table is full";
         case LumenError::InvalidPredicate: return "invalid predicate query";
+        case LumenError::InvalidSinkConfig: return "invalid sink configuration";
+        case LumenError::FileOpenFailed:   return "file could not be opened";
+        case LumenError::IoError:          return "write to the sink's destination failed";
+        case LumenError::NotATerminal:     return "destination is not a terminal";
     }
     return "unknown lumen error";
 }
