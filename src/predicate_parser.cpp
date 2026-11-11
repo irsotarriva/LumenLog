@@ -75,6 +75,9 @@ public:
     }
 
 private:
+    // Recursive descent, one function per grammar rule. The recursion is
+    // bounded: parse_unary_ refuses a depth of max_nesting.
+    // NOLINTBEGIN(misc-no-recursion)
     [[nodiscard]] std::optional<Predicate> parse_or_(uint32_t depth) {
         std::optional<Predicate> lhs = parse_and_(depth);
         while (lhs && is_keyword_or_(TokenKind::Or, "or")) {
@@ -148,6 +151,7 @@ private:
         }
         return inner;
     }
+    // NOLINTEND(misc-no-recursion)
 
     // A condition that starts with a bare word: a literal, a keyword, or a key.
     [[nodiscard]] std::optional<Predicate> parse_word_condition_() {

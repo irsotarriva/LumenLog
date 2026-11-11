@@ -1,6 +1,10 @@
 # Developer targets, only for a top-level build:
-#   lint          clang-tidy (repo .clang-tidy) over src/, examples/ and tests/
-#   format        clang-format -i over every tracked C++ file
+#   lint          clang-tidy (repo .clang-tidy) over every translation unit of
+#                 this build in src/, examples/, tests/ and python/: the
+#                 dashboard sources when LUMEN_ENABLE_DASHBOARD is on, the
+#                 Python module when LUMEN_ENABLE_PYTHON is on
+#   format        clang-format -i over every C++ file of the tree, whatever
+#                 the options
 #   format-check  the same, but only report (fails on any difference)
 
 if(NOT PROJECT_IS_TOP_LEVEL)
@@ -59,8 +63,8 @@ if(LUMEN_RUN_CLANG_TIDY AND LUMEN_CLANG_TIDY)
             # The OpenMP bridge check and tests are compiled with GCC's
             # -fopenmp, whose omp.h Clang does not find; the bridge header is
             # linted through the bridges-without-frameworks check instead.
-            "^${PROJECT_SOURCE_DIR}/(src|examples|tests)/(?!compile_checks/bridge_openmp\\.cpp|bridges/test_openmp\\.cpp)"
+            "^${PROJECT_SOURCE_DIR}/(src|examples|tests|python)/(?!compile_checks/bridge_openmp\\.cpp|bridges/test_openmp\\.cpp)"
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    COMMENT "clang-tidy over src/, examples/ and tests/"
+    COMMENT "clang-tidy over src/, examples/, tests/ and python/ (dashboard ${LUMEN_ENABLE_DASHBOARD}, Python ${LUMEN_ENABLE_PYTHON})"
     VERBATIM)
 endif()

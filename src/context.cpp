@@ -86,7 +86,9 @@ struct ThreadContext {
     std::vector<OwnedTag> process_tags;
 };
 
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+// cert-err58-cpp: constructing a ThreadContext allocates nothing, so its
+// initialisation cannot throw although no constructor says noexcept.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables,cert-err58-cpp)
 thread_local ThreadContext tls_context;
 
 [[nodiscard]] std::span<const OwnedTag> current_process_tags() {
