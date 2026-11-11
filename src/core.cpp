@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <concepts>
 #include <condition_variable>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <exception>
 #include <format>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -155,6 +157,10 @@ DiagnosticHandler stderr_diagnostics() {
     return [](std::string_view line) { std::cerr << line << '\n' << std::flush; };
 }
 
+// See Core::Impl::wait_for_work().
+constexpr std::chrono::microseconds idle_check_interval{100};
+constexpr int idle_check_count = 5;
+
 struct Core::Impl {
     explicit Impl(DiagnosticHandler handler) : diagnostics(std::move(handler)) {
         // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
@@ -208,21 +214,30 @@ struct Core::Impl {
         wake_if_sleeping();
     }
 
-    // Wake-up protocol. The dispatcher sets `sleeping`, issues a full fence
-    // and checks the queues once more before it blocks; a producer issues a
-    // full fence after publishing its record and only then reads `sleeping`.
-    // With both fences, either the dispatcher sees the record or the producer
-    // sees `sleeping` (the Dekker pattern), so no record is left waiting for
-    // a dispatcher that sleeps. Cost on every emit: one fence (an mfence on
-    // x86-64, a few tens of cycles) and one relaxed load. The mutex and the
-    // condition-variable notify (a system call) are only paid by a producer
-    // that finds the dispatcher asleep.
+    // Wake-up protocol. Both sides update `sleeping` with a read-modify-write
+    // (acq_rel), so the two updates are ordered in its modification order and
+    // the later one sees the earlier:
+    //   - the dispatcher sets it with an exchange, then checks the queues once
+    //     more, and only then blocks;
+    //   - a producer, after publishing its record, clears it with an exchange
+    //     and notifies if it was set.
+    // If the producer's exchange comes second, it sees `true` and wakes the
+    // dispatcher. If it comes first, the dispatcher's exchange reads from it
+    // (acquire), so the record published before it is visible to the second
+    // check. Either way no record waits for a sleeping dispatcher. (A
+    // seq_cst fence on each side would do the same, but ThreadSanitizer does
+    // not support fences.)
+    // Cost on every emit: one atomic exchange on a shared cache line (a
+    // locked instruction, a few tens of cycles; producers on several cores
+    // also move that line between them). The mutex and the notify (a system
+    // call) are only paid by a producer that finds the dispatcher asleep.
     void wake_if_sleeping() noexcept {
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        if (!sleeping.load(std::memory_order_relaxed)) return;
+        if (!sleeping.exchange(false, std::memory_order_acq_rel)) return;
         {
+            // Empty critical section: the dispatcher tests `sleeping` and
+            // starts waiting under wake_mutex, so after this the notify
+            // cannot fall between its test and its wait.
             const std::scoped_lock lock(wake_mutex);
-            sleeping.store(false, std::memory_order_relaxed);
         }
         wake_cv.notify_one();
     }
@@ -234,11 +249,21 @@ struct Core::Impl {
     }
 
     // Returns false when the Core is stopping.
+    //
+    // Before blocking, a dispatcher that has just delivered records checks
+    // the queues a few more times, idle_check_interval apart. Records tend to
+    // come in bursts; a dispatcher that blocked as soon as it caught up would
+    // make the producer of the next record pay for waking it (a system call),
+    // over and over within one burst. Sleeping between the checks, rather
+    // than spinning, keeps it off the producers' cache lines meanwhile. An
+    // idle dispatcher wakes up only these few times after its last record.
     [[nodiscard]] bool wait_for_work() {
         if (stopping.load(std::memory_order_acquire)) return false;
+        for (int check = 0; check < idle_check_count && !has_pending(); ++check) {
+            std::this_thread::sleep_for(idle_check_interval);
+        }
         if (has_pending()) return true;
-        sleeping.store(true, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        static_cast<void>(sleeping.exchange(true, std::memory_order_acq_rel));
         if (has_pending()) {
             sleeping.store(false, std::memory_order_relaxed);
             return true;
@@ -305,25 +330,30 @@ struct Core::Impl {
         deliver_all_up_to(logs.head_position(), metrics.head_position(), progress.head_position());
     }
 
-    // The registry as the delivering thread sees it. Copying the pointer per
-    // record keeps the snapshot alive for the whole loop over its sinks.
-    [[nodiscard]] std::shared_ptr<const Registry> current_registry() {
-        const std::scoped_lock lock(registry_mutex);
-        return registry;
+    // Caller holds consume_mutex. The registry as the delivering thread sees
+    // it: a snapshot refreshed when registry_version moves, so delivering a
+    // record takes no lock. A callback that adds or removes a sink replaces
+    // `registry`, not this snapshot, so the loop over the snapshot that is
+    // running the callback stays valid.
+    [[nodiscard]] const Registry& delivery_registry() {
+        if (registry_version.load(std::memory_order_acquire) != delivery_version) {
+            const std::scoped_lock lock(registry_mutex);
+            delivery_snapshot = registry;
+            delivery_version = registry_version.load(std::memory_order_relaxed);
+        }
+        return *delivery_snapshot;
     }
 
     template <AnyRecord R>
     void dispatch(const R& record) {
-        const std::shared_ptr<const Registry> sinks = current_registry();
-        for (const std::shared_ptr<SinkEntry>& entry : *sinks) {
+        for (const std::shared_ptr<SinkEntry>& entry : delivery_registry()) {
             if (!matches(entry->predicate, record)) continue;
             call_sink(*entry, callback_name<R>, [&] { deliver_to(*entry->sink, record); });
         }
     }
 
     void flush_sinks() {
-        const std::shared_ptr<const Registry> sinks = current_registry();
-        for (const std::shared_ptr<SinkEntry>& entry : *sinks) {
+        for (const std::shared_ptr<SinkEntry>& entry : delivery_registry()) {
             call_sink(*entry, "flush", [&] { entry->sink->flush(); });
         }
     }
@@ -437,11 +467,18 @@ struct Core::Impl {
             const DeliveryScope scope(this);
             deliver_everything_queued();
             flush_sinks();
+            delivery_snapshot.reset();
         }
         report_first_losses();
-        // Destroys the sinks (no snapshot refers to them any more).
+        // Destroys the sinks: no snapshot refers to them any more.
         const std::scoped_lock lock(registry_mutex);
-        registry = std::make_shared<const Registry>();
+        replace_registry(std::make_shared<const Registry>());
+    }
+
+    // Caller holds registry_mutex.
+    void replace_registry(std::shared_ptr<const Registry> next) {
+        registry = std::move(next);
+        registry_version.fetch_add(1, std::memory_order_release);
     }
 
     [[nodiscard]] std::expected<SinkId, std::error_code> add_sink(std::unique_ptr<Sink> sink,
@@ -452,7 +489,7 @@ struct Core::Impl {
         const std::scoped_lock lock(registry_mutex);
         auto next = std::make_shared<Registry>(*registry);
         next->push_back(std::move(entry));
-        registry = std::move(next);
+        replace_registry(std::move(next));
         return id;
     }
 
@@ -472,7 +509,7 @@ struct Core::Impl {
             entry->removed.store(true, std::memory_order_seq_cst);
             auto next = std::make_shared<Registry>(*registry);
             std::erase(*next, entry);
-            registry = std::move(next);
+            replace_registry(std::move(next));
         }
         // Only a callback on another thread can be running; wait for it.
         while (entry->busy.load(std::memory_order_seq_cst))
@@ -515,7 +552,7 @@ struct Core::Impl {
 
     std::mutex wake_mutex;
     std::condition_variable wake_cv;    // waits on wake_mutex
-    std::atomic<bool> sleeping{false};  // set by the dispatcher; cleared under wake_mutex
+    std::atomic<bool> sleeping{false};  // see wake_if_sleeping()
     std::atomic<bool> stopping{false};  // set under wake_mutex
 
     // Held by whichever thread delivers records (the dispatcher, flush(), a
@@ -526,7 +563,10 @@ struct Core::Impl {
     // Held only to read or replace `registry`, never during a callback.
     mutable std::mutex registry_mutex;
     std::shared_ptr<const Registry> registry =
-        std::make_shared<const Registry>();  // guarded by registry_mutex
+        std::make_shared<const Registry>();             // guarded by registry_mutex
+    std::atomic<uint64_t> registry_version{0};          // bumped under registry_mutex
+    std::shared_ptr<const Registry> delivery_snapshot;  // guarded by consume_mutex
+    uint64_t delivery_version = std::numeric_limits<uint64_t>::max();  // guarded by consume_mutex
     std::atomic<SinkId> next_sink_id{1};
 
     std::mutex diagnostics_mutex;
