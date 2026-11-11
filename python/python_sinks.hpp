@@ -44,6 +44,11 @@ protected:
                 return false;
             }
             const pybind11::gil_scoped_acquire gil;
+            // Taking the GIL can take long while other Python threads run;
+            // Python sinks may have stopped being called meanwhile.
+            if (!admission.still_admitted()) {
+                return false;
+            }
             try {
                 call();
             } catch (const pybind11::error_already_set& e) {

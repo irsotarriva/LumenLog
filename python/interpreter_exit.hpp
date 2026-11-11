@@ -26,9 +26,9 @@
 //   3. waits, for at most exit_callback_limit, until that flush has finished
 //      and no thread is inside a call into Python. If only the flush is
 //      still going (a sink written in C++ is slow), it goes on on its own
-//      thread and the library's shutdown waits for it, but the Python sinks
-//      are removed before it reaches the records it has not reached yet;
-//      the report says so, without a number;
+//      thread until the end of interpreter finalisation, which waits for it,
+//      but the Python sinks are removed before it reaches the records it has
+//      not reached yet; the report says so, without a number;
 //   4. removes every Python sink from core() and destroys it, with the GIL;
 //   5. puts back the default diagnostic handler if Python had replaced it;
 //   6. closes the gate PythonCall checks, so that no C++ thread calls into
@@ -94,8 +94,14 @@ public:
 
     [[nodiscard]] bool admitted() const noexcept { return admitted_; }
 
+    // admitted(), and a call of this kind is still admitted now: false once
+    // the exit hook has stopped calling Python sinks, for a SinkCallback
+    // admitted before. Lets a call that waited for the GIL skip its work.
+    [[nodiscard]] bool still_admitted() const noexcept;
+
 private:
-    bool admitted_;
+    PythonCallKind kind_;
+    bool admitted_ = false;
 };
 
 // Whether a producer called from Python may submit its record. False from
