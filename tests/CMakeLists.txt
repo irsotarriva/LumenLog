@@ -11,6 +11,11 @@ add_executable(lumen_tests
   test_scope.cpp
   test_tagged.cpp
   test_record_format.cpp
+  test_text_encoding.cpp
+  test_time_format.cpp
+  test_line_writer.cpp
+  test_terminal_output.cpp
+  test_rotating_file.cpp
   test_terminal_sink.cpp
   test_file_sink.cpp
   test_dashboard_model.cpp
@@ -24,6 +29,17 @@ endif()
 
 target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_tests PRIVATE cxx_std_23)
+# The tests of the internal pieces (line writer, encodings, time format,
+# rotation) include their headers from src/. The platform macros are the
+# library's, for the tests that need a pty, a named pipe or TZ.
+target_include_directories(lumen_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+if(WIN32)
+  target_compile_definitions(lumen_tests PRIVATE PLATFORM_WINDOWS)
+elseif(APPLE)
+  target_compile_definitions(lumen_tests PRIVATE PLATFORM_MACOS)
+else()
+  target_compile_definitions(lumen_tests PRIVATE PLATFORM_LINUX)
+endif()
 
 include(GoogleTest)
 # A deadlock shows up as a timeout rather than a hung run.
@@ -64,6 +80,34 @@ if(Python3_Interpreter_FOUND)
                        PROPERTIES TIMEOUT 60)
 else()
   message(STATUS "Lumen: no Python 3 interpreter; the Json output check is not registered")
+endif()
+
+# Standard error on a pipe nobody reads: the sinks must not stall the other
+# sinks, and a fatal record must still end the process. POSIX only (pipes as
+# standard error, _exit).
+if(UNIX)
+  add_executable(lumen_blocked_stderr blocked_stderr.cpp)
+  target_link_libraries(lumen_blocked_stderr PRIVATE lumen)
+  if(Python3_Interpreter_FOUND)
+    foreach(mode IN ITEMS deliver fatal)
+      add_test(NAME BlockedStderr.${mode}
+               COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/check_blocked_stderr.py"
+                       $<TARGET_FILE:lumen_blocked_stderr> ${mode})
+      set_tests_properties(BlockedStderr.${mode} PROPERTIES TIMEOUT 120)
+    endforeach()
+  endif()
+endif()
+
+# A sink's create() when its thread cannot start. The test replaces
+# pthread_create, which works only where the executable's definition takes
+# precedence over the C library's: Linux.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(lumen_test_sink_thread_start test_sink_thread_start.cpp)
+  target_link_libraries(lumen_test_sink_thread_start
+    PRIVATE lumen GTest::gtest GTest::gtest_main ${CMAKE_DL_LIBS})
+  target_compile_definitions(lumen_test_sink_thread_start PRIVATE PLATFORM_LINUX
+    $<$<BOOL:${LUMEN_ENABLE_DASHBOARD}>:LUMEN_TEST_DASHBOARD>)
+  gtest_discover_tests(lumen_test_sink_thread_start PROPERTIES TIMEOUT 120)
 endif()
 
 # Ring buffer throughput. Built with the tests so that it keeps compiling, but

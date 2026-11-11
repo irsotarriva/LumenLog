@@ -5,6 +5,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstdlib>
+#include <format>
 #include <limits>
 #include <memory>
 #include <string>
@@ -141,7 +142,7 @@ TEST_F(RecordFormatTest, JsonLevelIsThePlainNameAndUnknownOutsideTheEnum) {
 TEST_F(RecordFormatTest, JsonMetricValueIsTheShortestTextThatReadsBackBitForBit) {
     EXPECT_EQ(_json_value_text(1e-9), "1e-09");
     EXPECT_EQ(_json_value_text(123456789.123456789), "123456789.12345679");
-    EXPECT_EQ(_json_value_text(-0.0), "-0");
+    EXPECT_EQ(_json_value_text(-0.0), "-0.0");
     const std::vector<double> values = {
         0.1,
         1e-9,
@@ -178,12 +179,59 @@ TEST_F(RecordFormatTest, JsonNonFiniteValueIsNullWithItsNameInValueText) {
     EXPECT_EQ(line_for(1.5).find("value_text"), std::string::npos);
 }
 
+// The JSON escape of a byte below 0x20, written out independently.
+[[nodiscard]] std::string json_escape_of_control(uint32_t byte) {
+    switch (byte) {
+        case '\b': return "\\b";
+        case '\f': return "\\f";
+        case '\n': return "\\n";
+        case '\r': return "\\r";
+        case '\t': return "\\t";
+        default:   return std::format("\\u{:04x}", byte);
+    }
+}
+
 TEST_F(RecordFormatTest, JsonEscapesQuotesBackslashesAndEveryControlByte) {
-    const std::string message = std::string("\"\\\b\f\n\r\t") + '\0' + "\x01\x1f\x7f";
-    const LogRecord record = log_record(message);
+    // Every byte below 0x20 in order, then '"', '\' and DEL (not escaped).
+    std::string message;
+    std::string expected;
+    for (uint32_t byte = 0; byte < 0x20; ++byte) {
+        message += static_cast<char>(byte);
+        expected += json_escape_of_control(byte);
+    }
+    message += "\"\\\x7f";
+    expected += "\\\"\\\\\x7f";
+    const std::string line = _line(FileFormat::Json, log_record(message));
+    EXPECT_NE(line.find(R"("msg":")" + expected + R"(",)"), std::string::npos) << line;
+}
+
+// Two invalid keys both read back as U+FFFD, and a valid key reads back as
+// the suffixed form of the second one: each later key gets the first suffix
+// that makes it differ from every key before it.
+TEST_F(RecordFormatTest, KeysThatWouldBeWrittenAlikeGetANumericSuffixInJsonAndKeyValue) {
+    MetricRecord record = metric_record("m", 1.0);
+    EXPECT_TRUE(record.tags.add("\xff", "first"));
+    EXPECT_TRUE(record.tags.add("\xfe", "second"));
+    EXPECT_TRUE(record.tags.add("\xef\xbf\xbd#2", "third"));
     EXPECT_NE(_line(FileFormat::Json, record)
-                  .find(R"("msg":"\"\\\b\f\n\r\t\u0000\u0001\u001f)"
-                        "\x7f\""),
+                  .find(R"("tags":{"\ufffd":"first","\ufffd#2":"second",)"
+                        R"("\ufffd#2#2":"third"}})"),
+              std::string::npos);
+
+    MetricRecord quoted = metric_record("m", 1.0);
+    EXPECT_TRUE(quoted.tags.add("\xff k", "first"));
+    EXPECT_TRUE(quoted.tags.add("\xfe k", "second"));
+    EXPECT_NE(_line(FileFormat::KeyValue, quoted)
+                  .find(R"( "tags.\ufffd k"=first "tags.\ufffd k#2"=second)"),
+              std::string::npos);
+}
+
+TEST_F(RecordFormatTest, DistinctRawKeysThatAreWrittenDistinctlyGetNoSuffix) {
+    MetricRecord record = metric_record("m", 1.0);
+    EXPECT_TRUE(record.tags.add("\xff", "first"));
+    EXPECT_TRUE(record.tags.add("\xfe", "second"));
+    // Unquoted logfmt keys are written as they are, so they differ.
+    EXPECT_NE(_line(FileFormat::KeyValue, record).find(" tags.\xff=first tags.\xfe=second"),
               std::string::npos);
 }
 
