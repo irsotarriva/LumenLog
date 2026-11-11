@@ -126,7 +126,8 @@ private:
         switch (token_.kind) {
             case TokenKind::LParen: return parse_group_(depth);
             case TokenKind::Identifier: return parse_word_condition_();
-            case TokenKind::String: return parse_tag_comparison_();  // quoted key, e.g. "level" == 3
+            // A quoted key, e.g. "level" == 3.
+            case TokenKind::String: return parse_tag_comparison_();
             case TokenKind::End: return fail_(token_.position, "unexpected end of query");
             default:
                 return fail_(token_.position, "expected a condition, got '" + token_.text + "'");

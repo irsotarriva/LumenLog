@@ -17,7 +17,9 @@ namespace lumen {
 //
 //   class JetFinder : public lumen::Tagged {
 //   public:
-//       explicit JetFinder(uint32_t run) { static_cast<void>(lumen_tag("run", std::to_string(run))); }
+//       explicit JetFinder(uint32_t run) {
+//           static_cast<void>(lumen_tag("run", std::to_string(run)));
+//       }
 //       void process() {
 //           LUMEN_MEMBER_SCOPE;              // records below carry run=<run>
 //           LUMEN_LOG_INFO("processing");

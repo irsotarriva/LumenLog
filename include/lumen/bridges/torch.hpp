@@ -12,7 +12,8 @@
 //           torch::Tensor loss = torch::nll_loss(model->forward(batch.data), batch.target);
 //           loss.backward();
 //           static_cast<void>(metrics.emit_loss(loss));
-//           static_cast<void>(metrics.emit_gradient_norm(*model));  // after backward(), before step()
+//           // After backward(), before step():
+//           static_cast<void>(metrics.emit_gradient_norm(*model));
 //           optimizer.step();
 //       }
 //       static_cast<void>(metrics.emit_learning_rates(optimizer));
