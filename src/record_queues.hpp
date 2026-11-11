@@ -52,9 +52,11 @@ public:
     // metrics, then logs, and hands each one to `consume`. Returns how many.
     template <RecordConsumer F>
     [[nodiscard]] uint64_t pop_up_to(const QueuePositions& targets, F consume) {
-        return pop_lane_(progress_, targets.progress, consume) +
-               pop_lane_(metrics_, targets.metrics, consume) +
-               pop_lane_(logs_, targets.logs, consume);
+        // Separate statements: the operands of + have no guaranteed order.
+        uint64_t popped = pop_lane_(progress_, targets.progress, consume);
+        popped += pop_lane_(metrics_, targets.metrics, consume);
+        popped += pop_lane_(logs_, targets.logs, consume);
+        return popped;
     }
 
     [[nodiscard]] QueuePositions heads() const noexcept;
