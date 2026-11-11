@@ -104,33 +104,36 @@ examples are:
   `<source_location>`. Clang with GNU libstdc++ 13 does not work: Clang 18
   does not see `std::expected` in that library.
 - Windows: experimental. MSVC is built and tested by one CI job that is
-  allowed to fail, with the dashboard off; the dashboard has never been
-  built on Windows.
-
-The CI workflow (`.github/workflows/ci.yml`) has these jobs. Every one of
-them fails the workflow when it fails, except
-`windows-msvc-debug (experimental)`:
-
-| Job | Toolchain | What it builds and runs |
-|---|---|---|
-| `linux-gcc-debug-asan` | GCC 13, libstdc++, Ubuntu 24.04, vcpkg | Debug, ASan + UBSan, dashboard; the Eigen and OpenMP bridge tests and the locale tests; fails if any test is skipped |
-| `linux-gcc-tsan` | GCC 13, vcpkg | Debug, ThreadSanitizer, dashboard |
-| `linux-gcc-release` | GCC 13, vcpkg | Release, dashboard; also the `build-settings` test preset |
-| `linux-gcc-release-no-dashboard` | GCC 13, apt packages, no vcpkg | Release without the dashboard |
-| `linux-clang-libcxx-debug-asan` | Clang 18, libc++ 18, vcpkg | Debug, ASan + UBSan, dashboard |
-| `macos-appleclang-debug-asan` | Apple Clang, `macos-latest`, vcpkg | Debug, ASan + UBSan, dashboard |
-| `python-bindings` | GCC 13, pybind11 from pip | Debug, ASan + UBSan, the Python module and its tests |
-| `lint (clang-format, clang-tidy)` | clang-format 18, clang-tidy 18 | the `format-check` and `lint` targets, dashboard and Python module included |
-| `coverage (gcovr)` | GCC 13, vcpkg | line and branch coverage of `src/` and `include/`, dashboard included; uploads the report and fails under its thresholds |
-| `bridges (torch)` | GCC 13, libtorch 2.5.1 (CPU), Eigen and OpenMP | the bridge tests and the bridge documentation blocks |
-| `bridges (root)` | conda-forge GCC 13 and ROOT 6.32 | the same for ROOT |
-| `windows-msvc-debug (experimental)` | MSVC, `windows-latest`, vcpkg | Debug, no sanitizer, dashboard off; allowed to fail |
+  allowed to fail, with the dashboard off; no CI job builds the dashboard
+  on Windows.
 - CMake 3.28 or later.
 - For the tests: GoogleTest and a Python 3 interpreter (the example and
   documentation checks run in Python; no Python package is needed).
 - Optional: FTXUI for the terminal dashboard (`LUMEN_ENABLE_DASHBOARD`,
   on by default when FTXUI is found); pybind11 3.0 or later and Python 3.11
   or later for the Python module (`LUMEN_ENABLE_PYTHON`).
+
+### Continuous integration
+
+The CI workflow (`.github/workflows/ci.yml`) has these jobs. Every one of
+them fails the workflow when it fails, except
+`windows-msvc-debug (experimental)`:
+
+<!-- check: ci-jobs -->
+| Job | Toolchain | What it builds and runs |
+|---|---|---|
+| `linux-gcc-debug-asan` | GCC 13, libstdc++, Ubuntu 24.04, vcpkg | Debug, ASan + UBSan, dashboard; the Eigen and OpenMP bridge tests (required) and the locale tests; fails if any test is skipped |
+| `linux-gcc-tsan` | GCC 13, vcpkg | Debug, ThreadSanitizer, dashboard |
+| `linux-gcc-release` | GCC 13, vcpkg | Release, dashboard; also the `build-settings` test preset, and `lumen_bench_transport`, whose numbers are only printed |
+| `linux-gcc-release-no-dashboard` | GCC 13, apt packages, no vcpkg | Release without the dashboard |
+| `linux-clang-libcxx-debug-asan` | Clang 18, libc++ 18, vcpkg | Debug, ASan + UBSan, dashboard |
+| `macos-appleclang-debug-asan` | Apple Clang, `macos-latest`, vcpkg | Debug, ASan + UBSan, dashboard |
+| `python-bindings` | GCC 13, Python 3.12, pybind11 from pip | Debug, ASan + UBSan, the Python module and its tests |
+| `lint (clang-format, clang-tidy)` | clang-format 18, clang-tidy 18 | the `format-check` and `lint` targets, dashboard and Python module included |
+| `coverage (gcovr)` | GCC 13, vcpkg | line and branch coverage of `src/` and `include/lumen/` (bridges excepted), dashboard included, measured with the `coverage` presets; uploads the report and fails under its thresholds (in `ci.yml`) |
+| `bridges (torch)` | GCC 13, libtorch 2.5.1 (CPU), Eigen and OpenMP | builds the bridge tests and the bridge documentation blocks against the three frameworks (required) and runs the tests whose name contains `Bridge` |
+| `bridges (root)` | conda-forge GCC 13 and ROOT 6.32 | the same for ROOT |
+| `windows-msvc-debug (experimental)` | MSVC, `windows-latest`, vcpkg | Debug, no sanitizer, dashboard off; allowed to fail |
 
 ## Building
 
@@ -150,7 +153,8 @@ The configure presets are `debug`, `tsan` (ThreadSanitizer), `release`, `ci`
 (Debug, ASan + UBSan, warnings as errors) and `coverage` (Debug with GCC's
 `--coverage`, for gcovr). Each one builds in `build/<preset>`. The test
 presets of the same names leave out the tests labelled `build-settings`,
-which build and install Lumen with non-default settings and take minutes;
+which build and install Lumen with non-default settings and take minutes
+(the `coverage` test preset also leaves out those labelled `consumer`);
 `ctest --preset build-settings` runs them against the `release` build.
 
 With vcpkg: set the environment variable `VCPKG_ROOT` to a vcpkg checkout. The
@@ -174,8 +178,10 @@ Sanitizers and multi-configuration generators (Ninja Multi-Config, Visual
 Studio, Xcode): `LUMEN_SANITIZER` instruments the Debug configuration only,
 and defaults to `address` for a top-level build; Release, RelWithDebInfo and
 MinSizeRel are never instrumented. With a single-configuration generator
-(the presets use one) it instruments the one build, whatever its
-`CMAKE_BUILD_TYPE`.
+(Ninja, Unix Makefiles) it instruments the one build, whatever its
+`CMAKE_BUILD_TYPE`. The presets do not choose a generator, so they get
+CMake's default: a single-configuration one on Linux and macOS, Visual
+Studio on Windows.
 
 ## Using Lumen from CMake
 
