@@ -123,6 +123,11 @@ public:
     // without a gradient are left out. Call it after backward() and before
     // the optimizer step (or zero_grad()). Returns the norm.
     //
+    // Each tensor's norm is computed in double precision, whatever the
+    // gradients' type, so a norm beyond the largest float or half (3.4e38,
+    // 65504) is still finite; it is infinite or NaN only if a gradient
+    // element is, or if the norm exceeds the largest double.
+    //
     // Cost: one norm per parameter tensor, each read back to the host (a
     // device synchronisation per tensor for a model on a GPU).
     [[nodiscard]] std::expected<double, std::error_code> emit_gradient_norm(
@@ -137,7 +142,7 @@ public:
                     continue;
                 }
                 // hypot accumulates sqrt(a^2 + b^2) without overflowing.
-                norm = std::hypot(norm, gradient.norm().item<double>());
+                norm = std::hypot(norm, gradient.norm(2, torch::kDouble).item<double>());
                 ++with_gradient;
             }
         } catch (const std::exception& e) {

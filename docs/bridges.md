@@ -52,7 +52,7 @@ place. Cost: one pass for the norm, one for the finiteness check.
 
 | Metric | Value | Tags |
 |---|---|---|
-| `eigen.matrix.norm` | Frobenius norm (a vector's Euclidean norm); NaN or infinite if a coefficient is | `matrix=<name>`, `rows`, `cols` |
+| `eigen.matrix.norm` | Frobenius norm (a vector's Euclidean norm), computed with scaling (`blueNorm()`), so finite coefficients as large as 1e300 or as small as 1e-300 give a finite, nonzero norm; NaN if a coefficient is NaN, otherwise infinite if one is infinite or the norm exceeds the largest finite value | `matrix=<name>`, `rows`, `cols` |
 | `eigen.matrix.non_finite` | number of NaN or infinite coefficients | `matrix=<name>`, `rows`, `cols` |
 
 `emit_solver_summary(name, solver)` takes an iterative solver
@@ -125,13 +125,17 @@ balance.emit();
 | `openmp.work.unattributed` | units that could not be given to a thread slot | when not 0 |
 
 All three are tagged `region=<name>` and `threads=<team size>`. The team size
-is the largest `omp_get_num_threads()` that `add()` saw; a thread of the team
-that never called `add()` counts as idle. The object has one slot per thread
-number below `max_team_size` (constructor argument, default
-`omp_get_max_threads()` at construction). `add()` from a thread numbered
-higher (a `num_threads` clause asking for more) or from inside a nested
-parallel region goes to `unattributed`. Outside any parallel region `add()`
-counts as thread 0 of a team of 1.
+is the largest `omp_get_num_threads()` seen by an `add()` that reached a slot,
+and 0 if none did; a thread of the team that never called `add()` counts as
+idle. The object has one slot per thread number below `max_team_size`
+(constructor argument, default `omp_get_max_threads()` at construction).
+`add()` goes to `unattributed` from a thread numbered higher (a `num_threads`
+clause asking for more) and from a region nested inside an enclosing region
+whose team has more than one thread (thread numbers then repeat across the
+inner teams). A region nested only in regions with a team of one thread
+(serialised by `if(false)`, `num_threads(1)` or the active-levels limit) is
+attributed like an outermost one. Outside any parallel region `add()` counts
+as thread 0 of a team of 1.
 
 ## ROOT — `lumen/bridges/root.hpp`
 
@@ -295,23 +299,24 @@ Every bridge has GTest tests under `tests/bridges/` that run it against the
 real framework and check the exact metric names, values and tags that reach a
 sink, plus a compile check that includes the header alone with the framework
 (`CompileCheck.Bridge<Name>WithFramework`) and one that includes every bridge
-without any framework (`CompileCheck.BridgesWithoutFrameworks`). A test target
-is built only when CMake finds the framework; otherwise configuring prints
-`Lumen: <Framework> bridge tests: SKIPPED, ...` and ctest lists
-`<Name>Bridge.SkippedFrameworkNotFound` as skipped. Setting
-`LUMEN_REQUIRED_BRIDGE_FRAMEWORKS` (e.g. `Eigen3;OpenMP`) turns a missing
-framework into a configure error.
+without any framework (`CompileCheck.BridgesWithoutFrameworks`). The tests,
+the compile check and the documentation blocks of a bridge are built only
+when CMake finds its framework; otherwise configuring prints
+`Lumen: <Framework> bridge tests: NOT BUILT, ...` and they are absent from
+ctest, so a passing run never contains a bridge test that did not run.
+Setting `LUMEN_REQUIRED_BRIDGE_FRAMEWORKS` (e.g. `Eigen3;OpenMP`) turns a
+missing framework into a configure error; every CI job below that tests a
+bridge sets it. All of these jobs fail the workflow when a test fails.
 
-| Bridge | Exercised by | Status |
-|---|---|---|
-| Eigen | Eigen 3.4.0, GCC 13 (Ubuntu 24.04 `libeigen3-dev`): locally and in the CI job `bridges (torch)` | tests pass locally |
-| OpenMP | GCC 13 libgomp (OpenMP 4.5): locally, in the Linux GCC jobs of the main CI matrix (except `linux-gcc-tsan`), and in `bridges (torch)`. Not run under ThreadSanitizer (libgomp is not instrumented, so TSan reports false races) | tests pass locally |
-| libtorch | libtorch 2.5.1 CPU (cxx11 ABI), GCC 13: CI job `bridges (torch)` only | written without access to libtorch; not yet run |
-| ROOT | ROOT 6.32 from conda-forge, conda-forge GCC 13: CI job `bridges (root)` only | written without access to ROOT; not yet run |
+| Bridge | Exercised by |
+|---|---|
+| Eigen | Eigen 3.4.0 (Ubuntu 24.04 `libeigen3-dev`), GCC 13: CI jobs `linux-gcc-debug-asan` (ASan + UBSan) and `bridges (torch)`, and locally |
+| OpenMP | GCC 13 libgomp (OpenMP 4.5): the Linux GCC jobs of the main CI matrix except `linux-gcc-tsan` (`linux-gcc-debug-asan` requires it), `bridges (torch)`, and locally. Not built under ThreadSanitizer (libgomp is not instrumented, so TSan reports false races) |
+| libtorch | libtorch 2.5.1 CPU (cxx11 ABI), GCC 13: CI job `bridges (torch)` only |
+| ROOT | ROOT 6.32 from conda-forge, conda-forge GCC 13: CI job `bridges (root)` only |
 
 The code blocks on this page are compiled by the documentation check against
-the same frameworks; a block whose framework is missing is reported by ctest
-as `Docs.Bridge<Name>Blocks.SkippedFrameworkNotFound`.
+the same frameworks, and not at all where the framework is missing.
 
 To run the bridge tests yourself, point CMake at the frameworks:
 

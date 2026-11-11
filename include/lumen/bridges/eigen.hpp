@@ -53,7 +53,14 @@ concept EigenIterativeSolver = requires(const Solver& solver) {
 
 // Emits two metrics, each tagged matrix=<name>, rows=<rows>, cols=<cols>:
 //   eigen.matrix.norm        the Frobenius norm (for a vector, its Euclidean
-//                            norm); NaN or infinite if a coefficient is
+//                            norm), computed with Blue's scaled algorithm
+//                            (blueNorm()), so it neither overflows nor
+//                            underflows when the coefficients are finite and
+//                            the norm itself is representable: 1e300 or
+//                            1e-300 coefficients give a finite, nonzero norm.
+//                            NaN if a coefficient is NaN; otherwise infinite
+//                            if a coefficient is infinite or the norm exceeds
+//                            the largest finite value of the scalar type
 //   eigen.matrix.non_finite  how many coefficients are NaN or infinite
 // An expression (a * b, m.transpose()) is evaluated once, into a temporary.
 template <EigenFloatingMatrix Derived>
@@ -65,7 +72,9 @@ void emit_matrix_summary(std::string_view name, const Eigen::MatrixBase<Derived>
     const auto rows = static_cast<int64_t>(evaluated.rows());
     const auto cols = static_cast<int64_t>(evaluated.cols());
     const auto non_finite = static_cast<int64_t>((!evaluated.array().isFinite()).count());
-    MetricBuilder(core, "eigen.matrix.norm", static_cast<double>(evaluated.norm()))
+    // Not stableNorm(): in Eigen 3.4.0 it fails an assertion (and reads out
+    // of bounds without one) on a fixed-size matrix that is not a vector.
+    MetricBuilder(core, "eigen.matrix.norm", static_cast<double>(evaluated.blueNorm()))
         .tag("matrix", name)
         .tag("rows", rows)
         .tag("cols", cols);

@@ -179,6 +179,43 @@ TEST_F(OpenMpBridgeTest, AddsFromANestedRegionAreUnattributed) {
     EXPECT_EQ(metrics[1].value, 10.0);
 }
 
+TEST_F(OpenMpBridgeTest, ARegionInsideASerialisedOuterRegionIsAttributedToItsOwnTeam) {
+    omp_set_max_active_levels(2);
+    OpenMpWorkBalance balance("inner", 4);
+#pragma omp parallel num_threads(1)
+    {
+#pragma omp parallel num_threads(4)
+        { balance.add(3); }
+    }
+    balance.emit(_core);
+
+    const auto metrics = _metrics();
+    ASSERT_EQ(metrics.size(), 2U);
+    EXPECT_EQ(metrics[0].name, "openmp.work.total");
+    EXPECT_EQ(metrics[0].value, 12.0);
+    EXPECT_EQ(tags_of(metrics[0].tags), (Tags{{"region", "inner"}, {"threads", "4"}}));
+    EXPECT_EQ(metrics[1].name, "openmp.work.imbalance");
+    EXPECT_DOUBLE_EQ(metrics[1].value, 1.0);
+}
+
+TEST_F(OpenMpBridgeTest, WhenNoAddReachesASlotTheThreadsTagIsZero) {
+    omp_set_max_active_levels(2);
+    OpenMpWorkBalance balance("all_nested", 2);
+#pragma omp parallel num_threads(2)
+    {
+#pragma omp parallel num_threads(2)
+        { balance.add(1); }
+    }
+    balance.emit(_core);
+
+    const auto metrics = _metrics();
+    ASSERT_EQ(metrics.size(), 2U);
+    EXPECT_EQ(metrics[0].value, 0.0);
+    EXPECT_EQ(test::tag_of(metrics[0].tags, "threads"), "0");
+    EXPECT_EQ(metrics[1].name, "openmp.work.unattributed");
+    EXPECT_EQ(metrics[1].value, 4.0);
+}
+
 // The example in the header and in docs/bridges.md.
 TEST_F(OpenMpBridgeTest, ADynamicParallelForWithOneUnitPerIterationTotalsItsIterations) {
     omp_set_num_threads(4);

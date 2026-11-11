@@ -69,15 +69,21 @@ inline void emit_openmp_configuration(Core& core = lumen::core()) {
 //                             ratio would be wrong).
 //   openmp.work.unattributed  units that could not be given to a thread slot
 //                             (see below). Sent only when not 0.
-// The team size is the largest omp_get_num_threads() seen by add(); a thread
-// of that team that never called add() counts as having done no work.
+// The team size is the largest omp_get_num_threads() seen by an add() that
+// reached a slot, and 0 if none did; a thread of that team that never called
+// add() counts as having done no work.
 //
 // Slots. The object has one slot per thread number below `max_team_size`
 // (default: omp_get_max_threads() when the object is constructed). add()
-// from a thread whose number is not below it (a num_threads clause asking for
-// more), or from inside a nested parallel region (where thread numbers repeat
-// across the inner teams), goes to the unattributed count. Called outside any
-// parallel region, add() counts as thread 0 of a team of 1.
+// goes to the unattributed count instead
+//   - from a thread whose number is not below it (a num_threads clause asking
+//     for more), and
+//   - from inside a region nested in an enclosing region whose team has more
+//     than one thread: thread numbers then repeat across the inner teams.
+// A region nested only in regions with a team of one thread (serialised by
+// if(false), num_threads(1) or max-active-levels) is attributed like an
+// outermost one: its thread numbers name distinct threads. Called outside
+// any parallel region, add() counts as thread 0 of a team of 1.
 class OpenMpWorkBalance {
 public:
     explicit OpenMpWorkBalance(std::string_view region,
@@ -92,7 +98,7 @@ public:
 
     void add(uint64_t units) noexcept {
         const int32_t thread = omp_get_thread_num();
-        if (omp_get_level() > 1 || thread < 0 ||
+        if (!enclosing_teams_are_single_() || thread < 0 ||
             static_cast<std::size_t>(thread) >= slots_.size()) {
             unattributed_.fetch_add(units, std::memory_order_relaxed);
             return;
@@ -129,6 +135,19 @@ public:
     }
 
 private:
+    // True when every region enclosing the calling thread's innermost one
+    // has a team of one thread, so that the innermost thread number names
+    // one thread of the process.
+    [[nodiscard]] static bool enclosing_teams_are_single_() noexcept {
+        const int32_t level = omp_get_level();
+        for (int32_t enclosing = 1; enclosing < level; ++enclosing) {
+            if (omp_get_team_size(enclosing) > 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // One cache line per slot, so that threads adding to neighbouring slots
     // do not slow each other down. 64 bytes rather than
     // std::hardware_destructive_interference_size, whose value GCC warns may

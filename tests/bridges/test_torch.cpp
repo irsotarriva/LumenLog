@@ -110,6 +110,18 @@ TEST_F(TorchBridgeTest, GradientNormLeavesOutParametersWithoutAGradient) {
     EXPECT_NEAR(*norm, std::sqrt(5.0), 1e-6);
 }
 
+TEST_F(TorchBridgeTest, GradientNormBeyondTheLargestFloatOfFloatGradientsIsFinite) {
+    torch::nn::Linear linear(2, 1);
+    // The norm, 3e38 * sqrt(2), does not fit in a float.
+    linear->weight.mutable_grad() = torch::full({1, 2}, 3e38, torch::kFloat32);
+
+    const TorchTrainingMetrics metrics("large", _core);
+    const auto norm = metrics.emit_gradient_norm(*linear);
+    ASSERT_TRUE(norm.has_value());
+    EXPECT_TRUE(std::isfinite(*norm));
+    EXPECT_NEAR(*norm / 3e38, std::sqrt(2.0), 1e-6);
+}
+
 TEST_F(TorchBridgeTest, GradientNormIncludesTheParametersOfSubmodules) {
     torch::nn::Sequential model(torch::nn::Linear(3, 4), torch::nn::Tanh(),
                                 torch::nn::Linear(4, 1));

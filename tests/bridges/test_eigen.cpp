@@ -79,6 +79,39 @@ TEST_F(EigenBridgeTest, MatrixSummaryOfAnInfiniteButNotNaNMatrixHasAnInfiniteNor
     EXPECT_EQ(metrics[1].value, 1.0);
 }
 
+TEST_F(EigenBridgeTest, MatrixSummaryNormOfHugeFiniteCoefficientsIsFinite) {
+    // The squares overflow a double; the norm, 2e300, does not.
+    const Eigen::MatrixXd m = Eigen::MatrixXd::Constant(2, 2, 1e300);
+    emit_matrix_summary("huge", m, _core);
+
+    const auto metrics = _metrics();
+    ASSERT_EQ(metrics.size(), 2U);
+    EXPECT_DOUBLE_EQ(metrics[0].value, 2e300);
+    EXPECT_EQ(metrics[1].value, 0.0);
+}
+
+TEST_F(EigenBridgeTest, MatrixSummaryNormOfTinyNonzeroCoefficientsIsNonzero) {
+    // The squares underflow to 0; the norm, 2e-300, does not.
+    const Eigen::MatrixXd m = Eigen::MatrixXd::Constant(2, 2, 1e-300);
+    emit_matrix_summary("tiny", m, _core);
+
+    const auto metrics = _metrics();
+    ASSERT_EQ(metrics.size(), 2U);
+    EXPECT_DOUBLE_EQ(metrics[0].value, 2e-300);
+}
+
+TEST_F(EigenBridgeTest,
+       MatrixSummaryNormBeyondTheLargestDoubleIsInfiniteWithNoNonFiniteCoefficient) {
+    constexpr double max = std::numeric_limits<double>::max();
+    Eigen::Vector2d v(max, max);
+    emit_matrix_summary("beyond", v, _core);
+
+    const auto metrics = _metrics();
+    ASSERT_EQ(metrics.size(), 2U);
+    EXPECT_TRUE(std::isinf(metrics[0].value));
+    EXPECT_EQ(metrics[1].value, 0.0);
+}
+
 TEST_F(EigenBridgeTest, MatrixSummaryOfAnExpressionDescribesItsValue) {
     Eigen::RowVector2d a;
     a << 3.0, 4.0;
