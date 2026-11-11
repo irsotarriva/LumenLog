@@ -42,6 +42,16 @@ void* operator new[](std::size_t size) {
     return operator new(size);
 }
 
+// The nothrow forms too, so that every block the replaced delete frees came
+// from malloc (a sanitizer's own operator new would not match free()).
+void* operator new(std::size_t size, const std::nothrow_t& /*tag*/) noexcept {
+    return operator new(size);
+}
+
+void* operator new[](std::size_t size, const std::nothrow_t& /*tag*/) noexcept {
+    return operator new(size);
+}
+
 // GCC sees through the replaced operator new after inlining and takes the
 // free() below for a mismatched deallocation; here it is the matching one.
 #if defined(__GNUC__)
