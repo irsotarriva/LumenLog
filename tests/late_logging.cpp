@@ -2,10 +2,9 @@
 // Run by ctest as its own process: exit status 0 means the late records were
 // counted as dropped_after_shutdown, the record logged in main was delivered
 // at shutdown, and nothing crashed (the Debug build runs under ASan).
-#include <unistd.h>
-
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 
@@ -46,8 +45,8 @@ public:
                       << " logs.dropped_after_shutdown=" << stats.logs.dropped_after_shutdown
                       << '\n';
         }
-        // The process is already exiting; _exit reports the verdict as the status.
-        _exit(ok ? 0 : 1);
+        // The process is already exiting; _Exit reports the verdict as the status.
+        std::_Exit(ok ? 0 : 1);
     }
     LogsWhenDestroyed(const LogsWhenDestroyed&) = delete;
     LogsWhenDestroyed& operator=(const LogsWhenDestroyed&) = delete;
