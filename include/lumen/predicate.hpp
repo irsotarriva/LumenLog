@@ -55,7 +55,7 @@ public:
     Predicate() = default;
 
     // For log records.
-    [[nodiscard]] bool evaluate(const TagSet<16>& tags, LogLevel level) const;
+    [[nodiscard]] bool evaluate(const RecordTags& tags, LogLevel level) const;
 
     // For records without a level (metrics, progress): level conditions are
     // ignored, as if absent from the predicate, and the tag conditions decide.
@@ -63,7 +63,7 @@ public:
     // passes metrics with run_id 42, and `level >= Warn || run_id == 42`
     // passes only those too. A predicate made only of level conditions passes
     // every such record.
-    [[nodiscard]] bool evaluate(const TagSet<16>& tags) const;
+    [[nodiscard]] bool evaluate(const RecordTags& tags) const;
 
     // Defined in predicate.cpp; users never see a complete Node.
     struct Node;
@@ -75,7 +75,7 @@ private:
     std::shared_ptr<const Node> node_;  // null: matches every record
 };
 
-// ── Building predicates ──────────────────────────────────────────────────────
+// Building predicates.
 
 [[nodiscard]] Predicate always();
 [[nodiscard]] Predicate never();
@@ -105,7 +105,7 @@ private:
 [[nodiscard]] Predicate tag_greater(std::string_view key, double value);
 [[nodiscard]] Predicate tag_greater_equal(std::string_view key, double value);
 
-// ── Combining predicates ─────────────────────────────────────────────────────
+// Combining predicates.
 //
 // The resulting predicate short-circuits when it is evaluated: in `a && b`,
 // `b` is not looked at for a record that `a` rejects. Building it does not:
@@ -117,7 +117,7 @@ private:
 [[nodiscard]] Predicate operator||(const Predicate& lhs, const Predicate& rhs);
 [[nodiscard]] Predicate operator!(const Predicate& operand);
 
-// ── Runtime queries ──────────────────────────────────────────────────────────
+// Runtime queries.
 //
 // parse_predicate() builds a Predicate from text, so filters can come from a
 // config file, a CLI flag or a console without recompiling:
@@ -152,7 +152,7 @@ private:
 
 struct PredicateParseError {
     std::error_code code;  // LumenError::InvalidPredicate
-    size_t position = 0;   // byte offset into the query where the error was found
+    std::size_t position = 0;   // byte offset into the query where the error was found
     std::string message;   // human-readable, e.g. "expected ')'"
 };
 

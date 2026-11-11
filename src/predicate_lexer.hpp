@@ -31,10 +31,10 @@ struct Token {
     std::string text;
     CompareOp op = CompareOp::Equal;  // Compare only
     double number = 0.0;              // Number only
-    size_t position = 0;              // byte offset of the token's first character
+    std::size_t position = 0;              // byte offset of the token's first character
 };
 
-[[nodiscard]] PredicateParseError make_parse_error(size_t position, std::string message);
+[[nodiscard]] PredicateParseError make_parse_error(std::size_t position, std::string message);
 
 // Splits a predicate query into tokens, one per call to next(). After the
 // last token, next() returns End tokens for ever.
@@ -48,9 +48,9 @@ private:
     using Result = std::expected<Token, PredicateParseError>;
 
     void skip_whitespace_();
-    [[nodiscard]] char peek_(size_t offset) const;
-    [[nodiscard]] Token take_(TokenKind kind, size_t length);
-    [[nodiscard]] Result fail_(size_t position, std::string message) const;
+    [[nodiscard]] char peek_(std::size_t offset) const;
+    [[nodiscard]] Token take_(TokenKind kind, std::size_t length);
+    [[nodiscard]] static Result fail_(std::size_t position, std::string message);
 
     [[nodiscard]] Result lex_end_() const;
     [[nodiscard]] Result lex_paren_();
@@ -61,7 +61,7 @@ private:
     [[nodiscard]] Result lex_number_();
 
     std::string_view query_;
-    size_t pos_ = 0;
+    std::size_t pos_ = 0;
 };
 
 }  // namespace lumen::detail

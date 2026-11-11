@@ -59,7 +59,7 @@ namespace {
 
 }  // namespace
 
-PredicateParseError make_parse_error(size_t position, std::string message) {
+PredicateParseError make_parse_error(std::size_t position, std::string message) {
     return PredicateParseError{make_error_code(LumenError::InvalidPredicate), position,
                                std::move(message)};
 }
@@ -97,18 +97,18 @@ void PredicateLexer::skip_whitespace_() {
     }
 }
 
-char PredicateLexer::peek_(size_t offset) const {
+char PredicateLexer::peek_(std::size_t offset) const {
     return pos_ + offset < query_.size() ? query_[pos_ + offset] : '\0';
 }
 
 // The token is the next `length` characters, spelled as they are.
-Token PredicateLexer::take_(TokenKind kind, size_t length) {
+Token PredicateLexer::take_(TokenKind kind, std::size_t length) {
     Token token{.kind = kind, .text = std::string(query_.substr(pos_, length)), .position = pos_};
     pos_ += length;
     return token;
 }
 
-PredicateLexer::Result PredicateLexer::fail_(size_t position, std::string message) const {
+PredicateLexer::Result PredicateLexer::fail_(std::size_t position, std::string message) {
     return std::unexpected(make_parse_error(position, std::move(message)));
 }
 
@@ -144,7 +144,7 @@ PredicateLexer::Result PredicateLexer::lex_operator_() {
 
 PredicateLexer::Result PredicateLexer::lex_string_() {
     const char quote = peek_(0);
-    const size_t start = pos_;
+    const std::size_t start = pos_;
     ++pos_;
     std::string out;
     while (pos_ < query_.size() && query_[pos_] != quote) {
@@ -164,7 +164,7 @@ PredicateLexer::Result PredicateLexer::lex_string_() {
 }
 
 PredicateLexer::Result PredicateLexer::lex_identifier_() {
-    size_t length = 0;
+    std::size_t length = 0;
     while (is_identifier_char(peek_(length))) {
         ++length;
     }
@@ -172,7 +172,7 @@ PredicateLexer::Result PredicateLexer::lex_identifier_() {
 }
 
 PredicateLexer::Result PredicateLexer::lex_number_() {
-    size_t length = 0;
+    std::size_t length = 0;
     while (pos_ + length < query_.size() && !is_delimiter(query_[pos_ + length])) {
         ++length;
     }

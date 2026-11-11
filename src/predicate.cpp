@@ -111,8 +111,6 @@ namespace {
 using detail::PredicateAccess;
 using Node = Predicate::Node;
 
-// ── Node depth and destruction ───────────────────────────────────────────────
-
 [[nodiscard]] uint32_t depth_of(const Node::Body& body) {
     return std::visit(
         []<typename T>(const T& alternative) -> uint32_t {
@@ -130,7 +128,8 @@ using Node = Predicate::Node;
 // The children released by the outermost Node destructor running on this
 // thread, or null when none is running. Only Node::~Node uses it. Without it,
 // destroying the last owner of a chain of n nodes would recurse n deep.
-thread_local std::vector<NodePtr>* release_queue = nullptr;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+thread_local std::vector<NodePtr>* release_queue = nullptr;  // non-owning: a local of ~Node
 
 }  // namespace
 
@@ -168,7 +167,7 @@ void hand_over(std::array<NodePtr, 2>& children, std::vector<NodePtr>& queue) {
 // which releases them one at a time in a loop: the stack stays one level deep.
 // A leaf pushes nothing, so destroying one allocates nothing; if a push
 // cannot allocate, the program terminates, as for any noexcept function.
-Predicate::Node::~Node() {
+Predicate::Node::~Node() {  // NOLINT(bugprone-exception-escape): see above
     std::array<NodePtr, 2> children = take_children_();
     if (release_queue != nullptr) {
         hand_over(children, *release_queue);
@@ -186,8 +185,6 @@ Predicate::Node::~Node() {
 }
 
 namespace {
-
-// ── Evaluation ───────────────────────────────────────────────────────────────
 
 // true, false, or nullopt ("no opinion"): a level condition evaluated for a
 // record that has no level (metrics, progress). A junction treats a
@@ -210,8 +207,8 @@ template <std::totally_ordered T>
 
 // Every tag condition looks tags up here, so all of them follow one rule: the
 // first entry with `key` is the tag's value.
-[[nodiscard]] std::optional<std::string_view> find_tag(const TagSet<16>& tags, std::string_view key) {
-    for (const TagSet<16>::Entry& entry : tags) {
+[[nodiscard]] std::optional<std::string_view> find_tag(const RecordTags& tags, std::string_view key) {
+    for (const RecordTags::Entry& entry : tags) {
         if (entry.key == key) {
             return entry.value;
         }
@@ -230,7 +227,7 @@ struct Frame {
 // operand of the top frame or pops it, leaving its verdict in `result_`.
 class Walk {
 public:
-    Walk(const TagSet<16>& tags, std::optional<LogLevel> level, std::span<Frame> stack)
+    Walk(const RecordTags& tags, std::optional<LogLevel> level, std::span<Frame> stack)
         : tags_(tags), level_(level), stack_(stack) {}
 
     [[nodiscard]] Verdict run(const Node& root) {
@@ -250,9 +247,9 @@ private:
         --size_;
     }
 
-    void step_(Frame&, const Node::Constant& node) { finish_(node.value); }
+    void step_(Frame& /*frame*/, const Node::Constant& node) { finish_(node.value); }
 
-    void step_(Frame&, const Node::LevelCompare& node) {
+    void step_(Frame& /*frame*/, const Node::LevelCompare& node) {
         if (!level_) {
             finish_(std::nullopt);
             return;
@@ -260,16 +257,16 @@ private:
         finish_(compare(node.op, *level_, node.level));
     }
 
-    void step_(Frame&, const Node::TagText& node) {
+    void step_(Frame& /*frame*/, const Node::TagText& node) {
         const std::optional<std::string_view> value = find_tag(tags_, node.key);
         finish_(value.has_value() && compare(node.op, *value, std::string_view(node.value)));
     }
 
-    void step_(Frame&, const Node::TagExists& node) {
+    void step_(Frame& /*frame*/, const Node::TagExists& node) {
         finish_(find_tag(tags_, node.key).has_value());
     }
 
-    void step_(Frame&, const Node::TagNumber& node) {
+    void step_(Frame& /*frame*/, const Node::TagNumber& node) {
         const std::optional<std::string_view> text = find_tag(tags_, node.key);
         const std::optional<double> value = text ? detail::parse_double(*text) : std::nullopt;
         finish_(value.has_value() && compare(node.op, *value, node.value));
@@ -306,18 +303,18 @@ private:
         finish_(result_.has_value() ? result_ : frame.left);
     }
 
-    const TagSet<16>& tags_;
+    const RecordTags& tags_;
     std::optional<LogLevel> level_;
     std::span<Frame> stack_;
-    size_t size_ = 0;
+    std::size_t size_ = 0;
     Verdict result_;
 };
 
 // Trees up to this depth are walked with a stack on the C++ stack (16 bytes a
 // frame), so ordinary predicates cost no allocation per record.
-inline constexpr size_t inline_depth = 128;
+inline constexpr std::size_t inline_depth = 128;
 
-[[nodiscard]] Verdict evaluate_tree(const Node& root, const TagSet<16>& tags,
+[[nodiscard]] Verdict evaluate_tree(const Node& root, const RecordTags& tags,
                                     std::optional<LogLevel> level) {
     if (root.depth <= inline_depth) {
         std::array<Frame, inline_depth> frames{};
@@ -329,11 +326,9 @@ inline constexpr size_t inline_depth = 128;
 
 }  // namespace
 
-// ── Predicate ────────────────────────────────────────────────────────────────
-
 Predicate::Predicate(std::shared_ptr<const Node> node) : node_(std::move(node)) {}
 
-bool Predicate::evaluate(const TagSet<16>& tags, LogLevel level) const {
+bool Predicate::evaluate(const RecordTags& tags, LogLevel level) const {
     if (!node_) {
         return true;
     }
@@ -341,7 +336,7 @@ bool Predicate::evaluate(const TagSet<16>& tags, LogLevel level) const {
     return evaluate_tree(*node_, tags, level).value_or(true);
 }
 
-bool Predicate::evaluate(const TagSet<16>& tags) const {
+bool Predicate::evaluate(const RecordTags& tags) const {
     if (!node_) {
         return true;
     }

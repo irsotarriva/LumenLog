@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,7 +27,7 @@ inline constexpr uint32_t max_nesting = 64;
     if (a.size() != b.size()) {
         return false;
     }
-    for (size_t i = 0; i < a.size(); ++i) {
+    for (std::size_t i = 0; i < a.size(); ++i) {
         if (detail::ascii::to_lower(a[i]) != detail::ascii::to_lower(b[i])) {
             return false;
         }
@@ -39,7 +40,7 @@ inline constexpr std::array<std::string_view, 6> level_names = {"TRACE", "DEBUG"
                                                                 "WARN",  "ERROR", "FATAL"};
 
 [[nodiscard]] std::optional<LogLevel> parse_level(std::string_view text) {
-    for (size_t i = 0; i < level_names.size(); ++i) {
+    for (std::size_t i = 0; i < level_names.size(); ++i) {
         if (iequals(text, level_names[i])) {
             return static_cast<LogLevel>(i);
         }
@@ -224,7 +225,7 @@ private:
                                               "' (for presence use exists(" + key + "))");
         }
         const CompareOp op = token_.op;
-        const size_t op_position = token_.position;
+        const std::size_t op_position = token_.position;
         if (!advance_()) {
             return std::nullopt;
         }
@@ -246,7 +247,7 @@ private:
     }
 
     [[nodiscard]] std::optional<Predicate> parse_text_value_(std::string_view key, CompareOp op,
-                                                             size_t op_position) {
+                                                             std::size_t op_position) {
         if (op != CompareOp::Equal && op != CompareOp::NotEqual) {
             return fail_(op_position, "'<', '<=', '>' and '>=' need a number on the right");
         }
@@ -256,8 +257,6 @@ private:
         }
         return op == CompareOp::Equal ? tag_equals(key, value) : tag_not_equals(key, value);
     }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
 
     // Makes the next token current; false (with `error_` set) if it is malformed.
     [[nodiscard]] bool advance_() {
@@ -283,7 +282,7 @@ private:
         return advance_();
     }
 
-    [[nodiscard]] std::nullopt_t fail_(size_t position, std::string message) {
+    [[nodiscard]] std::nullopt_t fail_(std::size_t position, std::string message) {
         error_ = detail::make_parse_error(position, std::move(message));
         return std::nullopt;
     }
