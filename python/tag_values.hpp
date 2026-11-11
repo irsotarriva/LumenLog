@@ -3,12 +3,12 @@
 
 #include <pybind11/pybind11.h>
 
-#include <concepts>
 #include <cstdint>
+#include <span>
+#include <string>
 #include <string_view>
 #include <variant>
-
-#include "lumen/detail/string_scratch.hpp"
+#include <vector>
 
 // Tag keys and values as Python passes them. Keys are str. A value is a str,
 // a bool, an int (or any object with __index__, such as a NumPy integer) or a
@@ -19,10 +19,9 @@
 // "true"/"false"; lumen/record_builder.hpp), so a predicate sees the same text
 // whichever language logged the record.
 //
-// Every string_view returned here points into a Python object (or into a
-// StringScratch the caller owns) and is valid only while that object lives
-// and the GIL is held. None of them is ever stored beyond the call that
-// received them: the library copies what it keeps.
+// Every string_view here points into a str object and is valid only while
+// that object lives and the GIL is held. A str never changes its text, and
+// its UTF-8 form, once made, lives as long as the str.
 
 namespace lumen::python {
 
@@ -32,29 +31,43 @@ using TagValue = std::variant<std::string_view, int64_t, uint64_t, double, bool>
 // argument in the error message.
 [[nodiscard]] std::string_view utf8(pybind11::handle text, const char* what);
 
+// A str value is a view into `value`. An object with __index__ (not an int)
+// runs its Python method, which may run any Python code.
 [[nodiscard]] TagValue tag_value(pybind11::handle value);
 
-// The text the library stores for `value`, kept in `scratch` when it had to be
-// formatted.
-[[nodiscard]] std::string_view tag_text(const TagValue& value, detail::StringScratch& scratch);
+// The text the library stores for `value`.
+[[nodiscard]] std::string tag_text(const TagValue& value);
 
-// Calls `f(key, value)` for every item of `tags`, which is None (no tags) or a
-// dict; TypeError for anything else.
-template <std::invocable<std::string_view, const TagValue&> F>
-void for_each_tag(pybind11::handle tags, F&& f) {
-    if (tags.is_none()) {
-        return;
-    }
-    if (!PyDict_Check(tags.ptr())) {
-        throw pybind11::type_error("tags must be a dict or None");
-    }
-    PyObject* key = nullptr;    // non-owning: borrowed from the dict
-    PyObject* value = nullptr;  // non-owning: borrowed from the dict
-    Py_ssize_t position = 0;
-    while (PyDict_Next(tags.ptr(), &position, &key, &value) != 0) {
-        f(utf8(key, "tag key"), tag_value(value));
-    }
-}
+// The tags argument of one call (None or a dict), read and checked in full
+// before anything uses them: a record builder submits its record when it is
+// destroyed, also when a tag raised half way.
+//
+// Reading a value can run Python code (__index__), and that code can change
+// or empty the dict. So the dict's items are first taken with a strong
+// reference each, which runs no Python code; the views in tags() point into
+// those objects and stay valid however the dict changes. A dict that changed
+// while it was read raises RuntimeError, as iterating over it in Python would.
+// TypeError and OverflowError as above; TypeError for tags that are neither
+// None nor a dict. Construct and destroy it with the GIL held.
+class CallTags {
+public:
+    struct Tag {
+        std::string_view key;
+        TagValue value;
+    };
+
+    explicit CallTags(pybind11::handle tags);
+
+    [[nodiscard]] std::span<const Tag> tags() const noexcept { return tags_; }
+
+private:
+    void take_items_(pybind11::handle dict);
+    void check_unchanged_(pybind11::handle dict) const;
+
+    // Every key and value the views point into: key, value, key, value, ...
+    std::vector<pybind11::object> owners_;
+    std::vector<Tag> tags_;
+};
 
 }  // namespace lumen::python
 

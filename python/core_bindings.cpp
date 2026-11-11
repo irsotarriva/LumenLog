@@ -30,7 +30,7 @@ public:
     // passed to sys.unraisablehook. Once Python can no longer run code the
     // line goes to std::cerr instead.
     void operator()(std::string_view line) const {
-        const PythonCall admission;
+        const PythonCall admission(PythonCallKind::Other);
         if (!admission.admitted()) {
             std::cerr << line << '\n' << std::flush;
             return;
@@ -48,13 +48,19 @@ private:
         explicit Held(py::function f) : handler(std::move(f)) {}
         // Released with the GIL; left alone once Python cannot run code.
         ~Held() {
-            const PythonCall admission;
+            const PythonCall admission(PythonCallKind::Other);
             if (!admission.admitted()) {
                 static_cast<void>(handler.release());
                 return;
             }
-            const py::gil_scoped_acquire gil;
-            handler = py::function();
+            try {
+                const py::gil_scoped_acquire gil;
+                handler = py::function();
+            } catch (...) {
+                // pybind11 throws when it cannot take the GIL; the callable
+                // is then left alone, as after exit.
+                static_cast<void>(handler.release());
+            }
         }
         Held(const Held&) = delete;
         Held& operator=(const Held&) = delete;

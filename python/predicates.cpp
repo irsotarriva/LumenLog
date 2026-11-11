@@ -4,8 +4,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
-#include "lumen/detail/string_scratch.hpp"
 #include "lumen/predicate.hpp"
 #include "lumen/record.hpp"
 #include "registration.hpp"
@@ -18,15 +18,19 @@ namespace {
 
 // Evaluates `p` against tags given as a dict, as Core evaluates it for a
 // record with those tags; without a level, as for a metric or progress record.
-// The views in record_tags point into `tags` and `scratch`, which outlive it.
+// The views in record_tags point into `call_tags` and `texts`, which outlive
+// it; `texts` is reserved in full, so its strings never move.
 [[nodiscard]] bool evaluate(const Predicate& p, py::handle tags, std::optional<LogLevel> level) {
-    detail::StringScratch scratch;
+    const CallTags call_tags(tags);
+    std::vector<std::string> texts;
+    texts.reserve(call_tags.tags().size());
     RecordTags record_tags;
-    for_each_tag(tags, [&](std::string_view key, const TagValue& value) {
-        if (!record_tags.set(key, tag_text(value, scratch))) {
+    for (const CallTags::Tag& t : call_tags.tags()) {
+        texts.push_back(tag_text(t.value));
+        if (!record_tags.set(t.key, texts.back())) {
             throw py::value_error("more tags than a record holds");
         }
-    });
+    }
     return level ? p.evaluate(record_tags, *level) : p.evaluate(record_tags);
 }
 
@@ -53,8 +57,7 @@ void register_builders(py::module_& m) {
     m.def(
         "tag_equals",
         [](std::string_view key, py::handle value) {
-            detail::StringScratch scratch;
-            return tag_equals(key, tag_text(tag_value(value), scratch));
+            return tag_equals(key, tag_text(tag_value(value)));
         },
         py::arg("key"), py::arg("value"),
         "Records whose tag `key` has exactly this text. A number is compared as the library "

@@ -31,20 +31,21 @@ public:
 
 class PythonSink : public Sink {
 protected:
-    // Runs `call` with the GIL held. Does nothing once Python can no longer
-    // run code (PythonCall). A Python exception from `call` is thrown on as
-    // PythonSinkError, after the GIL has been released.
+    // Runs `call` with the GIL held, unless Python sinks are no longer called
+    // or Python can no longer run code (PythonCall); returns whether it ran.
+    // A Python exception from `call` is thrown on as PythonSinkError, after
+    // the GIL has been released.
     template <std::invocable F>
-    static void _call_python(F&& call) {
+    static bool _call_python(F call) {
         std::string failure;
         {
-            const PythonCall admission;
+            const PythonCall admission(PythonCallKind::SinkCallback);
             if (!admission.admitted()) {
-                return;
+                return false;
             }
             const pybind11::gil_scoped_acquire gil;
             try {
-                std::forward<F>(call)();
+                call();
             } catch (const pybind11::error_already_set& e) {
                 // Read here: the exception's Python objects need the GIL.
                 failure = describe(e);
@@ -52,6 +53,16 @@ protected:
         }
         if (!failure.empty()) {
             throw PythonSinkError(failure);
+        }
+        return true;
+    }
+
+    // _call_python for a record callback: a record the sink does not receive
+    // is counted for the exit report (python/interpreter_exit.hpp).
+    template <std::invocable F>
+    static void _deliver(F call) {
+        if (!_call_python(std::move(call))) {
+            count_undelivered_python_record();
         }
     }
 };

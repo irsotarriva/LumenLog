@@ -5,11 +5,10 @@
 #include <exception>
 #include <optional>
 #include <string_view>
-#include <utility>
 #include <variant>
-#include <vector>
 
 #include "caller_source.hpp"
+#include "interpreter_exit.hpp"
 #include "lumen/core.hpp"
 #include "lumen/level.hpp"
 #include "lumen/progress.hpp"
@@ -26,27 +25,15 @@ namespace {
 // The producers keep the GIL: submitting a record takes no lock that the
 // dispatch thread holds while it waits for the GIL, and never waits for a
 // sink. fatal() is the exception (see there).
+//
+// Once the interpreter has begun to exit, the producers drop their record
+// (admit_python_record, python/interpreter_exit.hpp); their arguments are
+// still checked first, so a wrong one raises as before.
 
-// The tags of one call, read and checked before the record is built: a
-// builder submits its record when it is destroyed, also when a tag argument
-// raised half way. The views point into the `tags` dict, which outlives them.
-using CallTags = std::vector<std::pair<std::string_view, TagValue>>;
-
-[[nodiscard]] CallTags read_tags(py::handle tags) {
-    CallTags out;
-    if (!tags.is_none() && PyDict_Check(tags.ptr())) {
-        out.reserve(static_cast<std::size_t>(PyDict_Size(tags.ptr())));
-    }
-    for_each_tag(tags, [&out](std::string_view key, const TagValue& value) {
-        out.emplace_back(key, value);
-    });
-    return out;
-}
-
-template <typename Builder>
-void add_tags(Builder& builder, const CallTags& tags) {
-    for (const auto& [key, value] : tags) {
-        std::visit([&builder, key](auto v) { builder.tag(key, v); }, value);
+template <BuiltRecord R>
+void add_tags(BasicRecordBuilder<R>& builder, const CallTags& tags) {
+    for (const CallTags::Tag& t : tags.tags()) {
+        std::visit([&builder, &t](auto value) { builder.tag(t.key, value); }, t.value);
     }
 }
 
@@ -61,15 +48,18 @@ void log_at(LogLevel level, const py::str& message, py::handle tags, py::handle 
             "fatal() for that");
     }
     const std::string_view text = utf8(message, "message");
-    const CallTags call_tags = read_tags(tags);
+    const CallTags call_tags(tags);
     const PythonSource where = source_of(source);
+    if (!admit_python_record()) {
+        return;
+    }
     RecordBuilder builder(core(), level, where.location(), text);
     add_tags(builder, call_tags);
 }
 
 [[noreturn]] void fatal(const py::str& message, py::handle tags) {
     const std::string_view text = utf8(message, "message");
-    const CallTags call_tags = read_tags(tags);
+    const CallTags call_tags(tags);
     const PythonSource where = PythonSource::caller();
     // Built with the GIL (its strings are read from Python objects), destroyed
     // without it: the destructor delivers the record to every sink, Python
@@ -80,6 +70,16 @@ void log_at(LogLevel level, const py::str& message, py::handle tags, py::handle 
     const py::gil_scoped_release release;
     builder.reset();
     std::terminate();  // not reached: the builder terminates
+}
+
+void metric(const py::str& name, double value, py::handle tags) {
+    const std::string_view text = utf8(name, "name");
+    const CallTags call_tags(tags);
+    if (!admit_python_record()) {
+        return;
+    }
+    MetricBuilder builder(core(), text, value);
+    add_tags(builder, call_tags);
 }
 
 struct LevelFunction {
@@ -126,16 +126,8 @@ void register_logging(py::module_& m) {
 }
 
 void register_metric_and_progress(py::module_& m) {
-    m.def(
-        "metric",
-        [](const py::str& name, double value, py::handle tags) {
-            const std::string_view text = utf8(name, "name");
-            const CallTags call_tags = read_tags(tags);
-            MetricBuilder builder(core(), text, value);
-            add_tags(builder, call_tags);
-        },
-        py::arg("name"), py::arg("value"), py::kw_only(), py::arg("tags") = py::none(),
-        "Record a metric. `tags` as for log().");
+    m.def("metric", &metric, py::arg("name"), py::arg("value"), py::kw_only(),
+          py::arg("tags") = py::none(), "Record a metric. `tags` as for log().");
 
     py::class_<ProgressHandle>(m, "Progress",
                                "A progress bar: a sequence of ProgressRecords with one id. "
@@ -143,11 +135,31 @@ void register_metric_and_progress(py::module_& m) {
                                "last one sent is not sent again. finish() sends total/total "
                                "and ends the bar. A bar dropped unfinished sends nothing more. "
                                "Not for concurrent use from several threads.")
-        .def("update", &ProgressHandle::update, py::arg("current"),
-             "Send current/total, unless it is the state sent last or the bar is finished.")
-        .def("tick", &ProgressHandle::tick, "update(current + 1).")
-        .def("finish", &ProgressHandle::finish,
-             "Send total/total if that is not the state sent last, and end the bar.")
+        .def(
+            "update",
+            [](ProgressHandle& handle, uint64_t current) {
+                if (admit_python_record()) {
+                    handle.update(current);
+                }
+            },
+            py::arg("current"),
+            "Send current/total, unless it is the state sent last or the bar is finished.")
+        .def(
+            "tick",
+            [](ProgressHandle& handle) {
+                if (admit_python_record()) {
+                    handle.tick();
+                }
+            },
+            "update(current + 1).")
+        .def(
+            "finish",
+            [](ProgressHandle& handle) {
+                if (admit_python_record()) {
+                    handle.finish();
+                }
+            },
+            "Send total/total if that is not the state sent last, and end the bar.")
         .def_property_readonly("current", &ProgressHandle::current)
         .def_property_readonly("total", &ProgressHandle::total)
         .def_property_readonly("finished", &ProgressHandle::finished);
