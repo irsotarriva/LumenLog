@@ -13,6 +13,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -64,9 +65,10 @@ private:
 }
 
 // Large records: the pipe is full after a few of them.
-const std::string large(4000, 'x');
+inline constexpr std::size_t large_size = 4000;
 
 [[nodiscard]] int deliver(Received& received) {
+    const std::string large(large_size, 'x');
     for (uint64_t i = 0; i < records; ++i) {
         LUMEN_LOG_INFO("{}", large);
     }
@@ -109,6 +111,7 @@ int main(int argc, char** argv) {
     // so the test sees whether the sinks let the fatal path reach
     // std::terminate.
     std::set_terminate([] { end_now(); });
+    const std::string large(large_size, 'x');
     for (uint32_t i = 0; i < 100; ++i) {
         LUMEN_LOG_INFO("{}", large);
     }

@@ -25,6 +25,7 @@ Checks: >
   readability-*,
   -bugprone-easily-swappable-parameters,
   -cert-dcl21-cpp,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-pro-bounds-constant-array-index,
   -misc-include-cleaner,
@@ -39,6 +40,10 @@ Checks: >
 #                                             taking several counts; the pairs are the interface.
 #   cert-dcl21-cpp                            asks for const postfix ++ results, which defeats
 #                                             move semantics; removed upstream in clang-tidy 19.
+#   cppcoreguidelines-avoid-const-or-ref-data-members
+#                                             reports every const member; the project declares
+#                                             a member const when it never changes after
+#                                             construction (the sinks' configuration).
 #   cppcoreguidelines-avoid-magic-numbers     alias of readability-magic-numbers, below.
 #   cppcoreguidelines-pro-bounds-constant-array-index
 #                                             reports every std::array and span subscript by a

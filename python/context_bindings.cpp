@@ -73,7 +73,9 @@ private:
 };
 
 // Python scopes of the calling thread; this thread_local is their single owner.
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+// cert-err58-cpp: constructing a ThreadScopes allocates nothing, so its
+// initialisation cannot throw although no constructor says noexcept.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables,cert-err58-cpp)
 thread_local ThreadScopes tls_scopes;
 
 // The object a `with lumen.scope(key, value):` statement uses.

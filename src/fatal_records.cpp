@@ -27,10 +27,13 @@ void FatalRecords::post(LogRecord&& record) {
 
 void FatalRecords::deliver_all(Delivery& delivery) {
     delivery.finish_in_flight();
-    do {
+    while (true) {
         deliver_announced_(delivery);
         std::this_thread::sleep_for(late_fatal_grace);
-    } while (delivered_ != announced_.load(std::memory_order_acquire));
+        if (delivered_ == announced_.load(std::memory_order_acquire)) {
+            break;
+        }
+    }
     delivery.flush_sinks();
 }
 

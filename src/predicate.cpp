@@ -306,7 +306,7 @@ private:
 
     // A Walk lives only inside one evaluate() call, on its stack, so it never
     // outlives the tags it reads and is never assigned.
-    const RecordTags& tags_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+    const RecordTags& tags_;
     std::optional<LogLevel> level_;
     std::span<Frame> stack_;
     std::size_t size_ = 0;
