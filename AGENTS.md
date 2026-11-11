@@ -134,8 +134,9 @@ The owner's rules; `.clang-format` and `.clang-tidy` enforce part of them.
   the CI jobs that use vcpkg are where the dashboard is compiled and tested.
 - Clang with GNU libstdc++ 13 cannot build Lumen (`std::expected` is hidden).
   Use GCC 13 or later, or Clang with libc++.
-- MSVC does not compile Lumen at present; the Windows CI job is experimental
-  and allowed to fail.
+- Windows is experimental: the MSVC CI job builds and passes with the
+  dashboard off, but it is allowed to fail. Keep code portable (no POSIX-only
+  headers outside `PLATFORM_*` blocks).
 - Never rename compiler or preprocessor built-ins (`__has_include`,
   `__COUNTER__`, `__VA_ARGS__`, `_OPENMP`, `__cpp_*`) in a mass rename.
 - `MILESTONES.md` and `audits/` are local, git-ignored planning files. Never

@@ -110,9 +110,9 @@ examples are:
 
   Clang with GNU libstdc++ 13 does not work: Clang 18 does not see
   `std::expected` in that library.
-- Windows: the CI job `windows-msvc-debug` (MSVC, dashboard off) is marked
-  experimental and allowed to fail. Lumen does not compile with MSVC at
-  present.
+- Windows: experimental. The CI job `windows-msvc-debug` (MSVC, Debug,
+  dashboard off) builds and passes its tests, but it is allowed to fail and
+  the dashboard has never been built on Windows.
 - CMake 3.28 or later.
 - For the tests: GoogleTest and a Python 3 interpreter (the example and
   documentation checks run in Python; no Python package is needed).
