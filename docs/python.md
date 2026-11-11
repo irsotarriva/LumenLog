@@ -349,9 +349,11 @@ forwards each `logging.LogRecord` as one Lumen log record:
   (above), then every `extra` field in the order given. A `str`, `bool` or
   `float` is passed as it is, and an `int` too if it fits in int64 or uint64;
   anything else, a larger `int` included, as `str(value)`. An `extra` field
-  whose name an earlier tag already has is passed with `extra.` put in front
-  of its name (as often as it takes to be new), so `extra={"logger": ...}`
-  becomes the tag `extra.logger`. Tags beyond 16 are dropped and counted
+  named `logger` or `logging.level` (the handler's own tags, also on a
+  record without a `logging.level` tag), or named like an earlier tag, is
+  passed with `extra.` put in front of its name (as often as it takes to be
+  new), so `extra={"logger": ...}` becomes the tag `extra.logger`. Tags
+  beyond 16 are dropped and counted
   (`tags_dropped`); the handler's own tags come first, so they are kept.
   `lumen_tags(record)` returns the tags a record is forwarded with.
 

@@ -24,10 +24,11 @@ Each logging.LogRecord becomes one Lumen log record:
   (above), then every ``extra`` field in the order given. A str, bool or
   float value is passed as it is, and an int too if it fits in int64 or
   uint64; anything else, a larger int included, as str(value). An ``extra``
-  field whose name an earlier tag already has (``logger``,
-  ``logging.level``, or another field renamed this way) is passed with
-  ``extra.`` put in front of its name, as many times as it takes to be new,
-  so no value is lost. A record holds at most 16 tags; the
+  field named ``logger`` or ``logging.level`` (the handler's own tags, also
+  on a record that has no ``logging.level`` tag), or named like an earlier
+  tag, is passed with ``extra.`` put in front of its name, as many times as
+  it takes to be new, so no value is lost and no field passes for the
+  handler's own. A record holds at most 16 tags; the
   library drops the extra fields past that and counts them
   (Core.statistics().tags_dropped). The handler's own tags come first, so
   they are never the ones dropped.
@@ -46,6 +47,9 @@ _STANDARD_ATTRIBUTES = frozenset(
 ) | {"message", "asctime"}
 
 _ONE_TO_ONE = frozenset({logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR})
+
+# The tags the handler sets itself; an extra field never takes these names.
+_HANDLER_TAGS = frozenset({"logger", "logging.level"})
 
 # The ints a Lumen tag value takes as a number: int64 and uint64.
 _SMALLEST_INT = -(2**63)
@@ -82,7 +86,7 @@ def lumen_tags(record: logging.LogRecord) -> dict:
         if key in _STANDARD_ATTRIBUTES:
             continue
         name = key if isinstance(key, str) else str(key)
-        while name in tags:
+        while name in tags or name in _HANDLER_TAGS:
             name = "extra." + name
         tags[name] = _tag_value(value)
     return tags

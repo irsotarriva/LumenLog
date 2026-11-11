@@ -104,6 +104,11 @@ class LumenHandlerTest(LumenTestCase):
                           "extra.logger": "other", "extra.logging.level": "custom",
                           "extra.extra.logger": "taken"})
 
+    def test_extra_field_named_logging_level_is_renamed_on_a_record_without_that_tag(self):
+        self.logger.info("no clash", extra={"logging.level": "custom"})
+        self.assertEqual(self.only_log().tags,
+                         {"logger": "lumen.test.handler", "extra.logging.level": "custom"})
+
     def test_a_failure_to_forward_goes_to_handle_error_and_logs_nothing(self):
         class FailingFormatter(logging.Formatter):
             def format(self, record):
