@@ -30,7 +30,7 @@ public:
     [[nodiscard]] static PythonSource caller();
 
     // From a (file, line, function) tuple, as logging.LogRecord provides
-    // them. TypeError for anything else.
+    // them: two str and an int in [0, 2**32). TypeError for anything else.
     [[nodiscard]] static PythonSource given(pybind11::handle source);
 
     [[nodiscard]] const SourceLocation& location() const noexcept { return location_; }

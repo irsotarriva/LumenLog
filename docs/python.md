@@ -253,8 +253,19 @@ Library errors are raised as subclasses of `lumen.LumenError` (itself a
 `RuntimeError`): `InvalidSinkIdError` (also a `LookupError`),
 `SinkBusyError`, `TagTableFullError`, `InvalidPredicateError` and
 `InvalidSinkConfigError` (both also `ValueError`), `FileOpenError` (also an
-`OSError`). An operating-system error is raised as `OSError`; a wrong
-argument type as `TypeError`.
+`OSError`). An operating-system error is raised as `OSError`.
+
+Arguments, for every function and method of the module:
+
+| The argument | Raises |
+|---|---|
+| has the wrong type | `TypeError` |
+| is an `int` that its parameter cannot hold (a negative count or id, a source line of 2<sup>32</sup>, a float parameter given 2<sup>2000</sup>) | `TypeError`: no overload accepts it |
+| is a tag value that is an `int` outside both int64 and uint64 | `OverflowError` |
+| has the right type but a value the call does not take (`log()` with `FATAL`, a query that does not parse, a sink configuration out of range, more tags than a record holds for `Predicate.evaluate`, entering a `Scope` that is entered) | `ValueError`, or the library error that is one |
+| is a tags dict changed by Python code while it is read | `RuntimeError` |
+
+`tests/python/test_errors.py` checks each entry point against this table.
 
 ## Threads and the GIL
 

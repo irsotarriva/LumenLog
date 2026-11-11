@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 
 #include "tag_values.hpp"
@@ -31,6 +32,29 @@ namespace {
     return name == "<locals>" ? std::string_view{} : name;
 }
 
+// The line of a given source: an int (or an object with __index__) in
+// [0, 2**32). Anything else raises TypeError, as an int argument that does not
+// fit its parameter does everywhere in the module (pybind11's rule).
+[[nodiscard]] uint32_t line_number(py::handle line) {
+    constexpr const char* message = "source line must be an int in [0, 2**32)";
+    if (PyIndex_Check(line.ptr()) == 0) {
+        throw py::type_error(message);
+    }
+    const auto index = py::reinterpret_steal<py::object>(PyNumber_Index(line.ptr()));
+    if (!index) {
+        throw py::error_already_set();
+    }
+    const unsigned long long value = PyLong_AsUnsignedLongLong(index.ptr());
+    if (PyErr_Occurred() != nullptr) {
+        PyErr_Clear();  // a negative or too large int: replaced by the TypeError below
+        throw py::type_error(message);
+    }
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        throw py::type_error(message);
+    }
+    return static_cast<uint32_t>(value);
+}
+
 }  // namespace
 
 PythonSource PythonSource::caller() {
@@ -43,7 +67,8 @@ PythonSource PythonSource::caller() {
         return source;
     }
     PyCodeObject* const code = PyFrame_GetCode(frame);  // a new reference, owned below
-    source.owner_ = py::reinterpret_steal<py::object>(reinterpret_cast<PyObject*>(code));
+    // ob_base.ob_base is the code object's PyObject header (PyObject_VAR_HEAD).
+    source.owner_ = py::reinterpret_steal<py::object>(&code->ob_base.ob_base);
     const std::string_view qualname = utf8(code->co_qualname, "co_qualname");
     source.location_.file = utf8(code->co_filename, "co_filename");
     source.location_.function = qualname;
@@ -58,9 +83,9 @@ PythonSource PythonSource::given(py::handle source) {
     }
     PythonSource out;
     out.owner_ = py::reinterpret_borrow<py::object>(source);
-    const py::tuple parts = py::reinterpret_borrow<py::tuple>(source);
+    const auto parts = py::reinterpret_borrow<py::tuple>(source);
     out.location_.file = utf8(parts[0], "source file");
-    out.location_.line = parts[1].cast<uint32_t>();
+    out.location_.line = line_number(parts[1]);
     out.location_.function = utf8(parts[2], "source function");
     return out;
 }
