@@ -15,11 +15,12 @@
 // name, or label) and every tag key and value point into `storage`, one
 // immutable block allocated when the record was submitted and shared by
 // every copy of the record. Each of these strings is followed by a NUL in the
-// block, so `view.data()` may be passed where a C string is expected. A sink may copy a record and keep it;
-// the views stay valid as long as any copy is alive. The strings in `source`
-// usually come from std::source_location, live for the whole program and are
-// not copied; a source given as text (a call site in another language, see
-// BasicRecordBuilder) is copied into `storage` too.
+// block, so `view.data()` may be passed where a C string is expected. A sink
+// may copy a record and keep it; the views stay valid as long as any copy is
+// alive. The strings in `source` usually come from std::source_location, live
+// for the whole program and are not copied; a source given as text (a call
+// site in another language, see BasicRecordBuilder) is copied into `storage`
+// too.
 //
 // Completeness. Records are only created by Core's producers (the builders
 // in lumen/record_builder.hpp and ProgressHandle in lumen/progress.hpp). Each
