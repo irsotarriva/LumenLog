@@ -60,6 +60,10 @@ add_executable(lumen_bench_transport
 target_link_libraries(lumen_bench_transport PRIVATE lumen)
 target_compile_features(lumen_bench_transport PRIVATE cxx_std_23)
 
+# Optional frameworks for the bridge tests and the bridge compile checks.
+include(bridges/frameworks.cmake)
+add_subdirectory(bridges)
+
 add_subdirectory(compile_checks)
 
 include(consumer/consumer_test.cmake)
