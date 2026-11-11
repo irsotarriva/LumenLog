@@ -58,6 +58,12 @@
 //
 // A Core you construct yourself shuts down the same way in its destructor.
 // Producers must not use it after that (they hold a reference to it).
+//
+// One race is not covered: a record that another thread submits while
+// shutdown is in progress either is delivered, or is counted as
+// dropped_after_shutdown, or, if its push lands after the final delivery
+// pass, stays in the queue undelivered and uncounted. Stop producer threads
+// before shutdown to avoid it.
 
 namespace lumen {
 

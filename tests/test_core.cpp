@@ -491,6 +491,27 @@ TEST_F(CoreRegistryTest, SinkCanAddRemoveAndQuerySinksFromInsideItsCallback) {
     EXPECT_EQ(*results, (std::vector<bool>{true, true, true}));
 }
 
+TEST_F(CoreRegistryTest, SinkRemovedByAnEarlierSinkDuringARecordDoesNotReceiveThatRecord) {
+    auto later_id = std::make_shared<std::atomic<SinkId>>(0);
+    auto removed = std::make_shared<std::vector<std::unique_ptr<Sink>>>();
+    Core& core = _core;
+    // Registered before the sink it removes, so it runs first for each record.
+    ASSERT_TRUE(_core.add_sink(callback_sink([&core, later_id, removed](const LogRecord& r) {
+        if (r.message != "remove now") return;
+        auto sink = core.remove_sink(later_id->load());
+        if (sink) removed->push_back(std::move(*sink));
+    })));
+    auto later = std::make_shared<Captured>();
+    const auto id = _core.add_sink(std::make_unique<CaptureSink>(later));
+    ASSERT_TRUE(id);
+    later_id->store(*id);
+    log_to(_core, "before");
+    log_to(_core, "remove now");
+    _core.flush();
+    EXPECT_EQ(removed->size(), 1U);
+    EXPECT_EQ(later->messages(), (std::vector<std::string>{"before"}));
+}
+
 TEST_F(CoreRegistryTest, SinkRemovingItselfFromItsCallbackGetsSinkBusyAndStaysRegistered) {
     auto self_id = std::make_shared<std::atomic<SinkId>>(0);
     auto errors = std::make_shared<std::vector<std::error_code>>();

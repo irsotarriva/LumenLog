@@ -82,7 +82,6 @@ public:
     }
 
     [[nodiscard]] constexpr std::size_t count() const { return count_; }
-    [[nodiscard]] static constexpr std::size_t capacity() { return N; }
     [[nodiscard]] constexpr bool full() const { return count_ == N; }
     [[nodiscard]] constexpr const Entry* begin() const { return entries_.data(); }
     [[nodiscard]] constexpr const Entry* end() const { return entries_.data() + count_; }

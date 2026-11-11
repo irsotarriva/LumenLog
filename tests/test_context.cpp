@@ -26,12 +26,12 @@ using test::tags_of;
 
 class ContextTest : public LocalCoreTest {
 protected:
-    // Submits one record and returns its tags as delivered.
+    // Submits one record and returns its tags as delivered (the last record captured).
     [[nodiscard]] std::vector<std::pair<std::string, std::string>> _tags_of_one_record() {
         log_to(_core, "probe");
         _core.flush();
         const auto logs = _captured->logs();
-        EXPECT_EQ(logs.size(), 1U);
+        EXPECT_FALSE(logs.empty());
         if (logs.empty()) {
             return {};
         }
@@ -117,6 +117,9 @@ TEST_F(ContextTest, ThreadTableRefusesTheTagPastItsLimit) {
 TEST_F(ContextTest, RemovedProcessTagIsNoLongerOnRecords) {
     ASSERT_TRUE(set_process_tag("gone", "1"));
     ASSERT_TRUE(set_process_tag("kept", "2"));
+    // A record first, so this thread holds a current copy of the process tags
+    // that the removal has to invalidate.
+    EXPECT_EQ(_tag_on_one_record("gone"), "1");
     EXPECT_TRUE(remove_process_tag("gone"));
     EXPECT_FALSE(remove_process_tag("gone"));
     EXPECT_EQ(_tags_of_one_record(),
