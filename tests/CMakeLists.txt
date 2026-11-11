@@ -13,9 +13,14 @@ add_executable(lumen_tests
   test_record_format.cpp
   test_terminal_sink.cpp
   test_file_sink.cpp
+  test_dashboard_model.cpp
   test_error.cpp
   test_class_name.cpp
 )
+
+if(LUMEN_ENABLE_DASHBOARD)
+  target_sources(lumen_tests PRIVATE test_dashboard_sink.cpp)
+endif()
 
 target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
 target_compile_features(lumen_tests PRIVATE cxx_std_23)

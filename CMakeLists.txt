@@ -76,6 +76,7 @@ add_library(lumen
   src/terminal_sink.cpp
   src/rotating_file.cpp
   src/file_sink.cpp
+  src/dashboard_model.cpp
 )
 add_library(lumen::lumen ALIAS lumen)
 
@@ -102,8 +103,11 @@ endif()
 
 include(cmake/build_settings.cmake)
 
+# The dashboard sink is the only code that needs FTXUI; its state model
+# (src/dashboard_model.cpp, above) is built either way.
 if(LUMEN_ENABLE_DASHBOARD)
   find_package(ftxui CONFIG REQUIRED)
+  target_sources(lumen PRIVATE src/dashboard_sink.cpp src/dashboard_frame.cpp)
   target_link_libraries(lumen PRIVATE ftxui::dom ftxui::screen)
 endif()
 
