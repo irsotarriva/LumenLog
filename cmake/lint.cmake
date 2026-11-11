@@ -14,6 +14,7 @@ file(GLOB_RECURSE lumen_format_files CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/tests/*.cpp"
   "${PROJECT_SOURCE_DIR}/tests/*.hpp"
   "${PROJECT_SOURCE_DIR}/python/*.cpp"
+  "${PROJECT_SOURCE_DIR}/python/*.hpp"
   "${PROJECT_SOURCE_DIR}/examples/*.cpp"
 )
 
