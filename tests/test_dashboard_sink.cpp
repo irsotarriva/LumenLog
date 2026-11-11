@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -115,6 +116,28 @@ TEST_F(DashboardSinkTest, AfterAFatalRecordFlushRestoresTheScreenAndPrintsTheLog
     const std::size_t length = text.size();
     sink->flush();
     EXPECT_EQ(_output().size(), length);  // nothing is drawn after the fatal record
+}
+
+// Frames are drawn on the sink's thread while records keep arriving; the
+// frame that flush() waits for shows the last of them.
+TEST_F(DashboardSinkTest, RecordsArrivingWhileFramesAreDrawnAllReachTheFrameWrittenByFlush) {
+    DashboardSink::Config config = _config();
+    config.refresh_interval = std::chrono::milliseconds{1};
+    const auto created = DashboardSink::create(std::move(config));
+    ASSERT_TRUE(created.has_value());
+    DashboardSink& sink = **created;
+    for (uint32_t i = 0; i < 300; ++i) {
+        const std::string message = "line " + std::to_string(i);
+        sink.on_log(log_record(message));
+        sink.on_metric(metric_record("loss", static_cast<double>(i)));
+    }
+    sink.flush();
+    const std::string text = _output();
+    const std::size_t last_frame = text.rfind("\x1b[H");
+    ASSERT_NE(last_frame, std::string::npos);
+    EXPECT_NE(text.find("INFO  line 299", last_frame), std::string::npos);
+    EXPECT_NE(text.find("299", last_frame), std::string::npos);
+    EXPECT_GE(sink.frames_written(), 1U);
 }
 
 TEST_F(DashboardSinkTest, WriteFailureIsCountedAsALostFrame) {
