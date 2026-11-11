@@ -200,8 +200,7 @@ DiagnosticHandler stderr_diagnostics() {
 
 struct Core::Impl {
     explicit Impl(DiagnosticHandler handler) : diagnostics(share(std::move(handler))) {
-        // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
-        dispatcher = std::thread([this] { run_dispatcher(); });
+        start_dispatcher();
     }
     ~Impl() { shut_down(); }
     Impl(const Impl&) = delete;
@@ -264,7 +263,41 @@ struct Core::Impl {
         // A refused record is counted by the queue (rejected_count) and
         // reported once by the dispatcher.
         static_cast<void>(queue<R>().try_push(std::move(record)));
+        if (delivers_on_submit) {
+            deliver_on_this_thread();
+            return;
+        }
         wake_if_sleeping();
+    }
+
+    // A Core whose dispatch thread could not be started is still usable: its
+    // records are delivered by the threads that submit them.
+    void start_dispatcher() {
+        try {
+            // std::thread, not std::jthread: Apple's libc++ does not provide jthread.
+            dispatcher = std::thread([this] { run_dispatcher(); });
+        } catch (const std::exception& e) {
+            delivers_on_submit = true;
+            report(std::format(
+                "lumen: the dispatch thread could not be started ({}); each record is "
+                "delivered on the thread that submits it",
+                e.what()));
+        }
+    }
+
+    // Without a dispatch thread. A record submitted from inside a callback is
+    // left for the next submission or flush(): this thread is delivering
+    // already, further up its stack.
+    void deliver_on_this_thread() {
+        if (delivering_here()) {
+            return;
+        }
+        {
+            const std::scoped_lock consume(consume_mutex);
+            const DeliveryScope scope(this);
+            deliver_everything_queued();
+        }
+        report_first_losses();
     }
 
     // Wake-up protocol. Both sides update `sleeping` with a read-modify-write
@@ -836,6 +869,8 @@ struct Core::Impl {
     std::mutex fatal_mutex;
     std::vector<LogRecord> fatal_mailbox;  // guarded by fatal_mutex
 
+    // Set by the constructor, before any other thread can see this Core.
+    bool delivers_on_submit = false;
     std::thread dispatcher;  // last: it starts in the constructor and uses everything above
 };
 

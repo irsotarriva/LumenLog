@@ -19,18 +19,28 @@
 // a record on its own thread and submits it to a Core. Submission stamps the
 // record (timestamp, thread id), merges the ambient context
 // (lumen/context.hpp), copies every string into the record's own storage (one
-// allocation) and pushes the record into a bounded lock-free queue, one per
-// record type. A dispatch thread owned by the Core pops records and calls the
-// sinks whose predicate matches.
+// allocation by the Core; refreshing the thread's copy of the process tags
+// and a message longer than the builder's buffer allocate too) and pushes the
+// record into a bounded lock-free queue, one per record type. A dispatch
+// thread owned by the Core pops records and calls the sinks whose predicate
+// matches.
 //
 // Threads.
 //   - Producers: any number of threads. Submission takes no lock (except a
 //     refresh of the thread's copy of the process tags after they changed)
-//     and makes no system call unless the dispatch thread is asleep.
+//     and makes no system call of its own unless the dispatch thread is
+//     asleep. The memory allocator may make one (to grow a thread's heap).
 //   - Sink callbacks (on_log, on_metric, on_progress, flush): one thread at a
 //     time. Usually the dispatch thread; flush() delivers on its caller's
 //     thread instead. A sink is never called concurrently with itself or with
 //     another sink of the same Core.
+//   - If the dispatch thread cannot be started (the system refuses a new
+//     thread), the constructor does not throw. The Core reports it through
+//     the diagnostic handler and then delivers each record on the thread
+//     that submits it, right after queuing it, under the same lock that
+//     serialises delivery (so submission takes that lock). A record a sink
+//     submits from inside its callback waits for the next submission or
+//     flush(). Everything else is unchanged.
 //   - add_sink, remove_sink, sink_exception_count, statistics: any thread,
 //     including from inside a sink callback. No lock is held while a sink
 //     callback runs, so these never wait for one, with the single exception
