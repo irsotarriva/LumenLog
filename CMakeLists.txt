@@ -49,7 +49,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Werror)
   endif()
 elseif(MSVC)
-  add_compile_options(/W4)
+  # C4324 reports padding added by alignas; the ring buffer asks for it on
+  # purpose to keep its counters on separate cache lines.
+  add_compile_options(/W4 /wd4324)
   if(LUMEN_WARNINGS_AS_ERRORS)
     add_compile_options(/WX)
   endif()
