@@ -66,12 +66,18 @@ add_executable(lumen_check_bridges_without_frameworks check_main.cpp ${lumen_bri
 target_link_libraries(lumen_check_bridges_without_frameworks PRIVATE lumen)
 add_test(NAME CompileCheck.BridgesWithoutFrameworks COMMAND lumen_check_bridges_without_frameworks)
 
-# The OpenMP bridge has real content when compiled with OpenMP enabled.
-find_package(OpenMP COMPONENTS CXX)
-if(OpenMP_CXX_FOUND)
-  add_executable(lumen_check_bridge_openmp bridge_openmp.cpp)
-  target_link_libraries(lumen_check_bridge_openmp PRIVATE lumen OpenMP::OpenMP_CXX)
-  add_test(NAME CompileCheck.BridgeOpenMP COMMAND lumen_check_bridge_openmp)
-else()
-  message(STATUS "Lumen: OpenMP not found; the OpenMP bridge compile check is skipped")
-endif()
+# Every bridge also compiles, as the only include, with its framework
+# (found in tests/bridges/frameworks.cmake); a missing framework is reported
+# there and leaves its check out.
+function(lumen_bridge_compile_check key name)
+  if(lumen_bridge_${key}_found)
+    add_executable(lumen_check_bridge_${key} check_main.cpp bridge_${key}.cpp)
+    target_link_libraries(lumen_check_bridge_${key} PRIVATE lumen ${ARGN})
+    add_test(NAME CompileCheck.Bridge${name}WithFramework COMMAND lumen_check_bridge_${key})
+  endif()
+endfunction()
+
+lumen_bridge_compile_check(eigen Eigen Eigen3::Eigen)
+lumen_bridge_compile_check(openmp OpenMp OpenMP::OpenMP_CXX)
+lumen_bridge_compile_check(torch Torch ${TORCH_LIBRARIES})
+lumen_bridge_compile_check(root Root ROOT::Tree ROOT::RIO ROOT::Core)

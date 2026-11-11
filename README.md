@@ -49,7 +49,7 @@ This means a class can tag itself once in its constructor, and every log call fr
 
 In production builds, records below a configurable level threshold compile to nothing. If `LUMEN_MIN_LEVEL=WARN`, every `LOG_DEBUG` and `LOG_INFO` call in the entire codebase is `((void)0)`. No formatting cost, no tag construction, no allocation, no function call. The processor never sees them.
 
-Bridges extend this further — include a header and framework calls (PyTorch forward/backward, ROOT TTree fills, Eigen matrix operations, OpenMP thread pools) automatically emit records with zero changes to user code.
+Optional bridge headers turn values held by Eigen, OpenMP, ROOT and libtorch objects into metric records: matrix norms and solver convergence, OpenMP work balance, TTree sizes, training loss, gradient norm and learning rate. They hook nothing; your code calls them where it has the values. See [Bridges](docs/bridges.md).
 
 ---
 
@@ -227,18 +227,27 @@ public:
 };
 ```
 
-### Bridges (zero-instrumentation for frameworks)
+### Bridges (helpers for Eigen, OpenMP, ROOT, libtorch)
+
+Header-only, empty unless the framework is available, and nothing is hooked:
+each function emits records when you call it.
 
 ```cpp
-#include "lumen/lumen.hpp"
-#include "lumen/bridges/torch.hpp"   // auto-logs forward/backward, loss, lr
+#include "lumen/bridges/torch.hpp"
 
-// From here, torch::nn::Module subclasses automatically emit metrics.
-// No changes to training code required.
-
-auto model = MyModel();
-model->train();  // MetricRecord: "loss", "grad_norm", "lr" emitted automatically
+const lumen::bridges::TorchTrainingMetrics metrics("regressor");
+LUMEN_LOOP("epoch", epoch, n_epochs) {
+    optimizer.zero_grad();
+    const torch::Tensor loss = torch::mse_loss(model->forward(inputs), targets);
+    loss.backward();
+    (void)metrics.emit_loss(loss);              // torch.loss       model=regressor epoch=<e>
+    (void)metrics.emit_gradient_norm(*model);   // torch.grad_norm  (global L2 norm)
+    optimizer.step();
+}
 ```
+
+The `(void)` drops the `std::expected` results for brevity. Every metric,
+tag, error and the CI status of each bridge are in [Bridges](docs/bridges.md).
 
 ### Python bindings
 
@@ -268,7 +277,7 @@ Full documentation is available in the [`docs/`](docs/index.md) folder:
 | [Sinks](docs/sinks.md) | Built-in sinks, configuration, custom sinks |
 | [Predicates](docs/predicates.md) | Predicate DSL reference and examples |
 | [API Reference](docs/api.md) | Complete public API |
-| [Bridges](docs/bridges.md) | Framework integration (Torch, ROOT, Eigen, OpenMP) |
+| [Bridges](docs/bridges.md) | Helpers for Eigen, OpenMP, ROOT and libtorch |
 
 ---
 
