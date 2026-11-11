@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -25,7 +24,7 @@ concept RingBufferElement =
 // Bounded multi-producer, single-consumer FIFO queue (D. Vyukov's bounded
 // queue, with the consumer side specialised to one thread).
 //
-// Threads. try_push() and push_blocking() may be called from any number of
+// Threads. try_push() may be called from any number of
 // threads at once. try_pop() must be called by one thread at a time; successive
 // consumers must be ordered by happens-before (Core uses a mutex). The
 // observers (size, empty, head_position, tail_position, rejected_count) may be
@@ -103,18 +102,6 @@ public:
         }
         publish_(*pos, std::move(item));
         return true;
-    }
-
-    // Moves `item` into the buffer, yielding while the buffer is full. Never
-    // rejects. Waits forever if no other thread is popping, so it must not be
-    // called from the consumer's thread.
-    void push_blocking(T&& item) noexcept {
-        std::optional<uint64_t> pos = try_claim_();
-        while (!pos) {
-            std::this_thread::yield();
-            pos = try_claim_();
-        }
-        publish_(*pos, std::move(item));
     }
 
     // Moves the oldest element into `out` and returns true, or returns false

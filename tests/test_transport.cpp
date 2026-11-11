@@ -131,7 +131,7 @@ TEST(RingBufferTest, RejectedCountCountsOnlyFailedTryPushes) {
     EXPECT_TRUE(buffer.try_pop(out));
     EXPECT_TRUE(buffer.try_push(6));
     EXPECT_TRUE(buffer.try_pop(out));
-    buffer.push_blocking(7);
+    EXPECT_TRUE(buffer.try_push(7));
     EXPECT_EQ(buffer.rejected_count(), 3U);
 }
 
@@ -161,18 +161,6 @@ TEST(RingBufferTest, SizeEmptyAndPositionsFollowPushesAndPops) {
     EXPECT_EQ(buffer.head_position(), 5U);
 }
 
-TEST(RingBufferTest, PushBlockingIntoBufferWithRoomStoresElementWithoutRejecting) {
-    RingBuffer<int, 2> buffer;
-    buffer.push_blocking(10);
-    buffer.push_blocking(11);
-    int out = 0;
-    EXPECT_TRUE(buffer.try_pop(out));
-    EXPECT_EQ(out, 10);
-    EXPECT_TRUE(buffer.try_pop(out));
-    EXPECT_EQ(out, 11);
-    EXPECT_EQ(buffer.rejected_count(), 0U);
-}
-
 TEST(RingBufferTest, WrapsAroundManyTimesPastCapacityInFifoOrder) {
     RingBuffer<uint64_t, 4> buffer;
     constexpr uint64_t laps = 1000;
@@ -193,7 +181,8 @@ TEST(RingBufferTest, WrapsAroundManyTimesPastCapacityInFifoOrder) {
     EXPECT_TRUE(buffer.empty());
     EXPECT_EQ(buffer.head_position(), next_in);
     EXPECT_EQ(buffer.tail_position(), next_in);
-    EXPECT_GT(next_in, 100 * buffer.capacity());
+    // 250 rounds of batches 1, 2, 3, 4: 625 times around a buffer of 4.
+    EXPECT_EQ(next_in, 2500U);
     EXPECT_EQ(buffer.rejected_count(), 0U);
 }
 
@@ -376,24 +365,6 @@ TEST(RingBufferStressTest, TryPushRetriedUntilAcceptedDeliversEveryValueExactlyO
         EXPECT_EQ(outcome.invalid_values, 0U);
         EXPECT_EQ(outcome.values_not_delivered_once(), 0);
         EXPECT_EQ(outcome.delivered, stress_total);
-        EXPECT_TRUE(outcome.per_producer_order_kept);
-    }
-    EXPECT_EQ(counts.destroyed.load(), counts.constructed.load());
-}
-
-TEST(RingBufferStressTest, PushBlockingFromFourProducersDeliversEveryValueExactlyOnce) {
-    LifetimeCounts counts;
-    {
-        RingBuffer<Tracked, 2> buffer;
-        const StressOutcome outcome = run_stress(buffer, counts, [](auto& b, Tracked&& item) {
-            b.push_blocking(std::move(item));
-            return true;
-        });
-
-        EXPECT_EQ(outcome.invalid_values, 0U);
-        EXPECT_EQ(outcome.values_not_delivered_once(), 0);
-        EXPECT_EQ(outcome.delivered, stress_total);
-        EXPECT_EQ(buffer.rejected_count(), 0U);
         EXPECT_TRUE(outcome.per_producer_order_kept);
     }
     EXPECT_EQ(counts.destroyed.load(), counts.constructed.load());
