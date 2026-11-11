@@ -1,0 +1,5 @@
+WARN  disk almost full app=python_example phase=setup
+METRIC loss=0.25 app=python_example
+PROGRESS files 1/2 app=python_example
+PROGRESS files 2/2 app=python_example
+ERROR bad filter: invalid predicate at offset 9: expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL) app=python_example

@@ -1,0 +1,10 @@
+FileSink::create: file could not be opened
+parse_predicate: expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL) at offset 9
+remove_sink: sink id not found
+logs accepted: 4, dropped (queue full): 0
+metrics accepted: 1, dropped (queue full): 0
+tags dropped: 0
+terminal: 3 lines written, 0 dropped, 0 failed
+routing.log: 3 lines written, 0 dropped, 0 failed
+routing.logfmt: 3 lines written, 0 dropped, 0 failed
+routing.jsonl: 2 lines written, 0 dropped, 0 failed

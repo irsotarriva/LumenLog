@@ -1,0 +1,7 @@
+INFO configured [workers=4 phase=setup app=python_example] in main()
+WARN disk almost full [free_gb=1.5 phase=setup app=python_example] in main()
+METRIC loss=0.25 {'epoch': '3', 'app': 'python_example'}
+PROGRESS files 1/2
+PROGRESS files 2/2
+ERROR bad filter: invalid predicate at offset 9: expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL) [app=python_example] in main()
+INFO epoch done [epoch=3 logger=trainer app=python_example] in main()

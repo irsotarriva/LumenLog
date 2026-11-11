@@ -1,0 +1,3 @@
+WARN  channel noisy detector=tracker
+ERROR readout lost detector=calorimeter
+METRIC hits=1024 detector=tracker

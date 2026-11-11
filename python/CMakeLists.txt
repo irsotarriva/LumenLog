@@ -79,5 +79,8 @@ if(LUMEN_BUILD_TESTS)
       ENVIRONMENT_MODIFICATION "${lumen_python_test_env}"
       FAIL_REGULAR_EXPRESSION "SKIP:"
       TIMEOUT 600)
+    # The Python example and the documentation's Python blocks, in the same
+    # environment.
+    include("${PROJECT_SOURCE_DIR}/tests/docs/python_tests.cmake")
   endif()
 endif()

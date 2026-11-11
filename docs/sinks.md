@@ -1,157 +1,524 @@
 # Sinks
 
-Sinks are the consumer side of Lumen. They receive records that match their predicate and decide what to do with them — format, color, write to disk, forward over the network, render to a dashboard.
+A sink receives the records that its predicate accepts. Lumen ships four:
+`TerminalSink` (`lumen/terminal_sink.hpp`), `FileSink`
+(`lumen/file_sink.hpp`), `DashboardSink` (`lumen/dashboard_sink.hpp`) and
+`NullSink` (`lumen/sink.hpp`). You can write your own.
 
-## Sink base class
+## Registering and removing
 
-All sinks inherit from `lumen::Sink`:
-
+<!-- check: prelude=common wrap=body -->
 ```cpp
-class Sink {
-public:
-    virtual void on_log(const LogRecord&)     {}
-    virtual void on_metric(const MetricRecord&) {}
-    virtual void on_progress(const ProgressRecord&) {}
-    virtual void flush() = 0;
-    virtual ~Sink() = default;
-};
+auto terminal = lumen::TerminalSink::create({});
+if (!terminal) {
+    std::cerr << "terminal sink: " << terminal.error().message() << '\n';
+    return;
+}
+const auto id = lumen::core().add_sink(std::move(*terminal),
+                                       lumen::level_at_least(lumen::LogLevel::Info));
+if (!id) {
+    std::cerr << "add_sink: " << id.error().message() << '\n';
+    return;
+}
+// ... later
+if (auto removed = lumen::core().remove_sink(*id); !removed) {
+    std::cerr << "remove_sink: " << removed.error().message() << '\n';
+}
 ```
 
-The dispatch thread calls these methods sequentially for matching records. Implementations **must be non-blocking** — offload I/O to internal threads.
+- `add_sink` takes ownership. The sink receives every record dispatched after
+  the call returns that its predicate accepts. It fails with
+  `LumenError::NullSink` for a null pointer.
+- `remove_sink` gives the sink back. When it returns, the sink is not inside
+  a callback and is never called again; records still queued are not
+  delivered to it. If one of its callbacks is running on another thread,
+  `remove_sink` waits for it. Called from inside a callback of the same Core
+  it never waits, and removing the calling sink itself fails with
+  `LumenError::SinkBusy`. An unknown id fails with `LumenError::InvalidSinkId`.
+- `add_sink`, `remove_sink`, `sink_exception_count` and `statistics` may be
+  called from any thread, also from inside a sink callback.
+- Sinks still registered when the Core shuts down are flushed and destroyed
+  then.
 
-## Built-in sinks
+## The contract
 
-### TerminalSink
+`lumen::Sink` has four virtual functions: `on_log`, `on_metric` and
+`on_progress`, which do nothing unless overridden, and `flush`, which every
+sink defines.
 
-Colorized output to stderr with an optional FTXUI dashboard.
+- **One thread at a time.** The Core calls a sink's functions on one thread
+  at a time and never concurrently with another sink of the same Core:
+  usually the Core's dispatch thread, but `Core::flush()` delivers on the
+  thread that calls it.
+- **`on_*` must not block.** The dispatch thread serves every sink. A
+  callback that waits for a disk, a terminal or a lock held by a slow thread
+  delays every other sink and, once the queues are full, makes the Core drop
+  records. A sink that does I/O hands the work to a thread of its own.
+- **`flush()` may wait.** It returns when what the sink received before the
+  call has reached its destination.
+- **Records own their strings.** Every `std::string_view` in a record points
+  into the record's own storage, shared by its copies. A sink may copy a
+  record and keep the copy; the views stay valid while a copy lives.
+- **Exceptions.** A sink should not throw. An exception that escapes a
+  callback is caught by the Core, counted (`Core::sink_exception_count(id)`),
+  and the first one per sink is reported through the diagnostic handler. The
+  record is lost for that sink only.
 
-```cpp
-#include "lumen/sink.hpp"
+## The writer queue
 
-lumen::TerminalSink::Config cfg;
+`TerminalSink` and `FileSink` format each record into one line on the calling
+thread and append it to a bounded queue; a writer thread owned by the sink
+writes batches of lines and flushes the stream (`lumen/writer_statistics.hpp`).
 
-// Per-level ANSI colors
-cfg.colors[lumen::DEBUG] = lumen::AnsiColor::Cyan;
-cfg.colors[lumen::INFO]  = lumen::AnsiColor::White;
-cfg.colors[lumen::WARN]  = lumen::AnsiColor::Yellow;
-cfg.colors[lumen::ERROR] = lumen::AnsiColor::Red;
-cfg.colors[lumen::FATAL] = lumen::AnsiColor{ .fg = 196, .bold = true };
+- When the queue holds `max_queued_lines` lines, `on_*` does not wait: the
+  new line is dropped and counted in `lines_dropped`. The first drop is
+  reported once through the sink's `Config::diagnostics`.
+- A write that fails (a closed pipe, a full disk) is not retried: its lines
+  are counted in `lines_failed`, and the first failure is reported once.
+  Writing continues with the next lines.
+- `statistics()` returns a `WriterStatistics` with `lines_queued`,
+  `lines_written`, `lines_dropped` and `lines_failed`; it may be called from
+  any thread. After the sink's `flush()` returns, and while nothing else is
+  delivered to it, `lines_queued == lines_written + lines_failed`.
+- The destructor writes what is still queued, then stops the thread. It
+  waits for the stream as long as the stream blocks.
 
-// Timestamp format (strftime-style)
-cfg.time_format = "%H:%M:%S";
+## TerminalSink
 
-// Which tags to show inline in the log line
-cfg.inline_tags = { "subsystem", "event_id" };
+One human-readable line per record, on standard error or on any
+`std::ostream`. The quick start prints:
 
-// Dashboard (requires LUMEN_ENABLE_DASHBOARD=ON)
-cfg.dashboard_metrics = { "loss", "gpu_mem_mb", "fps" };
-cfg.dashboard_height = 5;  // lines reserved at top
-
-auto sink = std::make_unique<lumen::TerminalSink>(cfg);
+<!-- check: output=examples/expected/quick_start.stderr -->
+```text
+<time> INFO  starting app=quick_start run=42
+<time> WARN  energy 41.5 GeV above threshold app=quick_start detector=calorimeter run=42
+<time> DEBUG 3 channels masked app=quick_start detector=tracker run=42
+<time> ERROR explicit tags win app=quick_start run=43
+<time> METRIC loss=0.25 app=quick_start run=42
+<time> PROGRESS events 1/3 app=quick_start run=42
+<time> PROGRESS events 2/3 app=quick_start run=42
+<time> PROGRESS events 3/3 app=quick_start run=42
 ```
 
-The dashboard renders a split view: progress bars and metric sparklines at the top, scrollable log lines below. No separate API — any metric emitted to a terminal sink with a dashboard enabled appears automatically.
+(`<time>` is the local time as `HH:MM:SS.mmm`, the default `time_format`.)
+Fields, separated by one space:
 
-Without `LUMEN_ENABLE_DASHBOARD`, the terminal sink renders log lines only.
+| Field | Content |
+|---|---|
+| time | `Config::time_format` applied to the record's timestamp; left out, with its space, when the format is empty |
+| kind | a log record's level padded to five characters (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, or `UNKNOWN` for a value outside the enum); `METRIC`; `PROGRESS` |
+| payload | log: the message; metric: `name=value`; progress: `label current/total` |
+| tags | `key=value` for each key of `Config::inline_tags` that the record has, in that order; other tags are not shown |
+| source | `(file:line)`, log records only, when `Config::show_source` is set |
 
-### FileSink
+Bytes below 0x20 and the byte 0x7F are written as `\n`, `\r`, `\t` or
+`\xHH`, so a record is always one line and cannot drive the terminal. Metric
+values are written in the shortest form that reads back as the same `double`;
+NaN and infinities as `NaN`, `Infinity` and `-Infinity`.
 
-Async file output with rotation.
+`TerminalSink::Config`:
 
+| Field | Default | Meaning |
+|---|---|---|
+| `output` | null: standard error | The stream. The writer thread uses it until the sink is destroyed. |
+| `color` | `ColorMode::Auto` | `Auto`, `Always` or `Never` |
+| `colors` | `default_level_colors` | One `AnsiColor` per level: Trace default, Debug cyan, Info green, Warn yellow, Error red, Fatal magenta |
+| `time_format` | `"%H:%M:%S.%L"` | A `std::strftime` pattern plus `%L` (milliseconds, 000–999) and `%N` (nanoseconds, 000000000–999999999). Only conversions without a modifier (no `%E`, `%O` forms). Empty: no time column. |
+| `time_zone` | `TimeZone::Local` | `Local` (the process's time zone, `TZ` on POSIX) or `Utc` |
+| `inline_tags` | empty | Tags shown on a line, in this order |
+| `show_source` | `false` | Append `(file:line)` to log lines |
+| `max_queued_lines` | `10000` | Writer queue bound, at least 1 |
+| `diagnostics` | `stderr_diagnostics()` | Receives the first queue-full drop and the first write failure |
+
+`create` fails with `LumenError::InvalidSinkConfig` for an invalid
+`time_format` or `max_queued_lines == 0`.
+
+**Colour.** With `ColorMode::Auto` the sink writes colour escapes only when
+all of these hold, decided once at creation: the output is the process's
+standard error, standard error is a terminal, `NO_COLOR` is unset or empty,
+`TERM` is not `dumb`, and the platform is not Windows. Only the level name is
+coloured: `ESC[<colour>m` before it, `ESC[0m` after it, the padding outside.
+`colored()` tells what was decided.
+
+To write to a stream of your own (ctest runs this program):
+
+<!-- check: prelude=common -->
 ```cpp
-lumen::FileSink::Config cfg;
-cfg.path         = "run_{date}.log";  // {date} substituted at open time
-cfg.rotate_mb    = 256;               // rotate after 256 MB
-cfg.max_files    = 5;                 // keep last 5 rotated files
-cfg.format       = lumen::FileFormat::PlainText;  // PlainText, KeyValue, or Json
-
-auto sink = std::make_unique<lumen::FileSink>(cfg);
+int main() {
+    auto stream = std::make_shared<std::ostringstream>();
+    lumen::TerminalSink::Config config;
+    config.output = stream;
+    config.time_format = "%Y-%m-%dT%H:%M:%S.%NZ";
+    config.time_zone = lumen::TimeZone::Utc;
+    config.show_source = true;
+    auto sink = lumen::TerminalSink::create(std::move(config));
+    if (!sink) {
+        std::cerr << "terminal sink: " << sink.error().message() << '\n';
+        return 1;
+    }
+    lumen::Core core;
+    if (const auto id = core.add_sink(std::move(*sink)); !id) {
+        return 1;
+    }
+    lumen::RecordBuilder(core, lumen::LogLevel::Info, std::source_location::current(), "hello");
+    core.flush();
+    // The line is "<date>T<time>.<nanoseconds>Z INFO  hello (<file>:<line>)".
+    return stream->str().find("Z INFO  hello (") != std::string::npos ? 0 : 1;
+}
 ```
 
-The file sink maintains an internal write thread. `on_log` enqueues into a small internal queue and returns immediately.
+## FileSink
 
-### JsonSink
+Appends one line per record to a file, in one of three formats, with
+optional rotation by size. The three files of `examples/routing.cpp`, run by
+ctest as `Example.Routing`, show them. In these samples `<time>` is an ISO 8601
+UTC time with nanoseconds, `<id>` the thread number and `<src>` the source
+directory.
 
-Newline-delimited JSON (NDJSON), one object per record:
+`FileFormat::Text`, for people (`routing.log`):
 
+<!-- check: output=examples/expected/routing.log -->
+```text
+<time> INFO  tracker aligned detector=tracker [t<id>] (<src>/examples/routing.cpp:140)
+<time> WARN  channel noisy detector=tracker channel=17 [t<id>] (<src>/examples/routing.cpp:141)
+<time> METRIC hits=1024 detector=tracker [t<id>]
+```
+
+The fields are those of `TerminalSink`, with every tag in record order, then
+`[t<thread>]`, then the source for log records. Control bytes are escaped as
+on the terminal and nothing else is, so a tag value containing a space or `=`
+is ambiguous: use `KeyValue` or `Json` for files a program reads.
+
+`FileFormat::KeyValue`, logfmt (`routing.logfmt`):
+
+<!-- check: output=examples/expected/routing.logfmt -->
+```text
+time=<time> kind=log level=INFO msg="tracker aligned" file=<src>/examples/routing.cpp line=140 function="int main(int, char**)" thread=<id> tags.detector=tracker
+time=<time> kind=log level=WARN msg="channel noisy" file=<src>/examples/routing.cpp line=141 function="int main(int, char**)" thread=<id> tags.detector=tracker tags.channel=17
+time=<time> kind=metric name=hits value=1024 thread=<id> tags.detector=tracker
+```
+
+Space-separated `key=value` pairs, fixed keys first; `function` and `class`
+are left out when empty; tags follow as `tags.<key>=<value>`, so a tag never
+collides with a fixed key. A progress record has `kind=progress id label
+current total thread`. A key or value that is empty or contains a space, `=`,
+`"`, `\`, a byte below 0x20 or 0x7F is written as a JSON string literal.
+
+`FileFormat::Json`, one JSON object per line (`routing.jsonl`):
+
+<!-- check: output=examples/expected/routing.jsonl -->
 ```json
-{"type":"log","level":3,"message":"cluster energy 34.2 GeV","tags":{"subsystem":"calorimeter"},"timestamp":1748486400000000000}
-{"type":"metric","name":"loss","value":0.0314,"tags":{"epoch":"5"},"timestamp":1748486400001000000}
-{"type":"progress","label":"training","current":500,"total":1000,"tags":{},"timestamp":1748486400002000000}
+{"type":"log","ts":<ns>,"level":"INFO","msg":"channel hot","file":"<src>/examples/routing.cpp","line":142,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter","temperature":"312.5"}}
+{"type":"log","ts":<ns>,"level":"ERROR","msg":"readout lost","file":"<src>/examples/routing.cpp","line":143,"function":"int main(int, char**)","class":"","thread":<id>,"tags":{"detector":"calorimeter"}}
 ```
 
+| Key | Records | Value |
+|---|---|---|
+| `type` | all | `"log"`, `"metric"` or `"progress"` |
+| `ts` | all | integer, nanoseconds since the Unix epoch (`system_clock`) |
+| `level` | log | `"TRACE"` … `"FATAL"`, `"UNKNOWN"` for a value outside the enum |
+| `msg`, `file`, `line`, `function`, `class` | log | the message and the source location; `class` is `""` for a free function |
+| `name`, `value` | metric | `value` is the shortest decimal that reads back as the same `double`; for NaN and infinities it is `null` and `"value_text"` is `"NaN"`, `"Infinity"` or `"-Infinity"` (present only then) |
+| `id`, `label`, `current`, `total` | progress | integers and the label |
+| `thread` | all | the producing thread's number |
+| `tags` | all | an object of strings; no type is guessed (the tag `3` is `"3"`) |
+
+Strings escape `"` and `\`, use `\b \f \n \r \t`, and write every other byte
+below 0x20 as `\u00XX`. Valid UTF-8 is written as it is; each byte that is not
+part of a valid UTF-8 sequence is replaced by `�`. Every line is valid
+JSON whatever the record holds; `JsonOutput.EveryLineParsesStrictlyWithPythonAndHoldsTheExpectedValues`
+parses the output with Python's `json` module.
+
+`FileSink::Config`:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `path` | `"run_{date}.log"` | Every `{date}` is replaced, once at creation, by the UTC date as `YYYY-MM-DD`. No other placeholder exists. The directory must exist. |
+| `format` | `FileFormat::Text` | `Text`, `KeyValue` or `Json` |
+| `max_file_bytes` | 256 MiB | Rotate before a line would take the file past this size; 0: never rotate |
+| `max_files` | `5` | Files kept, the active one included; at least 1 |
+| `max_queued_lines` | `65536` | Writer queue bound, at least 1 |
+| `diagnostics` | `stderr_diagnostics()` | As for `TerminalSink` |
+
+`create` opens the file for appending. It fails with
+`LumenError::InvalidSinkConfig` for an empty path or a zero `max_files` or
+`max_queued_lines`, and with `LumenError::FileOpenFailed` when the file cannot
+be opened. `path()` returns the path with `{date}` substituted.
+
+**Rotation.** With `max_file_bytes > 0`, a line that would take the active
+file past the limit first starts a new file, unless the active file is empty
+(a line longer than the limit is written whole). The active file is renamed
+to `<path>.1`, an existing `<path>.1` to `<path>.2`, and so on; the oldest,
+`<path>.<max_files - 1>`, is deleted. So at most `max_files` files exist. With
+`max_files == 1` the active file is deleted and started again. A file that
+exists when the sink is created counts towards the limit. A failed rotation
+step is counted as a write failure, and writing continues in the open file. A
+path that is not a regular file at creation (`/dev/null`, a named pipe) is
+never rotated.
+
+## DashboardSink
+
+A full-screen live view on a terminal: the chosen metrics (latest value,
+range and a sparkline of the recent history) and the progress bars in
+flight, above the most recent log lines in their level's colour.
+
+- It exists only in a library built with `LUMEN_ENABLE_DASHBOARD=ON`, which
+  needs FTXUI. Without it, `lumen/dashboard_sink.hpp` still declares the
+  class, but a program that uses it does not link. FTXUI is not available on
+  every machine that builds Lumen; the CI jobs that use vcpkg compile it,
+  except the Windows job, which turns the dashboard off.
+- The destination must be a terminal: `create` fails with
+  `LumenError::NotATerminal` otherwise, unless `Config::assume_terminal` is
+  set. It also fails with `LumenError::InvalidSinkConfig` for an invalid
+  `time_format` or a `refresh_interval` below 1 ms.
+- `create` switches the terminal to its alternate screen and hides the
+  cursor; the destructor restores both, and what was on the screen before
+  comes back. While the sink exists nothing else may write to that terminal.
+- `on_*` only updates the model under a mutex; a thread owned by the sink
+  draws at most one frame per `refresh_interval` (default 100 ms), and only
+  when something changed or a progress bar may have expired. `flush()` asks for a frame and returns when it has
+  been written. `frames_written()` and `frames_failed()` count frames.
+- After a fatal record, `flush()` stops drawing, restores the terminal and
+  writes the log lines it holds, the fatal one last, as plain text to the
+  normal screen, where they stay after the process ends.
+- What is kept is `DashboardModel`'s business (`lumen/dashboard_model.hpp`,
+  built in every configuration): 512 log lines, 128 values per metric, 8
+  metrics when none are named, 16 progress bars. A finished bar stays 2 s after
+  its last record; any bar idle for 60 s is removed.
+
+<!-- check: prelude=common wrap=body -->
 ```cpp
-auto sink = std::make_unique<lumen::JsonSink>("run.jsonl");
+#include "lumen/dashboard_sink.hpp"  // not included by lumen/lumen.hpp
+
+lumen::DashboardSink::Config config;
+config.metrics = {"loss", "accuracy"};
+config.refresh_interval = std::chrono::milliseconds{200};
+auto dashboard = lumen::DashboardSink::create(std::move(config));
+if (!dashboard) {
+    // LumenError::NotATerminal when standard error is redirected
+    std::cerr << "no dashboard: " << dashboard.error().message() << '\n';
+}
 ```
 
-Suitable for piping to `jq`, forwarding to Loki, or loading into pandas with `pd.read_json("run.jsonl", lines=True)`.
+## NullSink
 
-### NullSink
+Accepts every record and does nothing with it; useful to measure the cost of
+the Core alone.
 
-Discards everything. Useful for benchmarking the broker overhead in isolation.
+## Writing a sink
 
+Derive from `lumen::Sink`, override the callbacks you need and `flush()`, and
+keep to [the contract](#the-contract). This complete example
+(`examples/custom_sink.cpp`, run by ctest as `Example.CustomSink`) writes
+comma-separated lines from a thread of its own:
+
+<!-- check: from=examples/custom_sink.cpp -->
 ```cpp
-auto sink = std::make_unique<lumen::NullSink>();
-```
+// A sink of your own: comma-separated lines for log and metric records,
+// written to a stream by a thread the sink owns.
+//
+// The contract (lumen/sink.hpp): on_log, on_metric and on_progress run on the
+// Core's dispatch thread, which serves every sink, so they must not wait for
+// I/O. This sink formats the line, appends it to a bounded queue under a
+// mutex that the writer thread holds only to take the whole queue, and
+// returns. flush() is where waiting is allowed: it returns once every line
+// queued before it has been written and the stream flushed.
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <expected>
+#include <format>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <thread>
+#include <utility>
 
-## Custom sinks
+#include "lumen/lumen.hpp"
 
-Implement the `Sink` interface:
+namespace {
 
-```cpp
-class NetworkSink : public lumen::Sink {
-    std::thread worker_;
-    lumen::detail::RingBuffer<lumen::LogRecord, 1024> queue_;  // internal queue
-    std::atomic<bool> running_{true};
+[[nodiscard]] std::string_view level_name(lumen::LogLevel level) {
+    switch (level) {
+        case lumen::LogLevel::Trace: return "TRACE";
+        case lumen::LogLevel::Debug: return "DEBUG";
+        case lumen::LogLevel::Info:  return "INFO";
+        case lumen::LogLevel::Warn:  return "WARN";
+        case lumen::LogLevel::Error: return "ERROR";
+        case lumen::LogLevel::Fatal: return "FATAL";
+    }
+    return "UNKNOWN";
+}
+
+// A CSV field: quoted, with quotes doubled (RFC 4180).
+[[nodiscard]] std::string csv_field(std::string_view text) {
+    std::string out = "\"";
+    for (const char c : text) {
+        out += c;
+        if (c == '"') {
+            out += '"';
+        }
+    }
+    out += '"';
+    return out;
+}
+
+[[nodiscard]] std::string tags_field(const lumen::RecordTags& tags) {
+    std::string out;
+    for (const auto& [key, value] : tags) {
+        out += std::format("{}{}={}", out.empty() ? "" : ";", key, value);
+    }
+    return csv_field(out);
+}
+
+class CsvSink final : public lumen::Sink {
+    // Only create() can make the key, so a CsvSink always has its thread.
+    class Key {
+        friend class CsvSink;
+        Key() = default;
+    };
 
 public:
-    NetworkSink() {
-        worker_ = std::thread([this] {
-            while (running_) {
-                // Drain internal queue, write to socket
-                // ...
-            }
-        });
+    // `out` must outlive the sink. Fails with the error of std::thread when
+    // the writer thread cannot be started.
+    [[nodiscard]] static std::expected<std::unique_ptr<CsvSink>, std::error_code> create(
+        std::ostream& out, std::size_t max_queued_lines) {
+        try {
+            return std::make_unique<CsvSink>(Key{}, out, max_queued_lines);
+        } catch (const std::system_error& e) {
+            return std::unexpected(e.code());
+        }
     }
 
-    void on_log(const lumen::LogRecord& r) override {
-        queue_.push(r);   // non-blocking — just enqueue and return
+    CsvSink(Key /*key*/, std::ostream& out, std::size_t max_queued_lines)
+        : out_(out), max_queued_lines_(max_queued_lines), writer_([this] { write_lines_(); }) {}
+
+    ~CsvSink() override {
+        {
+            const std::scoped_lock lock(mutex_);
+            stopping_ = true;
+        }
+        work_.notify_one();
+        writer_.join();  // the writer empties the queue before it returns
     }
+
+    CsvSink(const CsvSink&) = delete;
+    CsvSink& operator=(const CsvSink&) = delete;
+    CsvSink(CsvSink&&) = delete;
+    CsvSink& operator=(CsvSink&&) = delete;
+
+    void on_log(const lumen::LogRecord& record) override {
+        enqueue_(std::format("log,{},{},{}", level_name(record.level), csv_field(record.message),
+                             tags_field(record.tags)));
+    }
+
+    void on_metric(const lumen::MetricRecord& record) override {
+        enqueue_(std::format("metric,{},{},{}", csv_field(record.name), record.value,
+                             tags_field(record.tags)));
+    }
+
+    // on_progress is not overridden: the base class ignores progress records.
 
     void flush() override {
-        // Wait for internal queue to drain
+        std::unique_lock lock(mutex_);
+        const uint64_t target = accepted_;
+        written_cv_.wait(lock, [&] { return written_ >= target; });
     }
 
-    ~NetworkSink() override {
-        running_ = false;
-        worker_.join();
+    [[nodiscard]] uint64_t dropped() const {
+        const std::scoped_lock lock(mutex_);
+        return dropped_;
     }
+
+private:
+    void enqueue_(std::string line) {
+        {
+            const std::scoped_lock lock(mutex_);
+            if (queue_.size() >= max_queued_lines_) {
+                ++dropped_;  // never wait for the writer: count the line and move on
+                return;
+            }
+            queue_.push_back(std::move(line));
+            ++accepted_;
+        }
+        work_.notify_one();
+    }
+
+    void write_lines_() {
+        std::unique_lock lock(mutex_);
+        while (true) {
+            work_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
+            if (queue_.empty()) {
+                return;  // stopping, and nothing left to write
+            }
+            std::deque<std::string> batch;
+            batch.swap(queue_);
+            lock.unlock();
+            for (const std::string& line : batch) {
+                out_ << line << '\n';
+            }
+            out_.flush();
+            lock.lock();
+            written_ += batch.size();
+            written_cv_.notify_all();
+        }
+    }
+
+    std::ostream& out_;  // written only by the writer thread
+    const std::size_t max_queued_lines_;
+    mutable std::mutex mutex_;
+    std::condition_variable work_;        // waits on mutex_
+    std::condition_variable written_cv_;  // waits on mutex_
+    std::deque<std::string> queue_;       // guarded by mutex_
+    uint64_t accepted_ = 0;               // guarded by mutex_
+    uint64_t written_ = 0;                // guarded by mutex_
+    uint64_t dropped_ = 0;                // guarded by mutex_
+    bool stopping_ = false;               // guarded by mutex_
+    // std::thread rather than std::jthread: Apple's libc++ lacks jthread.
+    // Declared last, so that it starts after every member it uses exists.
+    std::thread writer_;
 };
+
+}  // namespace
+
+int main() {
+    auto created = CsvSink::create(std::cout, 1000);
+    if (!created) {
+        std::cerr << "cannot create the CSV sink: " << created.error().message() << '\n';
+        return 1;
+    }
+    const CsvSink* const csv = created->get();  // non-owning: the Core owns the sink
+    if (const auto id = lumen::core().add_sink(std::move(*created)); !id) {
+        std::cerr << "cannot register the CSV sink: " << id.error().message() << '\n';
+        return 1;
+    }
+
+    LUMEN_LOG_INFO("run started").tag("run", 7);
+    LUMEN_LOG_WARN("say \"cheese\"").tag("camera", "front");
+    lumen::metric("exposure_ms", 12.5).tag("camera", "front");
+    auto bar = lumen::progress("frames", 2);  // progress records: ignored by this sink
+    bar.finish();
+
+    lumen::core().flush();
+    std::cout << "dropped: " << csv->dropped() << '\n';
+    return 0;
+}
 ```
 
-Key rules for custom sinks:
-- `on_log` / `on_metric` / `on_progress` are called from the dispatch thread and **must not block**
-- Defer I/O to an internal thread
-- `flush()` must complete all pending I/O
-- Sinks should not throw. If an exception does escape `on_*` or `flush()`, Lumen catches it at the sink boundary, reports the first one per sink on stderr, counts the rest (`core.sink_exception_count(id)`), and carries on with the next sink. It never reaches `LOG_*`, `flush()` or the dispatch thread
-- Sinks are owned by `Core` via `unique_ptr` — registration transfers ownership
+It prints:
 
-## Registering sinks
-
-```cpp
-auto& core = lumen::core();
-
-// Each sink gets a predicate that filters which records it receives
-using namespace lumen;
-
-core.add_sink(std::make_unique<TerminalSink>(cfg), level_at_least(INFO));
-core.add_sink(std::make_unique<FileSink>("errors.log"), level_at_least(ERROR));
-core.add_sink(std::make_unique<JsonSink>("calo.jsonl"),
-    tag_equals("subsystem", "calorimeter"));
-
-// Store the SinkId for later removal
-lumen::SinkId terminal_id = core.add_sink(/* ... */);
-auto removed = core.remove_sink(terminal_id);  // std::expected<unique_ptr<Sink>, error_code>
+<!-- check: output=examples/expected/custom_sink.stdout -->
+```text
+log,INFO,"run started","run=7"
+log,WARN,"say ""cheese""","camera=front"
+metric,"exposure_ms",12.5,"camera=front"
+dropped: 0
 ```
 
-Sinks can be added and removed at any time (infrequent operations, mutex-protected).
+The metric line can come before the log lines: the Core does not order
+records of different types with each other.

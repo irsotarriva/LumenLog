@@ -83,3 +83,5 @@ add_subdirectory(bridges)
 add_subdirectory(compile_checks)
 
 include(consumer/consumer_test.cmake)
+
+add_subdirectory(docs)
