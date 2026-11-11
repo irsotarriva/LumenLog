@@ -1174,34 +1174,56 @@ TEST(CoreShutdownTest, ShutdownGivesUpOnACallbackThatDoesNotReturnAndReportsTheQ
     EXPECT_NE(lines.front().find("3 queued record(s) were not delivered"), std::string::npos);
 }
 
-// Takes `delay` over each record.
+// Blocks on the record "hold" until its gate opens; takes 20 ms over every
+// other record, and says when the first of those arrives.
 class SlowSink : public Sink {
 public:
-    SlowSink(std::chrono::milliseconds delay, std::shared_ptr<std::atomic<uint64_t>> received)
-        : delay_(delay), received_(std::move(received)) {}
-    void on_log(const LogRecord& /*record*/) override {
-        std::this_thread::sleep_for(delay_);
+    SlowSink(std::shared_ptr<Gate> hold, std::shared_ptr<Gate> first_slow,
+             std::shared_ptr<std::atomic<uint64_t>> received)
+        : hold_(std::move(hold))
+        , first_slow_(std::move(first_slow))
+        , received_(std::move(received)) {}
+    void on_log(const LogRecord& r) override {
+        if (r.message == "hold") {
+            hold_->wait_inside();
+            return;
+        }
+        if (received_->load() == 0) {
+            first_slow_->open();
+            first_slow_->wait_inside();  // open already: marks it entered
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
         received_->fetch_add(1);
     }
     void flush() override {}
 
 private:
-    std::chrono::milliseconds delay_;
+    std::shared_ptr<Gate> hold_;
+    std::shared_ptr<Gate> first_slow_;
     std::shared_ptr<std::atomic<uint64_t>> received_;
 };
 
+// The dispatch thread is in one pass over 25 slow records (500 ms) when the
+// Core is destroyed with a shutdown timeout of 250 ms: delivery keeps making
+// progress, so shutdown waits for all of it.
 TEST(CoreShutdownTest, ShutdownWaitsLongerThanItsTimeoutForASinkThatKeepsMakingProgress) {
     const test::CleanContext context;
     auto reported = std::make_shared<ReportedLines>();
+    auto hold = std::make_shared<Gate>();
+    auto first_slow = std::make_shared<Gate>();
     auto received = std::make_shared<std::atomic<uint64_t>>(0);
     {
         std::unique_ptr<Core> core = core_reporting_to(reported);
-        ASSERT_TRUE(
-            core->add_sink(std::make_unique<SlowSink>(std::chrono::milliseconds{20}, received)));
+        ASSERT_TRUE(core->add_sink(std::make_unique<SlowSink>(hold, first_slow, received)));
         core->set_shutdown_timeout(std::chrono::milliseconds{250});
+        log_to(*core, "hold");
+        ASSERT_TRUE(hold->wait_until_entered(1));
         for (int i = 0; i < 25; ++i) {
             log_to(*core, "slow");
         }
+        // The next pass reads the queue heads after all 25 were queued.
+        hold->open();
+        ASSERT_TRUE(first_slow->wait_until_entered(1));
     }
     EXPECT_EQ(received->load(), 25U);
     EXPECT_TRUE(reported->copy().empty());
