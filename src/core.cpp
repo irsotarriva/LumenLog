@@ -501,6 +501,7 @@ struct Core::Impl {
         if (!accepting.exchange(false, std::memory_order_acq_rel)) {
             return;
         }
+        close_registry();
         {
             const std::scoped_lock lock(wake_mutex);
             stopping.store(true, std::memory_order_release);
@@ -517,9 +518,26 @@ struct Core::Impl {
             delivery_snapshot.reset();
         }
         report_first_losses();
-        // Destroys the sinks: no snapshot refers to them any more.
+        destroy_sinks();
+    }
+
+    // Caller: shut_down(). No sink is registered after this.
+    void close_registry() noexcept {
         const std::scoped_lock lock(registry_mutex);
-        replace_registry(std::make_shared<const Registry>());
+        registry_closed = true;
+    }
+
+    // No snapshot refers to the sinks any more. They are destroyed without
+    // registry_mutex held: a sink's destructor may call add_sink, remove_sink
+    // or sink_exception_count, which take it.
+    void destroy_sinks() noexcept {
+        std::shared_ptr<const Registry> retired;
+        {
+            const std::scoped_lock lock(registry_mutex);
+            retired = std::exchange(registry, std::make_shared<const Registry>());
+            registry_version.fetch_add(1, std::memory_order_release);
+        }
+        retired.reset();
     }
 
     // Caller holds registry_mutex.
@@ -534,8 +552,13 @@ struct Core::Impl {
             return std::unexpected(make_error_code(LumenError::NullSink));
         }
         const SinkId id = next_sink_id.fetch_add(1, std::memory_order_relaxed);
+        // Declared before the lock, so a refused sink is destroyed after the
+        // lock is released (its destructor may call back into this Core).
         auto entry = std::make_shared<SinkEntry>(id, std::move(sink), std::move(predicate));
         const std::scoped_lock lock(registry_mutex);
+        if (registry_closed) {
+            return std::unexpected(make_error_code(LumenError::CoreShutDown));
+        }
         auto next = std::make_shared<Registry>(*registry);
         next->push_back(std::move(entry));
         replace_registry(std::move(next));
@@ -617,6 +640,7 @@ struct Core::Impl {
     std::shared_ptr<const Registry> registry =
         std::make_shared<const Registry>();             // guarded by registry_mutex
     std::atomic<uint64_t> registry_version{0};          // bumped under registry_mutex
+    bool registry_closed = false;                       // guarded by registry_mutex
     std::shared_ptr<const Registry> delivery_snapshot;  // guarded by consume_mutex
     uint64_t delivery_version = std::numeric_limits<uint64_t>::max();  // guarded by consume_mutex
     std::atomic<SinkId> next_sink_id{1};
@@ -631,7 +655,12 @@ struct Core::Impl {
 
 Core::Core(DiagnosticHandler diagnostics) : impl_(std::make_unique<Impl>(std::move(diagnostics))) {}
 
-Core::~Core() = default;
+// Shuts down before impl_ starts to be destroyed, so a sink destructor that
+// calls back into this Core still finds impl_ (std::unique_ptr may clear its
+// pointer before it deletes).
+Core::~Core() {
+    impl_->shut_down();
+}
 
 std::expected<SinkId, std::error_code> Core::add_sink(std::unique_ptr<Sink> sink,
                                                       Predicate predicate) {

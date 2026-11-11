@@ -37,7 +37,8 @@ py::object add_exception(py::module_& m, const char* name, const char* doc, py::
         case LumenError::None:
         case LumenError::NullSink:
         case LumenError::IoError:
-        case LumenError::NotATerminal:      return "LumenError";
+        case LumenError::NotATerminal:
+        case LumenError::CoreShutDown:      return "LumenError";
     }
     return "LumenError";
 }

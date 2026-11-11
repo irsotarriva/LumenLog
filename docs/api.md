@@ -69,3 +69,4 @@ if (!set && set.error() == lumen::LumenError::TagTableFull) {
 | `FileOpenFailed` | `FileSink::create`: the file cannot be opened for appending |
 | `IoError` | never returned: a failed write is reported through a sink's diagnostics and counted in its statistics |
 | `NotATerminal` | `DashboardSink::create`: the destination is not a terminal |
+| `CoreShutDown` | `add_sink` once the Core has begun shutting down |

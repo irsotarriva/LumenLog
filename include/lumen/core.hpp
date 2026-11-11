@@ -59,6 +59,12 @@
 // A Core you construct yourself shuts down the same way in its destructor.
 // Producers must not use it after that (they hold a reference to it).
 //
+// The sinks are destroyed last, with no lock held, so a sink's destructor may
+// call its Core: add_sink then fails with LumenError::CoreShutDown,
+// remove_sink and sink_exception_count with LumenError::InvalidSinkId (no
+// sink is registered any more), flush() does nothing and records are counted
+// as dropped_after_shutdown.
+//
 // One race is not covered: a record that another thread submits while
 // shutdown is in progress either is delivered, or is counted as
 // dropped_after_shutdown, or, if its push lands after the final delivery
@@ -116,7 +122,9 @@ public:
     // Registers `sink`; it receives every record dispatched after this call
     // returns for which `predicate` is true (log records are tested with
     // their level, metrics and progress without). Fails with
-    // LumenError::NullSink if `sink` is null.
+    // LumenError::NullSink if `sink` is null, and with LumenError::CoreShutDown
+    // once the Core has begun shutting down (the sink is destroyed before
+    // this returns).
     [[nodiscard]] std::expected<SinkId, std::error_code> add_sink(std::unique_ptr<Sink> sink,
                                                                   Predicate predicate = always());
 

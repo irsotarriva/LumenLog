@@ -45,8 +45,9 @@ TEST(LumenErrorTest, EveryErrorHasItsOwnMessage) {
         lumen_error_category().message(static_cast<int>(LumenError::FileOpenFailed)),
         lumen_error_category().message(static_cast<int>(LumenError::IoError)),
         lumen_error_category().message(static_cast<int>(LumenError::NotATerminal)),
+        lumen_error_category().message(static_cast<int>(LumenError::CoreShutDown)),
     };
-    EXPECT_EQ(messages.size(), 10U);
+    EXPECT_EQ(messages.size(), 11U);
     EXPECT_FALSE(messages.contains("unknown lumen error"));
 }
 

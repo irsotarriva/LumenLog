@@ -34,6 +34,9 @@ enum class LumenError : uint8_t {
     IoError,
     // DashboardSink::create: the destination is not a terminal.
     NotATerminal,
+    // add_sink: the Core has begun shutting down (for the global core(), at
+    // static destruction), so a new sink would never receive a record.
+    CoreShutDown,
 };
 
 class LumenErrorCategory : public std::error_category {

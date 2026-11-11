@@ -12,6 +12,8 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -616,6 +618,54 @@ TEST(CoreShutdownTest, DestroyingACoreDeliversQueuedRecordsFlushesAndDestroysIts
     EXPECT_EQ(captured->logs().size(), 1000U);
     EXPECT_EQ(captured->flushes(), 1U);
     EXPECT_TRUE(destroyed->load());
+}
+
+// Calls back into its Core from its destructor and records what each call
+// returned.
+class CallsCoreWhenDestroyed : public Sink {
+public:
+    struct Results {
+        std::error_code add_sink;
+        std::error_code remove_sink;
+        std::error_code sink_exception_count;
+        bool destroyed = false;
+    };
+    CallsCoreWhenDestroyed(Core& core, SinkId other, std::shared_ptr<Results> results)
+        : core_(core), other_(other), results_(std::move(results)) {}
+    ~CallsCoreWhenDestroyed() override {
+        auto added = core_.add_sink(std::make_unique<NullSink>());
+        results_->add_sink = added ? std::error_code{} : added.error();
+        auto removed = core_.remove_sink(other_);
+        results_->remove_sink = removed ? std::error_code{} : removed.error();
+        auto count = core_.sink_exception_count(other_);
+        results_->sink_exception_count = count ? std::error_code{} : count.error();
+        results_->destroyed = true;
+    }
+    CallsCoreWhenDestroyed(const CallsCoreWhenDestroyed&) = delete;
+    CallsCoreWhenDestroyed& operator=(const CallsCoreWhenDestroyed&) = delete;
+    CallsCoreWhenDestroyed(CallsCoreWhenDestroyed&&) = delete;
+    CallsCoreWhenDestroyed& operator=(CallsCoreWhenDestroyed&&) = delete;
+    void flush() override {}
+
+private:
+    Core& core_;
+    SinkId other_;
+    std::shared_ptr<Results> results_;
+};
+
+TEST(CoreShutdownTest, SinkDestructorCallingItsCoreAtShutdownGetsErrorsInsteadOfADeadlock) {
+    const test::CleanContext context;
+    auto results = std::make_shared<CallsCoreWhenDestroyed::Results>();
+    {
+        Core core([](std::string_view /*line*/) {});
+        const auto other = core.add_sink(std::make_unique<NullSink>());
+        ASSERT_TRUE(other);
+        ASSERT_TRUE(core.add_sink(std::make_unique<CallsCoreWhenDestroyed>(core, *other, results)));
+    }
+    ASSERT_TRUE(results->destroyed);
+    EXPECT_EQ(results->add_sink, LumenError::CoreShutDown);
+    EXPECT_EQ(results->remove_sink, LumenError::InvalidSinkId);
+    EXPECT_EQ(results->sink_exception_count, LumenError::InvalidSinkId);
 }
 
 // Fatal records.

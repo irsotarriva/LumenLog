@@ -1,7 +1,8 @@
 // Logging during static destruction, after the global core has shut down.
 // Run by ctest as its own process: exit status 0 means the late records were
 // counted as dropped_after_shutdown, the record logged in main was delivered
-// at shutdown, and nothing crashed (the Debug build runs under ASan).
+// at shutdown, a sink added after shutdown was refused with CoreShutDown and
+// destroyed, and nothing crashed (the Debug build runs under ASan).
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -15,6 +16,8 @@ namespace {
 // Read during static destruction, hence global.
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<int> delivered_in_main{0};
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+std::atomic<int> late_sinks_destroyed{0};
 
 class CountingSink : public lumen::Sink {
 public:
@@ -23,6 +26,17 @@ public:
             delivered_in_main.fetch_add(1);
         }
     }
+    void flush() override {}
+};
+
+class LateSink : public lumen::Sink {
+public:
+    LateSink() = default;
+    ~LateSink() override { late_sinks_destroyed.fetch_add(1); }
+    LateSink(const LateSink&) = delete;
+    LateSink& operator=(const LateSink&) = delete;
+    LateSink(LateSink&&) = delete;
+    LateSink& operator=(LateSink&&) = delete;
     void flush() override {}
 };
 
@@ -36,14 +50,18 @@ public:
         lumen::metric("late_metric", 1.0);
         lumen::progress("late_bar", 1).finish();
         lumen::core().flush();  // must do nothing, not hang
+        const auto added = lumen::core().add_sink(std::make_unique<LateSink>());
+        const bool refused = !added && added.error() == lumen::LumenError::CoreShutDown;
         const lumen::CoreStatistics stats = lumen::core().statistics();
         const bool ok = delivered_in_main.load() == 1 && stats.logs.dropped_after_shutdown == 1 &&
                         stats.metrics.dropped_after_shutdown == 1 &&
-                        stats.progress.dropped_after_shutdown == 1;
+                        stats.progress.dropped_after_shutdown == 1 && refused &&
+                        late_sinks_destroyed.load() == 1;
         if (!ok) {
             std::cerr << "late logging: delivered_in_main=" << delivered_in_main.load()
                       << " logs.dropped_after_shutdown=" << stats.logs.dropped_after_shutdown
-                      << '\n';
+                      << " late add_sink refused=" << refused
+                      << " late sinks destroyed=" << late_sinks_destroyed.load() << '\n';
         }
         // The process is already exiting; _Exit reports the verdict as the status.
         std::_Exit(ok ? 0 : 1);
