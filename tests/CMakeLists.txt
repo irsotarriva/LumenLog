@@ -62,6 +62,11 @@ if(Python3_Interpreter_FOUND)
                    $<TARGET_FILE:lumen_json_sample>)
   set_tests_properties(JsonOutput.EveryLineParsesStrictlyWithPythonAndHoldsTheExpectedValues
                        PROPERTIES TIMEOUT 60)
+  # The wrapper CI runs ctest through to fail on skipped tests (ci/).
+  add_test(NAME CI.CtestWithoutSkips
+           COMMAND Python3::Interpreter -B -m unittest -v test_ctest_without_skips
+           WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ci")
+  set_tests_properties(CI.CtestWithoutSkips PROPERTIES TIMEOUT 60)
 else()
   message(STATUS "Lumen: no Python 3 interpreter; the Json output check is not registered")
 endif()

@@ -5,8 +5,8 @@
 #
 # For each framework this sets lumen_bridge_<key>_found (TRUE or FALSE) and,
 # when it is FALSE, lumen_bridge_<key>_skip_reason; <key> is eigen, openmp,
-# torch or root. A missing framework is reported in the configure log, and its
-# bridge tests become one ctest entry that reports itself as skipped.
+# torch or root. A missing framework is reported in the configure log, and
+# its bridge tests, compile checks and documentation blocks are not built.
 #
 # LUMEN_REQUIRED_BRIDGE_FRAMEWORKS turns a missing framework into a configure
 # error, so that a CI job meant to test a bridge cannot pass without it.
@@ -54,6 +54,7 @@ set(lumen_bridge_root_found ${ROOT_FOUND})
 set(lumen_bridge_root_version "ROOT ${ROOT_VERSION}")
 set(lumen_bridge_root_skip_reason "ROOT (find_package(ROOT)) was not found")
 
+set(lumen_bridges_not_built "")
 foreach(framework IN LISTS lumen_bridge_frameworks)
   string(TOLOWER "${framework}" key)
   string(REGEX REPLACE "3$" "" key "${key}")
@@ -62,10 +63,15 @@ foreach(framework IN LISTS lumen_bridge_frameworks)
     message(STATUS "Lumen: ${framework} bridge tests: built (${lumen_bridge_${key}_version})")
   else()
     set(lumen_bridge_${key}_found FALSE)
-    message(STATUS "Lumen: ${framework} bridge tests: SKIPPED, ${lumen_bridge_${key}_skip_reason}")
+    list(APPEND lumen_bridges_not_built "${framework}")
+    message(STATUS "Lumen: ${framework} bridge tests: NOT BUILT, ${lumen_bridge_${key}_skip_reason}")
     if(framework IN_LIST LUMEN_REQUIRED_BRIDGE_FRAMEWORKS)
       message(FATAL_ERROR "Lumen: LUMEN_REQUIRED_BRIDGE_FRAMEWORKS lists ${framework}, but "
                           "${lumen_bridge_${key}_skip_reason}")
     endif()
   endif()
 endforeach()
+if(lumen_bridges_not_built)
+  string(JOIN ", " lumen_bridges_not_built_text ${lumen_bridges_not_built})
+  message(STATUS "Lumen: bridge tests not built, so absent from ctest: ${lumen_bridges_not_built_text}")
+endif()
