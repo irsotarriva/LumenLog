@@ -218,10 +218,27 @@ class LibrarySinkTest(LumenTestCase):
         config = lumen.FileConfig(self._path("diagnosed"), max_queued_lines=1)
         config.diagnostics = lambda line: lines.append((line, threading.get_ident()))
         sink = lumen.FileSink(config)
+        # The dispatch thread must outrun the file writer for a line to be
+        # dropped: no Python sink sees the records, and they are all queued
+        # before the first is delivered.
+        lumen.core().remove_sink(self.sink_id)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def hold(record):
+            entered.set()
+            release.wait()
+
+        self.add_sink(lumen.CallbackSink(on_log=hold), lumen.level_at_least(lumen.LogLevel.WARN))
         sink_id = self.add_sink(sink)
         del sink
-        for i in range(2000):
-            lumen.info(f"line {i}")
+        lumen.warn("holds the dispatch thread")
+        self.assertTrue(entered.wait(10))
+        try:
+            for i in range(2000):
+                lumen.info(f"line {i}")
+        finally:
+            release.set()
         lumen.core().flush()
         sink = lumen.core().remove_sink(sink_id)
         self.assertGreater(sink.statistics().lines_dropped, 0)
