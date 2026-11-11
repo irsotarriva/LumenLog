@@ -35,17 +35,25 @@ add_executable(lumen_check_macros_alone macros_alone.cpp)
 target_link_libraries(lumen_check_macros_alone PRIVATE lumen)
 add_test(NAME CompileCheck.MacrosAlone COMMAND lumen_check_macros_alone)
 
-# Every public header compiles as the only include of a translation unit.
-# The bridges are checked separately below.
+# Every header under include/lumen/ (the bridges are checked separately
+# below) is the first include of its own translation unit, headers/<path>.cpp
+# (lumen/detail/context.hpp -> headers/lumen_detail_context.cpp), which then
+# uses the names the header documents. Compiling a header alone is not
+# enough: a name it uses from a header it forgot to include shows only when
+# the name is used. A header without such a file fails the configuration.
 file(GLOB_RECURSE lumen_public_headers CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/include/lumen/*.hpp")
 list(FILTER lumen_public_headers EXCLUDE REGEX "/include/lumen/bridges/")
 set(lumen_header_tus "")
 foreach(header IN LISTS lumen_public_headers)
   file(RELATIVE_PATH rel "${PROJECT_SOURCE_DIR}/include" "${header}")
-  string(MAKE_C_IDENTIFIER "${rel}" tu_name)
-  set(tu "${CMAKE_CURRENT_BINARY_DIR}/headers/${tu_name}.cpp")
-  file(CONFIGURE OUTPUT "${tu}" CONTENT "#include \"${rel}\"\n")
+  string(REGEX REPLACE "\\.hpp$" "" stem "${rel}")
+  string(REPLACE "/" "_" tu_name "${stem}")
+  set(tu "${CMAKE_CURRENT_SOURCE_DIR}/headers/${tu_name}.cpp")
+  if(NOT EXISTS "${tu}")
+    message(FATAL_ERROR "${rel} has no usage check: add tests/compile_checks/headers/${tu_name}.cpp,"
+                        " which includes only ${rel} and uses the names it documents")
+  endif()
   list(APPEND lumen_header_tus "${tu}")
 endforeach()
 add_executable(lumen_check_headers_alone check_main.cpp ${lumen_header_tus})
