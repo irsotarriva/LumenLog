@@ -18,10 +18,11 @@
 //
 // The text is read, not parsed, from the end, so that the common case costs
 // a few dozen character comparisons: the function's own parameter list is
-// the last '(' outside any brackets; the name before it is split at "::"
-// outside brackets; its last part is the function, and the nearest part
-// before that which names a class is the answer. A lambda counts as part of
-// the function that encloses it, so each line above gives "Detector".
+// the last '(' outside any brackets; what comes before it, after the last
+// space outside brackets (which ends the return type or calling convention),
+// is the qualified name, split at "::" outside brackets; its last part is the function, and the
+// nearest part before that which names a class is the answer. A lambda counts as part of the
+// function that encloses it, so each line above gives "Detector".
 
 namespace lumen::detail {
 
@@ -125,8 +126,14 @@ namespace class_name {
     if (paren == std::string_view::npos) {
         return {};
     }
-    const std::string_view qualified =
+    const std::string_view signature =
         class_name::without_operator_name(function_name.substr(0, paren));
+    // Everything up to the last space outside brackets is the return type,
+    // storage class or calling convention ("std::string ", "static void ",
+    // "void __cdecl "); a namespace in it must not be taken for the class.
+    const std::size_t space = last_top_level(signature, signature.size(), ' ');
+    const std::string_view qualified =
+        space == std::string_view::npos ? signature : signature.substr(space + 1);
     // Walk the parts from the end. The first one is the function itself.
     std::size_t end = last_top_level(qualified, qualified.size(), ':');
     bool skip_enclosing_function = false;

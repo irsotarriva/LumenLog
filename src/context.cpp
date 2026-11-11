@@ -9,6 +9,7 @@
 #include <expected>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -17,8 +18,9 @@
 #include <utility>
 #include <vector>
 
-#include "immortal.hpp"
+#include "fork_handlers.hpp"
 #include "lumen/context.hpp"
+#include "lumen/detail/immortal.hpp"
 #include "lumen/detail/tag_table.hpp"
 #include "lumen/error.hpp"
 #include "lumen/limits.hpp"
@@ -54,6 +56,15 @@ struct ProcessContext {
     std::shared_ptr<const TagTable> tags =
         std::make_shared<const TagTable>(max_process_tags);  // guarded by mutex
     std::atomic<uint64_t> version{1};                        // written under mutex, read without it
+    // `mutex`, held by the fork handlers from prepare to parent or child
+    // (src/fork_handlers.hpp), so that a child does not inherit it locked by
+    // a thread of the parent; touched only by the thread that forks.
+    std::optional<std::unique_lock<std::mutex>> fork_lock;
+    const ForkRegistration fork{ForkHandlers{
+        .prepare = [this] { fork_lock.emplace(mutex); },
+        .parent = [this] { fork_lock.reset(); },
+        .child = [this] { fork_lock.reset(); },
+    }};
 };
 
 // Never destroyed: a record submitted during static destruction still reads it.
@@ -90,9 +101,14 @@ auto change_process_tags(Change change) {
     return next.fetch_add(1, std::memory_order_relaxed);
 }
 
+// What a frame holds: a scope's own copy of its tag, or the Tagged object of
+// a member scope.
+template <typename T>
+concept FrameEntry = std::same_as<T, OwnedTag> || std::same_as<T, const Tagged*>;
+
 // One stack of frames, innermost last. Slots at and above `count` are kept,
 // so that pushing again reuses their strings' capacity.
-template <typename Entry>
+template <FrameEntry Entry>
 struct FrameStack {
     std::vector<Entry> slots;
     std::size_t count = 0;
@@ -214,7 +230,7 @@ private:
     return dropped;
 }
 
-template <typename Entry>
+template <FrameEntry Entry>
 void pop_frame(FrameStack<Entry> ThreadContext::*stack, const FrameToken& token) noexcept {
     if (token.context == 0) {
         return;  // never pushed

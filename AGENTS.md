@@ -18,13 +18,20 @@
 `docs/design.md` has the full table of which file owns what. In short:
 
 - `include/lumen/` public headers, one responsibility each (`docs/api.md`
-  lists them); `include/lumen/detail/` internal headers the public ones need.
+  lists them); `include/lumen/detail/` internal headers: those the public
+  headers include, and `ring_buffer.hpp`, which only `src/` includes.
 - `src/` the implementation: `core.cpp` (queues, dispatcher, registry,
   shutdown), `context.cpp` (all context state), `predicate*.cpp`, the sinks
   and their shared pieces (`record_format`, `line_writer`, `text_encoding`,
   `time_format`, `rotating_file`, `terminal_output`), the dashboard
   (`dashboard_*`, FTXUI only in `dashboard_sink.cpp` and `dashboard_frame.*`).
-- `tests/` GTest files, one per source file; `tests/compile_checks/` header
+- `tests/` GTest files, `test_<name>.cpp` for `src/<name>.cpp`; the parts
+  of the Core in their own files (`delivery`, `sink_registry`, `wakeup`,
+  ...) are tested through `Core` in `test_core.cpp`, the ring buffer in
+  `test_transport.cpp`, the scope guards in `test_scope.cpp`, and
+  `dashboard_frame.cpp` through `test_dashboard_sink.cpp`; a few programs
+  (`late_logging.cpp`, `blocked_stderr.cpp`, ...) run as their own process;
+  `tests/compile_checks/` header
   and macro checks; `tests/consumer/` the install and `add_subdirectory`
   test; `tests/bridges/` bridge tests against the real frameworks;
   `tests/python/` the module's tests; `tests/docs/` the documentation check.
@@ -47,7 +54,7 @@ cmake --build --preset debug --target format-check  # or format, to rewrite
 cmake --build --preset debug --target lint          # clang-tidy 18
 ctest --preset build-settings # after building the release preset; slow
 cmake --preset debug -DLUMEN_ENABLE_DASHBOARD=OFF -DLUMEN_ENABLE_PYTHON=ON \
-      -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)   # adds Python.Bindings, Example.Python
+      -Dpybind11_DIR=$(python3 -m pybind11 --cmakedir)   # adds Python.Bindings, Example.Python, Docs.Python.*
 ```
 
 The tests need GoogleTest and a Python 3 interpreter. `lumen_bench_transport`
@@ -55,8 +62,11 @@ is built but not run by ctest. `Consumer.FindPackageAndAddSubdirectory`
 builds Lumen twice and is the slowest test of the default presets; the tests
 labelled `build-settings` (`Consumer.WarnLevelAndSmallQueues`,
 `Consumer.FatalLevel`) build Lumen with non-default settings and run only
-with the `build-settings` test preset. `lint` covers the dashboard and
-`python/` only when the build compiles them.
+with the `build-settings` test preset. `lint` runs clang-tidy over the
+translation units of the build in `src/`, `examples/`, `tests/` and
+`python/` (headers through the files that include them): the dashboard and
+`python/` only when the build compiles them, and never the two OpenMP
+bridge files compiled with GCC's `-fopenmp` (`cmake/lint.cmake` says why).
 
 ## Style
 
@@ -122,14 +132,20 @@ The owner's rules; `.clang-format` and `.clang-tidy` enforce part of them.
 
 ## Documentation
 
-- Every C++ and Python block in `README.md`, `AGENTS.md` and `docs/*.md` is
-  compiled or run by ctest; `tests/docs/check_docs.py` states the directives
-  (`from=`, `prelude=`, `wrap=body`, `requires=`, `output=`, `lines-in=`,
-  `illustrative=`). A block that is not classified fails `Docs.Check`.
-- `Docs.Check` also fails when a document names a macro, CMake variable,
-  preset, target, header, path, C++ name, Python name or bridge metric that
-  does not exist, and when the README options table or the `docs/api.md`
-  header table is incomplete.
+- Every C++ block in `README.md`, `AGENTS.md` and `docs/*.md` is compiled by
+  the build (a bridge block only where its framework is found) and a
+  complete program is also run by ctest; every Python block is run by ctest
+  when the module is built. `tests/docs/check_docs.py` states the
+  directives (`from=`, `prelude=`, `wrap=body`, `requires=`, `output=`,
+  `lines-in=`, `illustrative=`). A block that is not classified fails
+  `Docs.Check`.
+- `Docs.Check` also checks the names a document uses, as its docstring
+  states: a `lumen::` name or `Class::member` must be declared in the
+  headers, a header, path, preset or target must exist, a macro or CMake
+  variable must be a word of the source tree, a `lumen.` name one the module
+  registers. It also fails when the README options table or the
+  `docs/api.md` header table is incomplete. It does not check what prose
+  says about behaviour.
 - A change to an example's output changes `examples/expected/` and the
   documents that quote it, in the same commit.
 
@@ -138,8 +154,8 @@ The owner's rules; `.clang-format` and `.clang-tidy` enforce part of them.
 - The dashboard (`LUMEN_ENABLE_DASHBOARD`) compiles only where FTXUI is
   installed. Left unset, the option is on where FTXUI is found and off
   otherwise (configuring says which); `-DLUMEN_ENABLE_DASHBOARD=ON` without
-  FTXUI fails. The CI jobs that use vcpkg are where the dashboard is compiled,
-  tested and linted.
+  FTXUI fails. The CI jobs that use vcpkg, except the Windows one, are where
+  the dashboard is compiled, tested and linted.
 - `lumen/config.hpp` is generated (from `cmake/config.hpp.in`) into the build
   directory and installed; it carries `LUMEN_MIN_LEVEL` and the queue
   capacities. Do not add them as compile definitions.

@@ -42,10 +42,21 @@ Names. In the whole text of every document:
   - no detail:: name may appear: those are internal. docs/design.md, which
     describes the internals, may name existing ones;
   - every lumen.<name> in Python must be a name the module registers;
-  - every bridge metric name must appear in the bridge headers.
-A table preceded by <!-- check: options-table --> must list exactly the
-LUMEN_ cache variables of the build, with each literal default; one preceded
-by <!-- check: header-table --> must list every public header.
+  - every bridge metric name must appear in the bridge headers;
+  - every `Suite.Name` whose Suite is the first part of a test's name must
+    name a test (add_test or a GTest TEST), `Suite.*` at least one; <Name>
+    and ${name} stand for any word.
+Tables, each marked by a directive on the line before it:
+  options-table      exactly the LUMEN_ cache variables of the build, with
+                     each literal default;
+  header-table       every public header;
+  ci-jobs            exactly the jobs of .github/workflows/ci.yml (matrix
+                     entries expanded), in its first column;
+  files-table        every file under src/, include/lumen/ and python/,
+                     matched by a first-column path, a `stem.*` or a `dir/`;
+  config-table=PATH  each `field` of the first column whose Default cell
+                     holds a `value` is initialised to exactly that value in
+                     PATH.
 
 Usage:
     check_docs.py extract ROOT OUT   write the compiled blocks to OUT and
@@ -380,6 +391,28 @@ class Tree:
     def bridge_text(self) -> str:
         return tree_text(self.root, ("include/lumen/bridges/*.hpp",))
 
+    @functools.cached_property
+    def test_names(self) -> set[str]:
+        """Every test's name, as add_test or a GTest TEST spells it, with
+        each ${variable} replaced by PLACEHOLDER."""
+        # Read directly: tree_text() leaves out tests/docs/, which adds tests too.
+        cmake_files = [p for pattern in ("**/CMakeLists.txt", "**/*.cmake")
+                       for p in self.root.glob(pattern)
+                       if not p.relative_to(self.root).as_posix().startswith("build/")]
+        added = [name for path in cmake_files
+                 for name in re.findall(r"add_test\(\s*NAME\s+([^\s)]+)", path.read_text())]
+        gtests = re.findall(r"\bTEST(?:_F|_P)?\(\s*(\w+)\s*,\s*(\w+)\s*\)",
+                            tree_text(self.root, ("tests/**/*.cpp",)))
+        return {with_placeholders(name) for name in added} | {f"{s}.{n}" for s, n in gtests}
+
+
+PLACEHOLDER = "@"
+
+
+def with_placeholders(name: str) -> str:
+    """`name` with each ${variable} or <Word> replaced by PLACEHOLDER."""
+    return re.sub(r"\$\{\w+\}|<\w+>", PLACEHOLDER, name)
+
 
 # Name checks. Each takes (tree, doc, text) and yields one problem for each
 # name in the text that is wrong.
@@ -485,10 +518,28 @@ def missing_metrics(tree: Tree, _doc: Path, text: str):
             yield absent("metric", name)
 
 
+def names_a_test(known: set[str], name: str) -> bool:
+    """Whether `name` (placeholders and `*` allowed) names a test of `known`."""
+    def as_regex(text: str) -> str:
+        return re.escape(text).replace(re.escape(PLACEHOLDER), r"\w+").replace(r"\*", r".*")
+
+    wanted = with_placeholders(name)
+    if "*" in wanted:
+        return any(re.fullmatch(as_regex(wanted), test) for test in known)
+    return wanted in known or any(re.fullmatch(as_regex(test), name) for test in known)
+
+
+def missing_tests(tree: Tree, _doc: Path, text: str):
+    suites = {name.split(".")[0] for name in tree.test_names} - {PLACEHOLDER}
+    for name in sorted(set(re.findall(r"`([A-Z]\w*(?:\.[\w<>*]+)+)`", text))):
+        if name.split(".")[0] in suites and not names_a_test(tree.test_names, name):
+            yield absent("test", name)
+
+
 NAME_CHECKS = (
     missing_macros, missing_presets, missing_targets, missing_cmake_variables, missing_headers,
     missing_paths, missing_links, missing_qualified_names, missing_scoped_names, internal_names,
-    missing_python_names, missing_metrics,
+    missing_python_names, missing_metrics, missing_tests,
 )
 
 
@@ -578,6 +629,90 @@ def check_header_table(root: Path, doc: Path, errors: list[str]) -> None:
             errors.append(f"{doc}:{i + 1}: the header table lacks {name}")
 
 
+def first_column(lines: list[str]) -> list[str]:
+    """The backticked words in the first column of the first table."""
+    return [name for cells in table_rows(lines) for name in re.findall(r"`([^`]+)`", cells[0])]
+
+
+def ci_job_names(workflow: str) -> set[str]:
+    """The job names of a GitHub workflow; a name that uses ${{ matrix.KEY }}
+    gives one name per value of KEY in the job's matrix entries (`- KEY: v`
+    at 10 spaces, or `KEY: v` at 12, as ci.yml lays them out)."""
+    names = set()
+    for job in re.split(r"^  [\w-]+:\n", workflow, flags=re.M)[1:]:
+        template = re.search(r"^    name: (.+)$", job, re.M)
+        if not template:
+            continue
+        name = template.group(1).strip().strip("'\"")
+        key = re.search(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", name)
+        if not key:
+            names.add(name)
+            continue
+        values = re.findall(rf"^ {{10}}- {key.group(1)}: (.+)$|^ {{12}}{key.group(1)}: (.+)$", job, re.M)
+        names |= {name.replace(key.group(0), (a or b).strip()) for a, b in values}
+    return names
+
+
+def set_problems(what: str, listed: set[str], expected: set[str]) -> list[str]:
+    return ([f"the {what} table lacks {name}" for name in sorted(expected - listed)] +
+            [f"the {what} table lists {name}, which does not exist" for name in sorted(listed - expected)])
+
+
+def check_ci_table(root: Path, doc: Path, errors: list[str]) -> None:
+    lines = (root / doc).read_text(encoding="utf-8").splitlines()
+    for i in tables_after(lines, "ci-jobs"):
+        jobs = ci_job_names((root / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+        for problem in set_problems("CI job", set(first_column(lines[i + 1:])), jobs):
+            errors.append(f"{doc}:{i + 1}: {problem}")
+
+
+def covered(path: str, entries: list[str]) -> bool:
+    """Whether a files-table entry names `path`: itself, `stem.*` or a `dir/`."""
+    return any(path == e or (e.endswith("/") and path.startswith(e)) or
+               (e.endswith(".*") and path.rsplit(".", 1)[0] == e[:-2]) for e in entries)
+
+
+def check_files_table(root: Path, doc: Path, errors: list[str]) -> None:
+    lines = (root / doc).read_text(encoding="utf-8").splitlines()
+    for i in tables_after(lines, "files-table"):
+        entries = first_column(lines[i + 1:])
+        for top in ("src", "include/lumen", "python"):
+            for path in sorted(p.relative_to(root).as_posix() for p in (root / top).rglob("*")
+                               if p.is_file() and "__pycache__" not in p.parts):
+                if not covered(path, entries):
+                    errors.append(f"{doc}:{i + 1}: the files table does not name {path}")
+
+
+def initialiser(header: str, field_name: str) -> str | None:
+    """The initialiser of the first data member `field_name` declared in
+    `header` (outside comments), or None."""
+    m = re.search(rf"^(?![ \t]*//)[^;=\n]*\s{re.escape(field_name)}\s*=\s*([^;\n]+);", header, re.M)
+    return m.group(1).strip() if m else None
+
+
+def config_problems(rows: list[list[str]], header: str) -> list[str]:
+    problems = []
+    for cells in rows:
+        field_name = re.fullmatch(r"`(\w+)`", cells[0])
+        default = re.search(r"`([^`]+)`", cells[1]) if len(cells) > 1 else None
+        if field_name and default:
+            actual = initialiser(header, field_name.group(1))
+            if actual != default.group(1):
+                problems.append(f"{field_name.group(1)} is initialised to {actual}, "
+                                f"the table says `{default.group(1)}`")
+    return problems
+
+
+def check_config_tables(root: Path, doc: Path, errors: list[str]) -> None:
+    lines = (root / doc).read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        directive = parse_directive(line) or {}
+        if "config-table" in directive:
+            header = (root / directive["config-table"]).read_text(encoding="utf-8")
+            for problem in config_problems(table_rows(lines[i + 1:]), header):
+                errors.append(f"{doc}:{i + 1}: {problem}")
+
+
 # Commands.
 
 
@@ -611,6 +746,9 @@ def check_documents(root: Path, errors: list[str]) -> None:
         check_names(tree, doc, (root / doc).read_text(encoding="utf-8"), errors)
         check_options_table(root, doc, errors)
         check_header_table(root, doc, errors)
+        check_ci_table(root, doc, errors)
+        check_files_table(root, doc, errors)
+        check_config_tables(root, doc, errors)
 
 
 def print_summary(classified: list[tuple[Block, str]]) -> None:

@@ -301,8 +301,8 @@ lumen::clear_process_tags();
 `LumenError::TagTableFull` when the key is new and the table is full (16
 process keys, 8 per thread). A thread tag is seen only by records of the
 thread that set it, and is destroyed when the thread exits. The process table
-is never destroyed. The process table is guarded by a mutex; each thread
-holds the version it last read, and re-reads it only after a change.
+is never destroyed. It is guarded by a mutex; each thread holds the version
+it last read, and takes the mutex to re-read it only after a change.
 
 A thread's context (its tags and scopes) is destroyed with the thread's
 `thread_local` objects, in an order the program does not control. A record
@@ -339,14 +339,18 @@ Several threads may be inside member scopes of the same object at once.
 objects. A guard must be destroyed on the thread that created it, in reverse
 order of creation, which is what block scope does. Moving a guard's lifetime
 to another thread (a coroutine resumed elsewhere, a task handed to a pool) is
-not supported; debug builds assert on it. The object of a
-`LUMEN_MEMBER_SCOPE` must outlive the scope.
+not supported; debug builds assert on it, and `lumen/macros.hpp` ("Scope
+rules") states how release builds get the context wrong then. The object of
+a `LUMEN_MEMBER_SCOPE` must outlive the scope.
 
 ## Fatal
 
 `LUMEN_LOG_FATAL("...", args...)` is a statement, not an expression: it takes
 no `.tag()`. It delivers, on the calling thread, every record queued before
-it, then the fatal record, flushes every sink and calls `std::terminate()`.
+it, then the fatal record, flushes every sink and ends the process with
+SIGABRT: by `std::abort()`, or by `std::terminate()` when the program
+installed a terminate handler of its own (`lumen/core.hpp`, "Fatal
+records").
 Inside a sink callback of the same Core, the sink whose callback is running is
 skipped; every other sink receives the record and is flushed. After the Core
 has shut down the record is only counted, and the program still terminates.

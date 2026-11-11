@@ -201,8 +201,12 @@ else:
   `max_queued_lines`); lines go to standard error. **`lumen.FileSink(config)`**
   with a `lumen.FileConfig(path, *, format, max_file_bytes, max_files,
   max_queued_lines)`. Both have `statistics()`; `FileSink` has `path`.
-  **`lumen.NullSink()`**. The `output` stream and `diagnostics` handler of
-  the C++ configurations are not available from Python.
+  **`lumen.NullSink()`**. Both configurations have a `diagnostics` field: a
+  callable that receives one `str` about the sink's first lost line and first
+  failed write, on the sink's writer thread (an exception it raises goes to
+  `sys.unraisablehook`), `None` to discard them, or
+  `lumen.stderr_diagnostics`, the default. The `output` stream of the C++
+  configurations is not available from Python.
 - Register with `lumen.core().add_sink(sink, predicate)`; it returns the id.
   The sink then belongs to the library until `remove_sink(id)` returns it.
 
@@ -245,19 +249,24 @@ except lumen.InvalidPredicateError as error:
 
 `lumen.core()` returns the process-wide Core; it cannot be created from
 Python. It has `add_sink`, `remove_sink`, `sink_exception_count`, `flush`,
-`statistics()` (a `CoreStatistics` with `logs`, `metrics`, `progress` and
-`tags_dropped`), `set_diagnostic_handler(callable or None)` and
-`reset_diagnostic_handler()`. A Python diagnostic handler is called with one
-`str` on the library's dispatch thread; an exception it raises goes to
-`sys.unraisablehook`.
+`flush_for(timeout)` (seconds; the dispatch thread does the work, and
+`FlushTimedOutError` is raised when the time runs out), `statistics()` (a
+`CoreStatistics` with `logs`, `metrics`, `progress` and `tags_dropped`;
+each `QueueStatistics` has `accepted`, `dropped_queue_full`,
+`dropped_after_shutdown` and `queued`), `set_diagnostic_handler(callable or
+None)`, `reset_diagnostic_handler()` and `set_shutdown_timeout(seconds)`. A
+Python diagnostic handler is called with one `str`, on the thread that
+delivers records (the dispatch thread, or the one inside `Core.flush`; the
+comment of the C++ `lumen::DiagnosticHandler` gives the full rule); an
+exception it raises goes to `sys.unraisablehook`.
 
 ## Errors
 
 Library errors are raised as subclasses of `lumen.LumenError` (itself a
 `RuntimeError`): `InvalidSinkIdError` (also a `LookupError`),
-`SinkBusyError`, `TagTableFullError`, `InvalidPredicateError` and
-`InvalidSinkConfigError` (both also `ValueError`), `FileOpenError` (also an
-`OSError`). An operating-system error is raised as `OSError`.
+`SinkBusyError`, `FlushTimedOutError` (also a `TimeoutError`),
+`TagTableFullError`, `InvalidPredicateError` and `InvalidSinkConfigError`
+(both also `ValueError`), `FileOpenError` (also an `OSError`). An operating-system error is raised as `OSError`.
 
 Arguments, for every function and method of the module:
 
@@ -277,7 +286,8 @@ Arguments, for every function and method of the module:
   dispatch thread holds while it waits for the GIL, so they cannot deadlock
   with it.
 - A Python sink's methods run on the dispatch thread (or on the thread that
-  calls `Core.flush`), each taking the GIL for the duration of the call. A
+  calls `Core.flush`; `Core.flush_for` has the dispatch thread do the work),
+  each taking the GIL for the duration of the call. A
   slow Python sink delays every other sink of the Core, C++ ones included,
   and competes with the interpreter's own threads for the GIL.
 - `Core.flush()` releases the GIL while it delivers, so Python sinks can run
@@ -300,14 +310,15 @@ two seconds longer than it would without the module:
    records from Python: from then on `log()`, `info()`, `metric()`,
    `Progress.update()` and the others still check their arguments, then
    drop the record and count it.
-2. It delivers the records queued so far, for at most one second. After
-   that, Python sinks receive nothing more; each record one of them does not
-   receive is counted. Sinks written in C++ receive every record.
-3. It waits, for at most one more second, until no Python sink callback is
-   running, then removes and destroys the Python sinks and puts back the
-   default diagnostic handler if Python had replaced it. From then on no
-   library thread calls into Python. Sinks written in C++ keep receiving
-   records until the process ends.
+2. It has the records queued so far delivered (`Core.flush_for`), waiting
+   at most one second. After that, Python sinks receive nothing more; each
+   record one of them does not receive is counted. Sinks written in C++
+   receive every record.
+3. It waits, for at most one more second, until that delivery has finished
+   and no Python sink callback is running, then removes and destroys the
+   Python sinks and puts back the default diagnostic handler if Python had
+   replaced it. From then on no library thread calls into Python. Sinks
+   written in C++ keep receiving records until the process ends.
 
 A Ctrl-C during these waits ends the wait it arrives in. What was not
 delivered is reported once, at the end of interpreter finalisation, through
@@ -316,21 +327,37 @@ the diagnostic handler (on stderr; not at all after
 how many Python sinks did not receive from step 2 on. If a sink written in
 C++ is so slow that the delivery has not finished at the end of step 3, it
 goes on, but the Python sinks are removed without the records it has not
-reached; the report says so, without a number. Nothing is reported when
-nothing was lost.
+reached; the report gives their number. Nothing is reported when nothing
+was lost.
 
-A Python sink or diagnostic handler that is still running at the end of
-step 3 (one that blocks) would make the library's shutdown wait forever.
-Then the Python sinks are left registered, the report says so, and the
-process ends at the end of finalisation with exit status 1, without C++
-static destruction.
+A Python sink that is still running at the end of step 3 (one that blocks)
+is left registered, and the report says so. The library's shutdown, at C++
+static destruction, then gives up on it at once and reports how many records
+were still queued behind it; the process ends with its own exit status. A
+Python diagnostic handler that is still running could make that shutdown
+wait (a sink's writer thread may be waiting for it), so then the process
+ends at the end of finalisation with exit status 1, without C++ static
+destruction, and the report says so.
 
 All of this also covers an unhandled exception and `sys.exit()`.
 `os._exit()` and a fatal signal skip it, and C++ static destruction too.
 The details are in `python/interpreter_exit.hpp`.
 
-`fatal()` terminates the process with `std::terminate()` (SIGABRT) after
-delivering and flushing: `finally` blocks and `atexit` functions do not run.
+`fork()`: in a child made by `os.fork()` the library works as in any
+process (`lumen/core.hpp`, "fork()"): records the parent had queued are
+delivered by the parent, the child's own are delivered by the child, and
+the exit hook runs at the child's exit unless it leaves with `os._exit()`.
+A child made by `multiprocessing` with the fork start method leaves with
+`os._exit()` after clearing the `atexit` functions; there the module runs
+its exit hook from `multiprocessing`'s own exit handling, so the child's
+records are delivered. Python 3.12 and later warn at every `os.fork()` that
+the process has several threads: the library's dispatch and writer threads
+are such threads.
+
+`fatal()` ends the process with SIGABRT after delivering and flushing
+(`std::abort()`, or `std::terminate()` when a C++ terminate handler other
+than the default one is installed): `finally` blocks and `atexit` functions
+do not run.
 
 ## The `logging` handler
 

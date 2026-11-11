@@ -60,10 +60,14 @@ add_library(lumen
   src/delivery.cpp
   src/delivery_stack.cpp
   src/diagnostic_reporter.cpp
+  src/dispatcher_thread.cpp
   src/fatal_records.cpp
   src/first_reports.cpp
+  src/flush_requests.cpp
+  src/fork_handlers.cpp
   src/record_queues.cpp
   src/sink_registry.cpp
+  src/termination.cpp
   src/wakeup.cpp
   src/predicate.cpp
   src/predicate_lexer.cpp

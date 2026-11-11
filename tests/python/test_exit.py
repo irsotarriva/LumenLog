@@ -208,7 +208,7 @@ for i in range(1000):
                       "exit\n", result.stderr)
         self.assertLess(seconds, EXIT_LIMITS_S + STARTUP_MARGIN_S, result.stderr)
 
-    def test_blocked_python_sink_ends_the_process_with_status_one_and_says_why(self):
+    def test_blocked_python_sink_is_left_behind_and_the_process_exits_with_its_own_status(self):
         result, seconds = timed_child(self, PRELUDE + """
 never = threading.Event()
 def blocking(record):
@@ -217,11 +217,34 @@ def blocking(record):
 lumen.core().add_sink(lumen.CallbackSink(on_log=blocking))
 lumen.info("blocks")
 lumen.info("queued behind it")
+sys.exit(4)
+""")
+        self.assertNotIn("Fatal Python error", result.stderr)
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["blocks"])
+        self.assertIn("lumen: a Python sink was still running when the interpreter exited; the "
+                      "library's shutdown leaves it and the records queued behind it",
+                      result.stderr)
+        self.assertIn("lumen: shutdown gave up after 0 ms without progress: a sink callback (or "
+                      "the diagnostic handler) did not return; 1 queued record(s) were not "
+                      "delivered", result.stderr)
+        self.assertLess(seconds, EXIT_LIMITS_S + STARTUP_MARGIN_S, result.stderr)
+
+    def test_blocked_python_diagnostic_handler_ends_the_process_with_status_one_and_says_why(self):
+        result, seconds = timed_child(self, PRELUDE + """
+never = threading.Event()
+entered = threading.Event()
+def blocking(line):
+    entered.set()
+    never.wait()
+lumen.core().set_diagnostic_handler(blocking)
+lumen.core().add_sink(lumen.CallbackSink(on_log=lambda record: 1 / 0))
+lumen.info("the sink raises, and the handler blocks on the report")
+entered.wait()
 """)
         self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["blocks"])
-        self.assertIn("lumen: a Python sink or diagnostic handler was still running when the "
-                      "interpreter exited", result.stderr)
+        self.assertIn("lumen: a Python diagnostic handler was still running when the interpreter "
+                      "exited; the process ends now with status 1", result.stderr)
         self.assertLess(seconds, EXIT_LIMITS_S + STARTUP_MARGIN_S, result.stderr)
 
     def test_interrupt_during_the_exit_hook_ends_its_wait_for_python_sinks(self):
@@ -250,6 +273,92 @@ atexit.register(os.write, 1, b"exiting\\n")
         self.assertRegex(stderr, re.compile(
             r"lumen: \d+ record\(s\) were not delivered to Python sinks: .*, or the wait for "
             r"them was interrupted"))
+
+
+# Each script registers a FileSink and a Python sink in the parent, forks and
+# waits for the child; the child's records must be delivered once, by the
+# child, whatever way it ends.
+FORK_PRELUDE = PRELUDE + """
+import os
+import warnings
+# Python warns that the process is multithreaded (the library's threads).
+warnings.simplefilter("ignore", DeprecationWarning)
+lumen.core().add_sink(lumen.FileSink(lumen.FileConfig(PATH)))
+lumen.core().add_sink(lumen.CallbackSink(on_log=show))
+lumen.info("parent before the fork")
+lumen.core().flush()
+"""
+
+
+class ForkTest(unittest.TestCase):
+    def run_forking(self, script):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "fork.log")
+            result, seconds = timed_child(self, FORK_PRELUDE.replace("PATH", repr(path)) + script)
+            with open(path, encoding="utf-8") as f:
+                written = f.read().splitlines()
+        self.assertNotIn("Fatal Python error", result.stderr)
+        self.assertLess(seconds, EXIT_LIMITS_S + STARTUP_MARGIN_S, result.stderr)
+        return result, written
+
+    def assert_written_once_each(self, written, messages):
+        """`written` holds one line per message (the text format puts the thread
+        and the source after the message)."""
+        self.assertEqual(len(written), len(messages), written)
+        for message in messages:
+            self.assertEqual(sum(f" {message} [" in line for line in written), 1,
+                             (message, written))
+
+    def test_os_fork_child_that_logs_and_exits_normally_delivers_its_records(self):
+        result, written = self.run_forking("""
+pid = os.fork()
+if pid == 0:
+    lumen.info("from the child")
+    sys.exit(3)
+_, status = os.waitpid(pid, 0)
+print(f"child status {os.waitstatus_to_exitcode(status)}", flush=True)
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(),
+                         ["parent before the fork", "from the child", "child status 3"])
+        self.assert_written_once_each(written, ["parent before the fork", "from the child"])
+
+    def test_os_fork_child_that_only_calls_os_exit_ends_with_its_status(self):
+        result, written = self.run_forking("""
+pid = os.fork()
+if pid == 0:
+    os._exit(7)
+_, status = os.waitpid(pid, 0)
+print(f"child status {os.waitstatus_to_exitcode(status)}", flush=True)
+lumen.info("parent after the fork")
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(),
+                         ["parent before the fork", "child status 7", "parent after the fork"])
+        self.assert_written_once_each(written, ["parent before the fork", "parent after the fork"])
+
+    def test_multiprocessing_fork_children_deliver_their_records_before_they_exit(self):
+        result, written = self.run_forking("""
+import multiprocessing
+
+def work(i):
+    lumen.info(f"multiprocessing child {i}")
+
+if __name__ == "__main__":
+    context = multiprocessing.get_context("fork")
+    children = [context.Process(target=work, args=(i,)) for i in range(2)]
+    for child in children:
+        child.start()
+        child.join(30)
+    print(f"exit codes {[child.exitcode for child in children]}", flush=True)
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(),
+                         ["parent before the fork", "multiprocessing child 0",
+                          "multiprocessing child 1", "exit codes [0, 0]"])
+        self.assert_written_once_each(written, ["parent before the fork",
+                                                "multiprocessing child 0",
+                                                "multiprocessing child 1"])
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ enum class LumenError : uint8_t {
     // remove_sink: a callback of the sink being removed is running further up
     // the calling thread's stack (the sink removes itself, or another sink
     // removes the one that raised the fatal record it is receiving).
+    // Core::flush_for: called from inside a callback of the same Core, or
+    // waiting would never end (a cycle of flushes between Cores).
     SinkBusy,
     // set_process_tag, set_thread_tag, Tagged::lumen_tag: the key is new and
     // the table already holds its maximum number of keys (lumen/limits.hpp).
@@ -38,7 +40,10 @@ enum class LumenError : uint8_t {
     NotATerminal,
     // add_sink: the Core has begun shutting down (for the global core(), at
     // static destruction), so a new sink would never receive a record.
+    // Core::flush_for: the Core has shut down, or gave up its shutdown.
     CoreShutDown,
+    // Core::flush_for: the time limit passed before the flush was done.
+    FlushTimedOut,
 };
 
 class LumenErrorCategory : public std::error_category {

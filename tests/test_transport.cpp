@@ -5,13 +5,21 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <source_location>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "lumen/core.hpp"
 #include "lumen/detail/ring_buffer.hpp"
+#include "lumen/record.hpp"
+#include "lumen/record_builder.hpp"
+#include "lumen/sink.hpp"
 
 namespace lumen {
 namespace {
@@ -220,6 +228,55 @@ TEST(RingBufferTest, DestroyingBufferReleasesUnconsumedSharedPtrsOnce) {
         EXPECT_EQ(payload.use_count(), 4);
     }
     EXPECT_EQ(payload.use_count(), 1);
+}
+
+TEST(RingBufferTest, PoppedSlotKeepsNoReferenceToTheElement) {
+    const auto payload = std::make_shared<int>(7);
+    RingBuffer<std::shared_ptr<int>, 4> buffer;
+    EXPECT_TRUE(buffer.try_push(std::shared_ptr<int>(payload)));
+    {
+        std::shared_ptr<int> out;
+        EXPECT_TRUE(buffer.try_pop(out));
+        EXPECT_EQ(payload.use_count(), 2);  // `payload` and `out`
+    }
+    EXPECT_EQ(payload.use_count(), 1);  // the buffer, still alive, holds nothing
+}
+
+// Through a Core: once a record has been delivered and no sink kept a copy,
+// its string block is freed; neither the queue slot nor the dispatcher holds
+// on to it.
+TEST(RecordQueuesTest, DeliveredRecordsStringBlockIsFreedWhenNoSinkKeepsACopy) {
+    struct Observed {
+        std::mutex mutex;
+        std::vector<std::weak_ptr<const char[]>> blocks;  // NOLINT(*-avoid-c-arrays)
+    };
+    // Watches each record's block without keeping it alive.
+    class WatchingSink final : public Sink {
+    public:
+        explicit WatchingSink(std::shared_ptr<Observed> observed)
+            : observed_(std::move(observed)) {}
+        void on_log(const LogRecord& record) override {
+            const std::scoped_lock lock(observed_->mutex);
+            observed_->blocks.emplace_back(record.storage);
+        }
+        void flush() override {}
+
+    private:
+        std::shared_ptr<Observed> observed_;
+    };
+
+    auto observed = std::make_shared<Observed>();
+    Core core{[](std::string_view /*line*/) {}};
+    ASSERT_TRUE(core.add_sink(std::make_unique<WatchingSink>(observed)).has_value());
+    for (int64_t i = 0; i < 3; ++i) {
+        RecordBuilder(core, LogLevel::Info, std::source_location::current(), "kept").tag("i", i);
+    }
+    core.flush();
+    const std::scoped_lock lock(observed->mutex);
+    ASSERT_EQ(observed->blocks.size(), 3U);
+    for (const auto& block : observed->blocks) {
+        EXPECT_TRUE(block.expired());
+    }
 }
 
 TEST(RingBufferTest, EveryElementIsDestroyedExactlyOnceIncludingUnconsumedAfterWrap) {

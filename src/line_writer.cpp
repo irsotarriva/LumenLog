@@ -1,9 +1,13 @@
 #include "line_writer.hpp"
 
+#include "portable_error.hpp"
+
 #include <algorithm>
 #include <exception>
 #include <format>
+#include <memory>
 #include <new>
+#include <optional>
 #include <utility>
 
 namespace lumen::detail {
@@ -42,7 +46,7 @@ std::expected<void, std::error_code> LineWriter::start_() noexcept {
     try {
         thread_ = std::thread([this] { run_(); });
     } catch (const std::system_error& e) {
-        return std::unexpected(e.code());
+        return std::unexpected(portable_error(e.code()));
     } catch (const std::bad_alloc&) {
         return std::unexpected(std::make_error_code(std::errc::not_enough_memory));
     }
@@ -52,9 +56,17 @@ std::expected<void, std::error_code> LineWriter::start_() noexcept {
 void LineWriter::enqueue(std::string line) noexcept {
     bool accepted = false;
     bool report_due = false;
+    std::optional<std::error_code> restart_failed;
     {
         const std::scoped_lock lock(mutex_);
-        if (queue_.size() < max_queued_lines_) {
+        if (restart_due_) {
+            const std::expected<void, std::error_code> started = start_();
+            restart_due_ = !started;
+            if (!started) {
+                restart_failed = started.error();
+            }
+        }
+        if (!restart_failed && queue_.size() < max_queued_lines_) {
             try {
                 queue_.push_back(std::move(line));
                 ++lines_accepted_;
@@ -73,9 +85,46 @@ void LineWriter::enqueue(std::string line) noexcept {
     if (!accepted) {
         lines_dropped_.fetch_add(1, std::memory_order_relaxed);
     }
+    if (restart_failed) {
+        report_restart_failure_(*restart_failed);
+        return;
+    }
     if (accepted || report_due) {
         work_cv_.notify_one();
     }
+}
+
+// The writer thread that would report it does not exist.
+void LineWriter::report_restart_failure_(std::error_code error) noexcept {
+    if (restart_failure_reported_.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+    try {
+        report_(
+            std::format("lumen: {}: cannot start the writer thread in the child process "
+                        "({}); lines are dropped and counted (statistics().lines_dropped)",
+                        sink_name_, error.message()));
+    } catch (const std::bad_alloc&) {
+        return;  // no memory for the message; the drops are still counted
+    }
+}
+
+void LineWriter::prepare_fork_() {
+    fork_lock_.emplace(mutex_);
+}
+
+// Runs in the child with mutex_ held by this thread (prepare_fork_). The
+// condition variables may name waiters of the parent, and thread_ names the
+// parent's writer thread; they are re-initialised, not destroyed.
+void LineWriter::after_fork_in_child_() noexcept {
+    queue_.clear();
+    lines_completed_ = lines_accepted_;
+    drop_report_pending_ = false;
+    std::construct_at(&work_cv_);
+    std::construct_at(&written_cv_);
+    std::construct_at(&thread_);
+    restart_due_ = !stopping_;
+    fork_lock_.reset();
 }
 
 void LineWriter::expect_termination() noexcept {

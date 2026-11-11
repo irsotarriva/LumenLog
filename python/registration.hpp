@@ -15,6 +15,9 @@ inline constexpr const char* module_name = "lumen_bindings";
 // LumenError and its subclasses (python/errors.cpp).
 void register_errors(pybind11::module_& m);
 
+// stderr_diagnostics, the default diagnostic handler (python/python_diagnostics.cpp).
+void register_diagnostics(pybind11::module_& m);
+
 // LogLevel, SourceLocation and the three read-only record types (python/records.cpp).
 void register_records(pybind11::module_& m);
 

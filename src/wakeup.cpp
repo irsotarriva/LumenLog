@@ -1,7 +1,7 @@
 #include "wakeup.hpp"
 
 #include <chrono>
-#include <cstdint>
+#include <memory>
 #include <thread>
 
 namespace lumen::detail {
@@ -10,12 +10,14 @@ namespace {
 
 // See Wakeup::wait_for_work().
 constexpr std::chrono::microseconds idle_check_interval{100};
-constexpr uint32_t idle_check_count = 5;
 
 }  // namespace
 
 void Wakeup::wake_if_sleeping() noexcept {
-    if (!sleeping_.exchange(false, std::memory_order_acq_rel)) {
+    // A plain load first: while the dispatcher is awake, producers only read
+    // the flag's cache line and do not take it from each other.
+    if (!sleeping_.load(std::memory_order_seq_cst) ||
+        !sleeping_.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
     {
@@ -27,17 +29,6 @@ void Wakeup::wake_if_sleeping() noexcept {
     woken_.notify_one();
 }
 
-bool Wakeup::wait_for_work(const RecordQueues& queues) {
-    if (stopping_.load(std::memory_order_acquire)) {
-        return false;
-    }
-    if (found_work_before_sleeping_(queues)) {
-        return true;
-    }
-    block_until_woken_();
-    return !stopping_.load(std::memory_order_relaxed);
-}
-
 void Wakeup::stop() noexcept {
     {
         const std::scoped_lock lock(mutex_);
@@ -46,20 +37,17 @@ void Wakeup::stop() noexcept {
     woken_.notify_one();
 }
 
-bool Wakeup::found_work_before_sleeping_(const RecordQueues& queues) {
-    for (uint32_t check = 0; check < idle_check_count && !queues.has_pending(); ++check) {
-        std::this_thread::sleep_for(idle_check_interval);
-    }
-    if (queues.has_pending()) {
-        return true;
-    }
-    // The previous value is false: only this thread sets the flag.
-    static_cast<void>(sleeping_.exchange(true, std::memory_order_acq_rel));
-    if (queues.has_pending()) {
-        sleeping_.store(false, std::memory_order_relaxed);
-        return true;
-    }
-    return false;
+void Wakeup::pause_between_checks_() {
+    std::this_thread::sleep_for(idle_check_interval);
+}
+
+std::unique_lock<std::mutex> Wakeup::lock_for_fork() {
+    return std::unique_lock(mutex_);
+}
+
+void Wakeup::reset_in_fork_child() noexcept {
+    std::construct_at(&woken_);
+    sleeping_.store(false, std::memory_order_relaxed);
 }
 
 void Wakeup::block_until_woken_() {

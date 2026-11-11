@@ -3,6 +3,12 @@
 // and the bounded flush after a fatal record.
 #include <gtest/gtest.h>
 
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -282,6 +288,64 @@ TEST(LineWriterTest, AfterExpectTerminationWaitUntilWrittenGivesUpAfterTheFatalT
     EXPECT_EQ(writer->statistics().lines_written, 0U);  // still held by the destination
     destination->open();
 }
+
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_MACOS)
+
+// The writer's destination is blocked in the parent with lines queued behind
+// it when the process forks. The child writes its own line, through a writer
+// thread of its own, and none of the parent's; it reports through a pipe and
+// its exit status.
+TEST(LineWriterTest, ForkChildWritesItsOwnLinesButNotThoseQueuedInTheParent) {
+    std::array<int, 2> pipe_ends{-1, -1};
+    ASSERT_EQ(::pipe(pipe_ends.data()), 0);
+    const pid_t parent = ::getpid();
+    const auto destination = std::make_shared<Gate>();
+    const BatchWriter write = [destination, parent,
+                               to_parent = pipe_ends[1]](std::span<const std::string> lines) {
+        if (::getpid() == parent) {
+            destination->pass();
+            return BatchOutcome{};
+        }
+        for (const std::string& line : lines) {
+            const std::string text = line + '\n';
+            // A failed write shows as a missing line, which the test reports.
+            const auto written = ::write(to_parent, text.data(), text.size());
+            static_cast<void>(written);
+        }
+        return BatchOutcome{};
+    };
+    const auto writer = make_writer(10, write, {});
+    ASSERT_NE(writer, nullptr);
+    writer->enqueue("being written in the parent");
+    destination->wait_until_arrived();
+    writer->enqueue("queued in the parent");
+
+    const pid_t child = ::fork();
+    if (child == 0) {
+        writer->enqueue("from the child");
+        writer->wait_until_written();
+        ::_exit(writer->statistics().lines_dropped == 0 ? 0 : 1);
+    }
+    ASSERT_GT(child, 0);
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+    ::close(pipe_ends[1]);
+    std::string received;
+    std::array<char, 256> buffer{};
+    for (ssize_t got = 0; (got = ::read(pipe_ends[0], buffer.data(), buffer.size())) > 0;) {
+        received.append(buffer.data(), static_cast<std::size_t>(got));
+    }
+    ::close(pipe_ends[0]);
+    destination->open();
+    writer->wait_until_written();
+
+    EXPECT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+    EXPECT_EQ(received, "from the child\n");
+    EXPECT_EQ(writer->statistics().lines_written, 2U);
+}
+
+#endif
 
 }  // namespace
 }  // namespace lumen::detail

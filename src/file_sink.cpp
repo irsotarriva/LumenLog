@@ -52,9 +52,7 @@ struct FileSink::Impl {
                 .show_thread = true,
                 .show_source = true} {}
 
-    // Every record type: the two a builder makes, and progress records.
-    template <typename R>
-        requires BuiltRecord<R> || std::same_as<R, ProgressRecord>
+    template <RecordType R>
     [[nodiscard]] std::string line(const R& record) const {
         switch (format) {
             case FileFormat::Text:     return detail::text_line(record, style);

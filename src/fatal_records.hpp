@@ -30,6 +30,12 @@ public:
 
     [[nodiscard]] uint64_t announced() const noexcept;
 
+    // Fork handlers (src/fork_handlers.hpp). In the child, the caller holds
+    // the lock lock_for_fork() returned. A fatal record announced or posted
+    // in the parent is the parent's to deliver; the child forgets it.
+    [[nodiscard]] std::unique_lock<std::mutex> lock_for_fork();
+    void reset_in_fork_child() noexcept;
+
 private:
     void deliver_announced_(Delivery& delivery);
     [[nodiscard]] std::vector<LogRecord> take_();

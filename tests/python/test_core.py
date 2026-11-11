@@ -1,6 +1,7 @@
 """Core from Python: errors, statistics, the diagnostic handler and predicates."""
 
 import sys
+import threading
 import unittest
 
 from support import LumenTestCase, lumen
@@ -68,6 +69,77 @@ class StatisticsTest(LumenTestCase):
         self.assertEqual(after.progress.accepted - before.progress.accepted, 1)
         self.assertEqual(after.logs.dropped_queue_full, before.logs.dropped_queue_full)
         self.assertEqual(after.logs.dropped_after_shutdown, 0)
+
+
+class FlushForTest(LumenTestCase):
+    def test_flush_for_delivers_every_record_and_flushes_the_sinks(self):
+        for i in range(100):
+            lumen.info(f"record {i}")
+        flushes = self.capture.flushes
+        self.assertIsNone(lumen.core().flush_for(10.0))
+        self.assertEqual(len(self.capture.logs), 100)
+        self.assertEqual(self.capture.flushes, flushes + 1)
+
+    def test_flush_for_behind_a_blocked_python_sink_raises_flush_timed_out_error(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocking(record):
+            entered.set()
+            release.wait()
+
+        self.add_sink(lumen.CallbackSink(on_log=blocking))
+        lumen.info("blocks")
+        self.assertTrue(entered.wait(10))
+        try:
+            with self.assertRaises(lumen.FlushTimedOutError) as raised:
+                lumen.core().flush_for(0.05)
+            self.assertIsInstance(raised.exception, TimeoutError)
+            self.assertIsInstance(raised.exception, lumen.LumenError)
+        finally:
+            release.set()
+
+    def test_flush_for_from_a_sink_callback_raises_sink_busy_error(self):
+        errors = []
+
+        def flush_inside(record):
+            try:
+                lumen.core().flush_for(10.0)
+            except lumen.SinkBusyError as e:
+                errors.append(e)
+
+        self.add_sink(lumen.CallbackSink(on_log=flush_inside))
+        lumen.info("trigger")
+        lumen.core().flush()
+        self.assertEqual(len(errors), 1)
+
+    def test_negative_or_nan_timeouts_raise_value_error(self):
+        for timeout in (-1.0, float("nan")):
+            with self.assertRaises(ValueError):
+                lumen.core().flush_for(timeout)
+            with self.assertRaises(ValueError):
+                lumen.core().set_shutdown_timeout(timeout)
+
+    def test_queued_counts_the_records_waiting_behind_a_blocked_sink(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocking(record):
+            if record.message == "blocks":
+                entered.set()
+                release.wait()
+
+        self.add_sink(lumen.CallbackSink(on_log=blocking))
+        lumen.info("blocks")
+        self.assertTrue(entered.wait(10))
+        try:
+            lumen.info("waits")
+            lumen.info("waits too")
+            self.assertEqual(lumen.core().statistics().logs.queued, 2)
+        finally:
+            release.set()
+        lumen.core().flush()
+        self.assertEqual(lumen.core().statistics().logs.queued, 0)
 
 
 class DiagnosticHandlerTest(LumenTestCase):

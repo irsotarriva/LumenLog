@@ -1,8 +1,10 @@
 #include <pybind11/pybind11.h>
 
-#include <iostream>
+#include <chrono>
+#include <expected>
 #include <memory>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include "errors.hpp"
@@ -10,6 +12,7 @@
 #include "lumen/core.hpp"
 #include "lumen/predicate.hpp"
 #include "lumen/sink.hpp"
+#include "python_diagnostics.hpp"
 #include "python_sinks.hpp"
 #include "registration.hpp"
 
@@ -17,60 +20,6 @@ namespace py = pybind11;
 
 namespace lumen::python {
 namespace {
-
-// A Python callable as a DiagnosticHandler. Core copies its handler on the
-// delivering thread without the GIL, so the callable is held through a
-// shared_ptr: copies change no Python reference count.
-class PythonDiagnostics {
-public:
-    explicit PythonDiagnostics(py::function handler)
-        : held_(std::make_shared<Held>(std::move(handler))) {}
-
-    // An exception raised by the handler has no caller to go to; it is
-    // passed to sys.unraisablehook. Once Python can no longer run code the
-    // line goes to std::cerr instead.
-    void operator()(std::string_view line) const {
-        const PythonCall admission(PythonCallKind::Other);
-        if (!admission.admitted()) {
-            std::cerr << line << '\n' << std::flush;
-            return;
-        }
-        const py::gil_scoped_acquire gil;
-        try {
-            held_->handler(py::str(line.data(), line.size()));
-        } catch (py::error_already_set& e) {
-            e.discard_as_unraisable("lumen diagnostic handler");
-        }
-    }
-
-private:
-    struct Held {
-        explicit Held(py::function f) : handler(std::move(f)) {}
-        // Released with the GIL; left alone once Python cannot run code.
-        ~Held() {
-            const PythonCall admission(PythonCallKind::Other);
-            if (!admission.admitted()) {
-                static_cast<void>(handler.release());
-                return;
-            }
-            try {
-                const py::gil_scoped_acquire gil;
-                handler = py::function();
-            } catch (...) {
-                // pybind11 throws when it cannot take the GIL; the callable
-                // is then left alone, as after exit.
-                static_cast<void>(handler.release());
-            }
-        }
-        Held(const Held&) = delete;
-        Held& operator=(const Held&) = delete;
-        Held(Held&&) = delete;
-        Held& operator=(Held&&) = delete;
-
-        py::function handler;
-    };
-    std::shared_ptr<Held> held_;
-};
 
 [[nodiscard]] SinkId add_sink(Core& c, std::unique_ptr<Sink> sink, Predicate predicate) {
     if (dynamic_cast<PythonSink*>(sink.get()) != nullptr) {
@@ -99,15 +48,39 @@ private:
 }
 
 void set_handler(Core& c, const py::object& handler) {
-    if (handler.is_none()) {
-        set_diagnostic_handler(c, DiagnosticHandler{}, false);
-        return;
+    bool calls_python = false;
+    const DiagnosticHandler converted = diagnostics_from_python(handler, calls_python);
+    set_diagnostic_handler(c, converted, calls_python);
+}
+
+// The timeout in seconds, as Core::flush_for takes it: a negative or NaN one
+// is refused, and one beyond the range of milliseconds means no limit.
+void flush_for(Core& c, double timeout_s) {
+    if (!(timeout_s >= 0.0)) {
+        throw py::value_error("the timeout must be a number of seconds, at least 0");
     }
-    if (PyCallable_Check(handler.ptr()) == 0) {
-        throw py::type_error("the diagnostic handler must be callable or None");
+    const std::chrono::duration<double> seconds(timeout_s);
+    const std::chrono::milliseconds timeout =
+        seconds < std::chrono::duration<double>(std::chrono::milliseconds::max())
+            ? std::chrono::duration_cast<std::chrono::milliseconds>(seconds)
+            : std::chrono::milliseconds::max();
+    std::expected<void, std::error_code> flushed;
+    {
+        // The dispatch thread runs the Python sinks meanwhile.
+        const py::gil_scoped_release release;
+        flushed = c.flush_for(timeout);
     }
-    set_diagnostic_handler(c, PythonDiagnostics(py::reinterpret_borrow<py::function>(handler)),
-                           true);
+    value_or_raise(flushed);
+}
+
+void set_shutdown_timeout_s(Core& c, double timeout_s) {
+    if (!(timeout_s >= 0.0)) {
+        throw py::value_error("the timeout must be a number of seconds, at least 0");
+    }
+    const std::chrono::duration<double> seconds(timeout_s);
+    c.set_shutdown_timeout(seconds < std::chrono::duration<double>(std::chrono::milliseconds::max())
+                               ? std::chrono::duration_cast<std::chrono::milliseconds>(seconds)
+                               : std::chrono::milliseconds::max());
 }
 
 void register_statistics(py::module_& m) {
@@ -117,7 +90,9 @@ void register_statistics(py::module_& m) {
         .def_readonly("dropped_queue_full", &QueueStatistics::dropped_queue_full,
                       "Records refused because the queue was full.")
         .def_readonly("dropped_after_shutdown", &QueueStatistics::dropped_after_shutdown,
-                      "Records submitted after the Core shut down.");
+                      "Records submitted after the Core shut down.")
+        .def_readonly("queued", &QueueStatistics::queued,
+                      "Records accepted and not yet handed to the sinks.");
 
     py::class_<CoreStatistics>(m, "CoreStatistics",
                                "A snapshot of Core.statistics(): one QueueStatistics per record "
@@ -157,6 +132,12 @@ void register_core(py::module_& m) {
              "Deliver every record submitted before the call, then flush every sink, on the "
              "calling thread; returns when that is done. Does nothing when called from a sink "
              "callback.")
+        .def("flush_for", &flush_for, py::arg("timeout"),
+             "As flush, but the library's dispatch thread does the work and this waits at most "
+             "`timeout` seconds. Raises FlushTimedOutError when the time runs out (the flush "
+             "is still made later), SinkBusyError from inside a sink callback or when the "
+             "wait would never end, LumenError after shutdown, and ValueError for a negative "
+             "timeout.")
         .def("statistics", &Core::statistics, "Counters since the Core was created.")
         .def("set_diagnostic_handler", &set_handler, py::arg("handler"),
              "Replace the handler that receives the library's diagnostic lines (the first "
@@ -166,7 +147,11 @@ void register_core(py::module_& m) {
         .def(
             "reset_diagnostic_handler",
             [](Core& c) { set_diagnostic_handler(c, stderr_diagnostics(), false); },
-            "Put back the default diagnostic handler, which writes each line to stderr.");
+            "Put back the default diagnostic handler, which writes each line to stderr.")
+        .def("set_shutdown_timeout", &set_shutdown_timeout_s, py::arg("timeout"),
+             "How long, in seconds, the library's shutdown (after the interpreter has exited) "
+             "and a fatal record wait for a sink callback that makes no progress before giving "
+             "up on it; 5 to start with. ValueError for a negative timeout.");
 
     m.def("core", &core, py::return_value_policy::reference, "The process-wide Core.");
 }

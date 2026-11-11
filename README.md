@@ -104,33 +104,36 @@ examples are:
   `<source_location>`. Clang with GNU libstdc++ 13 does not work: Clang 18
   does not see `std::expected` in that library.
 - Windows: experimental. MSVC is built and tested by one CI job that is
-  allowed to fail, with the dashboard off; the dashboard has never been
-  built on Windows.
-
-The CI workflow (`.github/workflows/ci.yml`) has these jobs. Every one of
-them fails the workflow when it fails, except
-`windows-msvc-debug (experimental)`:
-
-| Job | Toolchain | What it builds and runs |
-|---|---|---|
-| `linux-gcc-debug-asan` | GCC 13, libstdc++, Ubuntu 24.04, vcpkg | Debug, ASan + UBSan, dashboard; the Eigen and OpenMP bridge tests and the locale tests; fails if any test is skipped |
-| `linux-gcc-tsan` | GCC 13, vcpkg | Debug, ThreadSanitizer, dashboard |
-| `linux-gcc-release` | GCC 13, vcpkg | Release, dashboard; also the `build-settings` test preset |
-| `linux-gcc-release-no-dashboard` | GCC 13, apt packages, no vcpkg | Release without the dashboard |
-| `linux-clang-libcxx-debug-asan` | Clang 18, libc++ 18, vcpkg | Debug, ASan + UBSan, dashboard |
-| `macos-appleclang-debug-asan` | Apple Clang, `macos-latest`, vcpkg | Debug, ASan + UBSan, dashboard |
-| `python-bindings` | GCC 13, pybind11 from pip | Debug, ASan + UBSan, the Python module and its tests |
-| `lint (clang-format, clang-tidy)` | clang-format 18, clang-tidy 18 | the `format-check` and `lint` targets, dashboard and Python module included |
-| `coverage (gcovr)` | GCC 13, vcpkg | line and branch coverage of `src/` and `include/`, dashboard included; uploads the report and fails under its thresholds |
-| `bridges (torch)` | GCC 13, libtorch 2.5.1 (CPU), Eigen and OpenMP | the bridge tests and the bridge documentation blocks |
-| `bridges (root)` | conda-forge GCC 13 and ROOT 6.32 | the same for ROOT |
-| `windows-msvc-debug (experimental)` | MSVC, `windows-latest`, vcpkg | Debug, no sanitizer, dashboard off; allowed to fail |
+  allowed to fail, with the dashboard off; no CI job builds the dashboard
+  on Windows.
 - CMake 3.28 or later.
 - For the tests: GoogleTest and a Python 3 interpreter (the example and
   documentation checks run in Python; no Python package is needed).
 - Optional: FTXUI for the terminal dashboard (`LUMEN_ENABLE_DASHBOARD`,
   on by default when FTXUI is found); pybind11 3.0 or later and Python 3.11
   or later for the Python module (`LUMEN_ENABLE_PYTHON`).
+
+### Continuous integration
+
+The CI workflow (`.github/workflows/ci.yml`) has these jobs. Every one of
+them fails the workflow when it fails, except
+`windows-msvc-debug (experimental)`:
+
+<!-- check: ci-jobs -->
+| Job | Toolchain | What it builds and runs |
+|---|---|---|
+| `linux-gcc-debug-asan` | GCC 13, libstdc++, Ubuntu 24.04, vcpkg | Debug, ASan + UBSan, dashboard; the Eigen and OpenMP bridge tests (required) and the locale tests; fails if any test is skipped |
+| `linux-gcc-tsan` | GCC 13, vcpkg | Debug, ThreadSanitizer, dashboard |
+| `linux-gcc-release` | GCC 13, vcpkg | Release, dashboard; also the `build-settings` test preset, and `lumen_bench_transport`, whose numbers are only printed |
+| `linux-gcc-release-no-dashboard` | GCC 13, apt packages, no vcpkg | Release without the dashboard |
+| `linux-clang-libcxx-debug-asan` | Clang 18, libc++ 18, vcpkg | Debug, ASan + UBSan, dashboard |
+| `macos-appleclang-debug-asan` | Apple Clang, `macos-latest`, vcpkg | Debug, ASan + UBSan, dashboard |
+| `python-bindings` | GCC 13, Python 3.12, pybind11 from pip | Debug, ASan + UBSan, the Python module and its tests |
+| `lint (clang-format, clang-tidy)` | clang-format 18, clang-tidy 18 | the `format-check` and `lint` targets, dashboard and Python module included |
+| `coverage (gcovr)` | GCC 13, vcpkg | line and branch coverage of `src/` and `include/lumen/` (bridges excepted), dashboard included, measured with the `coverage` presets; uploads the report and fails under its thresholds (in `ci.yml`) |
+| `bridges (torch)` | GCC 13, libtorch 2.5.1 (CPU), Eigen and OpenMP | builds the bridge tests and the bridge documentation blocks against the three frameworks (required) and runs the tests whose name contains `Bridge` |
+| `bridges (root)` | conda-forge GCC 13 and ROOT 6.32 | the same for ROOT |
+| `windows-msvc-debug (experimental)` | MSVC, `windows-latest`, vcpkg | Debug, no sanitizer, dashboard off; allowed to fail |
 
 ## Building
 
@@ -150,7 +153,8 @@ The configure presets are `debug`, `tsan` (ThreadSanitizer), `release`, `ci`
 (Debug, ASan + UBSan, warnings as errors) and `coverage` (Debug with GCC's
 `--coverage`, for gcovr). Each one builds in `build/<preset>`. The test
 presets of the same names leave out the tests labelled `build-settings`,
-which build and install Lumen with non-default settings and take minutes;
+which build and install Lumen with non-default settings and take minutes
+(the `coverage` test preset also leaves out those labelled `consumer`);
 `ctest --preset build-settings` runs them against the `release` build.
 
 With vcpkg: set the environment variable `VCPKG_ROOT` to a vcpkg checkout. The
@@ -174,8 +178,10 @@ Sanitizers and multi-configuration generators (Ninja Multi-Config, Visual
 Studio, Xcode): `LUMEN_SANITIZER` instruments the Debug configuration only,
 and defaults to `address` for a top-level build; Release, RelWithDebInfo and
 MinSizeRel are never instrumented. With a single-configuration generator
-(the presets use one) it instruments the one build, whatever its
-`CMAKE_BUILD_TYPE`.
+(Ninja, Unix Makefiles) it instruments the one build, whatever its
+`CMAKE_BUILD_TYPE`. The presets do not choose a generator, so they get
+CMake's default: a single-configuration one on Linux and macOS, Visual
+Studio on Windows.
 
 ## Using Lumen from CMake
 
@@ -299,15 +305,24 @@ the sinks' `Config`, except the builder's buffer
   `.progress`), and the first refusal is reported once through the Core's
   diagnostic handler, which writes to standard error unless you replace it
   (`Core::set_diagnostic_handler`).
+- **Memory.** The queues are allocated with the Core: capacity × (record size
+  + 8 bytes), about 41 MB for logs, 9.3 MB for metrics and 2.4 MB for progress
+  with the default capacities on a 64-bit platform (records are 576 to 632
+  bytes). Pages become resident as the queue is first used and stay
+  resident, so once more than 65536 log records have passed, the log queue
+  is resident in full. Smaller capacities shrink it in proportion
+  (`lumen/limits.hpp`, "Memory").
 - **Sink queues.** The shipped sinks write from a thread of their own, through
   a queue of `max_queued_lines` lines (10000 for `TerminalSink`, 65536 for
   `FileSink`). When it is full the line is dropped and counted in the sink's
   `statistics().lines_dropped`; the first drop is reported once.
-- **Threads.** Any thread may log. A producer takes no lock, except to refresh
-  its copy of the process tags after they changed, and makes a system call
-  only when the dispatch thread is asleep. Submission allocates one block on
-  the heap for the record's strings; a statement whose strings exceed the
-  builder's 512-byte stack buffer allocates more. Sink callbacks run on one
+- **Threads.** Any thread may log. A producer takes no lock of Lumen's, except
+  to refresh its copy of the process tags after they changed, and Lumen makes
+  a system call for it only when the dispatch thread is asleep (the memory
+  allocator may make its own, rarely). Submission allocates one block on the
+  heap for the record's strings; each string that does not fit in the
+  builder's 512-byte stack buffer adds two allocations (`lumen/core.hpp`,
+  "Cost of a statement"). Sink callbacks run on one
   thread at a time, never concurrently with each other; they must not block
   (see [Sinks](docs/sinks.md#the-contract)).
 - **Order.** Records of one type reach a sink in the order they were queued.
@@ -324,9 +339,9 @@ the sinks' `Config`, except the builder's buffer
   other types). A record submitted by another thread while shutdown runs may
   be lost without being counted: stop your threads first.
 - **`LUMEN_LOG_FATAL`** delivers every record queued before it, then the fatal
-  record, flushes every sink and calls `std::terminate()`, which aborts the
-  process unless you installed another terminate handler. Destructors and
-  `atexit` functions do not run.
+  record, flushes every sink and aborts the process (SIGABRT); a terminate
+  handler you installed with `std::set_terminate` is called instead.
+  Destructors and `atexit` functions do not run.
 - **Compile-time level.** Statements below `LUMEN_MIN_LEVEL` (default
   `DEBUG`, so `LUMEN_LOG_TRACE` is removed by default) are discarded at
   compile time: they produce no code and their arguments are not evaluated.

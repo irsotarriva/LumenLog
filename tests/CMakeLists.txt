@@ -22,6 +22,8 @@ add_executable(lumen_tests
   test_dashboard_model.cpp
   test_error.cpp
   test_class_name.cpp
+  test_fork_handlers.cpp
+  test_portable_error.cpp
   test_wakeup.cpp
 )
 
@@ -46,8 +48,11 @@ else()
 endif()
 
 include(GoogleTest)
-# A deadlock shows up as a timeout rather than a hung run.
-gtest_discover_tests(lumen_tests PROPERTIES TIMEOUT 120)
+# A deadlock shows up as a timeout rather than a hung run. ThreadSanitizer
+# refuses to start threads in the child of a multithreaded fork unless told
+# otherwise; the fork tests (test_fork_handlers.cpp and others) need it to.
+gtest_discover_tests(lumen_tests PROPERTIES TIMEOUT 120
+                     ENVIRONMENT "TSAN_OPTIONS=die_after_fork=0")
 
 # The logging macros at other compile-time thresholds. Each target builds
 # test_elision.cpp at one level and prefixes its tests with the level's name.
@@ -129,7 +134,7 @@ if(UNIX)
   add_executable(lumen_blocked_stderr blocked_stderr.cpp)
   target_link_libraries(lumen_blocked_stderr PRIVATE lumen)
   if(Python3_Interpreter_FOUND)
-    foreach(mode IN ITEMS deliver fatal)
+    foreach(mode IN ITEMS deliver fatal fatal-handler)
       add_test(NAME BlockedStderr.${mode}
                COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/check_blocked_stderr.py"
                        $<TARGET_FILE:lumen_blocked_stderr> ${mode})
@@ -150,6 +155,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   gtest_discover_tests(lumen_test_sink_thread_start PROPERTIES TIMEOUT 120)
 endif()
 
+# Heap allocations per producer statement. Its own executable because it
+# replaces the global operator new.
+add_executable(lumen_test_allocations allocations.cpp)
+target_link_libraries(lumen_test_allocations PRIVATE lumen GTest::gtest GTest::gtest_main)
+target_compile_features(lumen_test_allocations PRIVATE cxx_std_23)
+gtest_discover_tests(lumen_test_allocations PROPERTIES TIMEOUT 120)
+
 # Ring buffer throughput. Built with the tests so that it keeps compiling, but
 # not registered with ctest: it prints measurements and has nothing to pass or
 # fail. Run it from a Release build (see the comment at the top of the file).
@@ -159,6 +171,15 @@ add_executable(lumen_bench_transport
 
 target_link_libraries(lumen_bench_transport PRIVATE lumen)
 target_compile_features(lumen_bench_transport PRIVATE cxx_std_23)
+
+# Cost of one producer statement (log, metric, progress) with the whole
+# library; built, not run by ctest, like the transport benchmark.
+add_executable(lumen_bench_emit bench_emit.cpp)
+target_link_libraries(lumen_bench_emit PRIVATE lumen)
+target_compile_features(lumen_bench_emit PRIVATE cxx_std_23)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_compile_definitions(lumen_bench_emit PRIVATE PLATFORM_LINUX)
+endif()
 
 # Optional frameworks for the bridge tests and the bridge compile checks.
 include(bridges/frameworks.cmake)

@@ -19,10 +19,13 @@ namespace lumen {
 // A small number naming the calling thread: 1 for the first thread that asks,
 // 2 for the next, and so on. Two threads never share a number (until 2^32
 // threads have asked), and a thread keeps its number for its whole life.
-// Numbers are not reused after a thread exits.
+// Numbers are not reused after a thread exits. The counter is defined in this
+// header, so each shared library compiled with hidden visibility that calls
+// this function has a counter of its own, and the same thread can get a
+// different number from each.
 [[nodiscard]] inline uint32_t this_thread_id() {
-    // The one counter for the whole program (an inline function's static is
-    // shared by every translation unit).
+    // An inline function's static is one object for every translation unit
+    // linked together.
     static std::atomic<uint32_t> next_id{1};
     thread_local const uint32_t id = next_id.fetch_add(1, std::memory_order_relaxed);
     return id;

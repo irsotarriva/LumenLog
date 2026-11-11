@@ -3,9 +3,18 @@
 
 #include <functional>
 #include <source_location>
+#include <string>
 #include <string_view>
 
 #include "lumen/detail/class_name.hpp"
+
+// At global scope, with a namespace in its return type: this compiler's own
+// spelling of such a function. Its result is the function's name; the
+// std::string it returns carries it.
+std::string name_of_a_global_function_returning_a_string();
+std::string name_of_a_global_function_returning_a_string() {
+    return std::source_location::current().function_name();
+}
 
 namespace lumen {
 namespace {
@@ -111,6 +120,42 @@ TEST(ClassNameTest, LocalClassAndAnonymousNamespaceAreHandled) {
     EXPECT_EQ(extract_class_name("void (anonymous namespace)::helper()"), "");
 }
 
+TEST(ClassNameTest, NamespaceInTheReturnTypeOfAGlobalFreeFunctionYieldsEmpty) {
+    // GCC and Clang
+    EXPECT_EQ(extract_class_name("std::string text_of()"), "");
+    EXPECT_EQ(extract_class_name("std::__cxx11::basic_string<char> text_of()"), "");
+    EXPECT_EQ(extract_class_name("std::vector<int> values_of()"), "");
+    EXPECT_EQ(extract_class_name("const std::map<std::string, int>& table_of()"), "");
+    // MSVC: the calling convention stands between the return type and the name.
+    EXPECT_EQ(extract_class_name("class std::basic_string<char,struct std::char_traits<char>,class "
+                                 "std::allocator<char> > __cdecl text_of(void)"),
+              "");
+    EXPECT_EQ(extract_class_name("class std::vector<int,class std::allocator<int> > __cdecl "
+                                 "values_of(void)"),
+              "");
+}
+
+TEST(ClassNameTest, NamespaceInTheReturnTypeOfAMemberFunctionDoesNotHideTheClass) {
+    EXPECT_EQ(extract_class_name("std::string Detector::name() const"), "Detector");
+    EXPECT_EQ(extract_class_name("class std::basic_string<char,struct std::char_traits<char>,class "
+                                 "std::allocator<char> > __cdecl Detector::name(void) const"),
+              "Detector");
+    EXPECT_EQ(extract_class_name("static std::vector<int> Detector::values()"), "Detector");
+}
+
+TEST(ClassNameTest, TrailingReturnTypeIsNotPartOfTheName) {
+    EXPECT_EQ(extract_class_name("auto Detector::name() -> std::string"), "Detector");
+    EXPECT_EQ(extract_class_name("auto text_of() -> std::string"), "");
+    EXPECT_EQ(extract_class_name("auto values_of() -> std::vector<int>"), "");
+}
+
+TEST(ClassNameTest, ConversionOperatorToAScopedTypeYieldsItsClass) {
+    EXPECT_EQ(extract_class_name("Vec::operator std::string() const"), "Vec");
+    EXPECT_EQ(extract_class_name("__cdecl Vec::operator class std::basic_string<char,struct "
+                                 "std::char_traits<char>,class std::allocator<char> >(void) const"),
+              "Vec");
+}
+
 struct SignatureProbe {
     [[nodiscard]] static std::string_view with_function_parameter(
         const std::function<void(int)>& /*callback*/) {
@@ -126,6 +171,8 @@ TEST(ClassNameTest, ThisCompilersOwnSpellingsYieldTheClass) {
     EXPECT_EQ(extract_class_name(with_parameter), "SignatureProbe") << with_parameter;
     const std::string_view lambda = SignatureProbe::from_a_lambda();
     EXPECT_EQ(extract_class_name(lambda), "SignatureProbe") << lambda;
+    const std::string global = name_of_a_global_function_returning_a_string();
+    EXPECT_EQ(extract_class_name(global), "") << global;
 }
 
 TEST(ClassNameTest, ANameThatEndsInOperatorIsNotTheOperatorKeyword) {

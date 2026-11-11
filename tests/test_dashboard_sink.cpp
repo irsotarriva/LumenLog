@@ -14,6 +14,7 @@
 #include <utility>
 
 #ifndef PLATFORM_WINDOWS
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -93,6 +94,32 @@ TEST_F(DashboardSinkTest, EntersTheAlternateScreenAtCreationAndLeavesItAtDestruc
     }
     EXPECT_TRUE(_output().ends_with(leave_screen));
 }
+
+#ifndef PLATFORM_WINDOWS
+// In a fork child the sink takes records and writes nothing, not even when
+// flushed or destroyed: the terminal belongs to the parent. The child
+// reports through its exit status.
+TEST_F(DashboardSinkTest, ForkChildTakesRecordsButNeitherDrawsNorRestoresTheTerminal) {
+    auto sink = _sink();
+    ASSERT_NE(sink, nullptr);
+    const pid_t child = ::fork();
+    if (child == 0) {
+        const std::size_t written_before = _output().size();
+        sink->on_log(log_record("in the child"));
+        sink->flush();
+        const uint64_t frames = sink->frames_written();
+        sink.reset();
+        ::_exit(_output().size() == written_before && frames == 0 ? 0 : 1);
+    }
+    ASSERT_GT(child, 0);
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+    EXPECT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+    sink->flush();
+    EXPECT_EQ(sink->frames_written(), 1U);
+}
+#endif
 
 TEST_F(DashboardSinkTest, FlushWritesAFrameWithTheLogLineTheMetricAndTheBar) {
     const auto sink = _sink();

@@ -92,10 +92,10 @@ writes batches of lines and flushes the stream (`lumen/writer_statistics.hpp`).
 - `flush()` waits as long as the stream blocks, except after the sink
   received a fatal record: then it gives up after `lumen::fatal_flush_timeout`
   (2 s), and the lines not written by then are lost with the process. With
-  standard error on a pipe nobody reads, the fatal path still reaches
-  `std::terminate`; the C++ library's default terminate handler then writes
-  its own message to standard error, which can block in turn (that handler
-  is the application's choice).
+  standard error on a pipe nobody reads, the fatal path still ends the
+  process: unless the application installed a terminate handler of its own,
+  Lumen calls `std::abort()` rather than the C++ library's default terminate
+  handler, whose message to standard error would block.
 - The destructor writes what is still queued, then stops the thread. It
   waits for the stream as long as the stream blocks.
 - `create` fails with the error `std::thread` reports
@@ -147,6 +147,7 @@ as the same `double`; NaN and infinities as `NaN`, `Infinity` and
 
 `TerminalSink::Config`:
 
+<!-- check: config-table=include/lumen/terminal_sink.hpp -->
 | Field | Default | Meaning |
 |---|---|---|
 | `output` | null: standard error | The stream. The writer thread uses it until the sink is destroyed. |
@@ -247,7 +248,7 @@ current total thread`. A key or value that is empty or contains a space, `=`,
 | `type` | all | `"log"`, `"metric"` or `"progress"` |
 | `ts` | all | integer, nanoseconds since the Unix epoch (`system_clock`) |
 | `level` | log | `"TRACE"` … `"FATAL"`, `"UNKNOWN"` for a value outside the enum |
-| `msg`, `file`, `line`, `function`, `class` | log | the message and the source location; `class` is `""` for a free function |
+| `msg`, `file`, `line`, `function`, `class` | log | the message and the source location; `class` as [Usage](usage.md#log-statements) describes it (`""` for a free function at global scope) |
 | `name`, `value` | metric | `value` is the shortest decimal that reads back as the same `double`, and `-0.0` for negative zero (a parser that reads `-0` as an integer would lose the sign); for NaN and infinities it is `null` and `"value_text"` is `"NaN"`, `"Infinity"` or `"-Infinity"` (present only then) |
 | `id`, `label`, `current`, `total` | progress | integers and the label |
 | `thread` | all | the producing thread's number |
@@ -266,6 +267,7 @@ parses the output with Python's `json` module.
 
 `FileSink::Config`:
 
+<!-- check: config-table=include/lumen/file_sink.hpp -->
 | Field | Default | Meaning |
 |---|---|---|
 | `path` | `"run_{date}.log"` | Every `{date}` is replaced, once at creation, by the UTC date as `YYYY-MM-DD`. No other placeholder exists. The directory must exist. |
@@ -330,8 +332,9 @@ flight, above the most recent log lines in their level's colour.
   stream cannot be measured and gets 80 x 24.
 - `on_*` only updates the model under a mutex; a thread owned by the sink
   draws at most one frame per `refresh_interval` (default 100 ms), and only
-  when something changed or a progress bar may have expired. `flush()` asks for a frame and returns when it has
-  been written. `frames_written()` and `frames_failed()` count frames.
+  when something changed or a progress bar may have expired. `flush()` asks
+  for a frame and returns when it has been written. `frames_written()` and
+  `frames_failed()` count frames.
 - After a fatal record, `flush()` stops drawing, restores the terminal and
   writes the log lines it holds, the fatal one last, as plain text to the
   normal screen, where they stay after the process ends.
@@ -339,7 +342,9 @@ flight, above the most recent log lines in their level's colour.
   dashboard exists, Lumen's terminate handler restores the terminal of every
   live dashboard and writes their log lines (this covers a fatal record that
   the dashboard's predicate filtered out, and an uncaught exception), then
-  calls the handler installed before it; an application that calls
+  calls the handler installed before it (with no exception active and the
+  C++ library's default handler before it, `std::abort()` instead, for the
+  reason above); an application that calls
   `std::set_terminate` after creating a dashboard replaces it. A function
   registered with `std::atexit` restores the terminal when the process exits
   with the sink still alive (`std::exit`, or a Core that is never
@@ -353,11 +358,12 @@ flight, above the most recent log lines in their level's colour.
   end the process. That function is async-signal-safe: it writes the two
   escapes to standard error with one `write` call, and only while a
   dashboard drawing to standard error exists. It does not stop the drawing
-  thread, so the process must end right after:
+  thread, so the process must end right after it (first example below).
 - What is kept is `DashboardModel`'s business (`lumen/dashboard_model.hpp`,
-  built in every configuration): 512 log lines, 128 values per metric, 8
-  metrics when none are named, 16 progress bars. A finished bar stays 2 s after
-  its last record; any bar idle for 60 s is removed.
+  built in every configuration). By default: 512 log lines, 128 values per
+  metric, 8 metrics when none are named, 16 progress bars; a finished bar
+  stays 2 s after its last record, and any bar whose last record is 60 s old
+  is removed.
 
 <!-- check: prelude=common -->
 ```cpp
