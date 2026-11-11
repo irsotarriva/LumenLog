@@ -8,12 +8,21 @@
 #include <cstring>
 #include <format>
 #include <forward_list>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 namespace lumen::detail {
+
+// A type std::format can format: its std::formatter is enabled. An enabled
+// specialization is default constructible and copyable, a disabled one is
+// neither, which is the test std::formattable makes (not every standard
+// library supported here provides std::formattable yet).
+template <typename T>
+concept FormatArgument = std::semiregular<std::formatter<std::remove_cvref_t<T>, char>>;
 
 // Copies of the strings handed to one builder, kept until the builder submits
 // its record. Tag arguments are often temporaries that die before the end of
@@ -21,6 +30,12 @@ namespace lumen::detail {
 // Short strings go to an inline buffer on the builder's stack; longer ones go
 // to list nodes, whose addresses never change. Returned views stay valid for
 // the scratch object's lifetime.
+//
+// Cost. Storing a string allocates nothing while the strings stored so far
+// fit in the inline buffer (inline_capacity bytes in all). Each string that
+// does not fit costs two heap allocations: its list node and the string's
+// own buffer. A formatted message that does not fit is formatted twice, the
+// second time into a buffer of the size the first pass measured.
 class StringScratch {  // NOLINT(cppcoreguidelines-pro-type-member-init): inline_buf_
 public:
     static constexpr std::size_t inline_capacity = 512;
@@ -67,7 +82,7 @@ public:
     // text then says that formatting failed, with the exception's text and
     // the format string. std::bad_alloc from storing that text is the only
     // exception that can leave it.
-    template <typename... Args>
+    template <FormatArgument... Args>
     [[nodiscard]] std::string_view store_formatted(std::format_string<Args...> fmt,
                                                    Args&&... args) {
         try {
@@ -80,7 +95,7 @@ public:
     }
 
 private:
-    template <typename... Args>
+    template <FormatArgument... Args>
     [[nodiscard]] std::string_view format_(std::format_string<Args...> fmt, Args&&... args) {
         const std::size_t available = inline_capacity - used_;
         char* const dst = inline_buf_.data() + used_;
@@ -91,8 +106,13 @@ private:
             used_ += size;
             return {dst, size};
         }
-        // Too long for the inline buffer: format again, into a list node.
-        overflow_.emplace_front(std::vformat(fmt.get(), std::make_format_args(args...)));
+        // Too long for the inline buffer: format again, into a string reserved
+        // at the measured size (it still grows if a user formatter writes
+        // more the second time), then into a list node.
+        std::string text;
+        text.reserve(size);
+        std::vformat_to(std::back_inserter(text), fmt.get(), std::make_format_args(args...));
+        overflow_.emplace_front(std::move(text));
         return overflow_.front();
     }
 
