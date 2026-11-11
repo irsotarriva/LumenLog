@@ -125,7 +125,12 @@ std::expected<std::vector<TimeFormat::Piece>, std::error_code> TimeFormat::split
 // time: the conversions' widths do not depend on the value, except for the
 // names (%Z, %B, ...), which are short.
 bool TimeFormat::fits_(const std::vector<Piece>& pieces) {
-    const std::tm sample{};
+    // 1970-01-01: a zero-filled std::tm has day-of-month 0, which is not a
+    // date, and std::strftime's behaviour is undefined for it.
+    std::tm sample{};
+    sample.tm_mday = 1;
+    sample.tm_year = 70;
+    sample.tm_wday = 4;
     std::string scratch;
     return std::ranges::all_of(pieces, [&](const Piece& piece) {
         return piece.kind != PieceKind::Strftime || append_strftime(scratch, piece.pattern, sample);
