@@ -4,6 +4,7 @@ add_executable(lumen_tests
   test_transport.cpp
   test_predicate.cpp
   test_predicate_parser.cpp
+  test_predicate_lexer.cpp
   test_core.cpp
   test_context.cpp
   test_progress.cpp
@@ -23,6 +24,8 @@ if(LUMEN_ENABLE_DASHBOARD)
 endif()
 
 target_link_libraries(lumen_tests PRIVATE lumen GTest::gtest GTest::gtest_main)
+# test_predicate_lexer.cpp tests an internal header of src/.
+target_include_directories(lumen_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_features(lumen_tests PRIVATE cxx_std_23)
 
 include(GoogleTest)
