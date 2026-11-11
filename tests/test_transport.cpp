@@ -53,8 +53,11 @@ private:
 
 struct ThrowingMove {
     ThrowingMove() = default;
-    ThrowingMove(ThrowingMove&&) noexcept(false) {}
-    ThrowingMove& operator=(ThrowingMove&&) noexcept(false) { return *this; }
+    ~ThrowingMove() = default;
+    ThrowingMove(const ThrowingMove&) = delete;
+    ThrowingMove& operator=(const ThrowingMove&) = delete;
+    ThrowingMove(ThrowingMove&& /*other*/) noexcept(false) {}
+    ThrowingMove& operator=(ThrowingMove&& /*other*/) noexcept(false) { return *this; }
 };
 
 template <typename T, std::size_t N>
@@ -101,7 +104,8 @@ TEST(RingBufferTest, TryPushOnFullBufferReturnsFalseAndLeavesItemIntact) {
     auto item = std::make_unique<int>(99);
     EXPECT_FALSE(buffer.try_push(std::move(item)));
     ASSERT_NE(item, nullptr);
-    EXPECT_EQ(*item, 99);
+    // A rejected try_push does not move from its argument; that is under test.
+    EXPECT_EQ(*item, 99);  // NOLINT(bugprone-use-after-move)
 
     std::unique_ptr<int> out;
     ASSERT_TRUE(buffer.try_pop(out));
@@ -209,7 +213,7 @@ TEST(RingBufferTest, CapacityOneHoldsExactlyOneElementAtATime) {
 // ── Element lifetime ─────────────────────────────────────────────────────────
 
 TEST(RingBufferTest, ConstructingAndDestroyingEmptyBufferCreatesNoElements) {
-    LifetimeCounts counts;
+    const LifetimeCounts counts;
     { const RingBuffer<Tracked, 16> buffer; }
     EXPECT_EQ(counts.constructed.load(), 0);
     EXPECT_EQ(counts.destroyed.load(), 0);
@@ -362,7 +366,7 @@ TEST(RingBufferStressTest, TryPushRetriedUntilAcceptedDeliversEveryValueExactlyO
         RingBuffer<Tracked, 2> buffer;
         const StressOutcome outcome = run_stress(buffer, counts, [](auto& b, Tracked&& item) {
             // A rejected push must leave `item` intact for the next attempt.
-            while (!b.try_push(std::move(item))) {
+            while (!b.try_push(std::move(item))) {  // NOLINT(bugprone-use-after-move)
                 std::this_thread::yield();
             }
             return true;

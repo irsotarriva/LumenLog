@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <string_view>
 
 #define LUMEN_NO_SHORT_MACROS
@@ -13,7 +14,9 @@
 #endif
 
 namespace {
-int consumer_calls = 0;
+// Counts the calls made through the consumer's LOG_INFO: this program's result.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+uint32_t consumer_calls = 0;
 void consumer_log(std::string_view /*message*/) {
     ++consumer_calls;
 }

@@ -2,6 +2,7 @@
 #include <initializer_list>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -253,9 +254,11 @@ TEST(PredicateParserTest, ModerateNestingIsAccepted) {
 // Switches the global C locale to the first of `names` installed here, and
 // back on destruction. active() is false if none of them is installed; most
 // machines have only "C" and "C.UTF-8", and these tests then skip.
+// Changing the process-wide locale is the point; no other thread runs then.
+// NOLINTBEGIN(concurrency-mt-unsafe)
 class ScopedCLocale {
 public:
-    explicit ScopedCLocale(std::initializer_list<const char*> names)
+    explicit ScopedCLocale(const std::vector<const char*>& names)
         : previous_(std::setlocale(LC_ALL, nullptr)) {
         for (const char* name : names) {
             if (std::setlocale(LC_ALL, name) != nullptr) {
@@ -265,7 +268,7 @@ public:
         }
     }
     // Restoring the name setlocale itself returned cannot fail.
-    ~ScopedCLocale() { std::setlocale(LC_ALL, previous_.c_str()); }
+    ~ScopedCLocale() { static_cast<void>(std::setlocale(LC_ALL, previous_.c_str())); }
     ScopedCLocale(const ScopedCLocale&) = delete;
     ScopedCLocale(ScopedCLocale&&) = delete;
     ScopedCLocale& operator=(const ScopedCLocale&) = delete;
@@ -277,6 +280,7 @@ private:
     std::string previous_;
     bool active_ = false;
 };
+// NOLINTEND(concurrency-mt-unsafe)
 
 void expect_rejects_latin1_letter() {
     // 0xE9 is 'e' with an acute accent in ISO-8859-1.

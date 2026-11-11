@@ -157,7 +157,7 @@ TEST_F(RecordFormatTest, JsonMetricValueIsTheShortestTextThatReadsBackBitForBit)
         // strtod, not std::from_chars: libc++ has no floating-point from_chars.
         char* end = nullptr;
         const double parsed = std::strtod(text.c_str(), &end);
-        EXPECT_EQ(end, text.c_str() + text.size()) << text;
+        EXPECT_EQ(std::string_view(text.c_str(), end), text) << text;  // all of it was read
         EXPECT_EQ(std::bit_cast<uint64_t>(parsed), std::bit_cast<uint64_t>(value)) << text;
     }
 }

@@ -37,7 +37,7 @@ struct Payload {
 using Buffer = lumen::RingBuffer<Payload, LUMEN_LOG_CAPACITY>;
 using Clock = std::chrono::steady_clock;
 
-enum class PushMode {
+enum class PushMode : uint8_t {
     TryPush,       // drop when full, as the logging front end does
     PushBlocking,  // wait for room
 };
@@ -54,11 +54,10 @@ struct RunResult {
 [[nodiscard]] uint64_t produce(Buffer& buffer, PushMode mode, uint64_t count) {
     uint64_t accepted = 0;
     for (uint64_t i = 0; i < count; ++i) {
-        Payload item{.value = i};
         if (mode == PushMode::PushBlocking) {
-            buffer.push_blocking(std::move(item));
+            buffer.push_blocking(Payload{.value = i});
             ++accepted;
-        } else if (buffer.try_push(std::move(item))) {
+        } else if (buffer.try_push(Payload{.value = i})) {
             ++accepted;
         }
     }
