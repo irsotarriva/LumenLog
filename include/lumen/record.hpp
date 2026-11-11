@@ -16,8 +16,9 @@
 // immutable NUL-terminated block allocated when the record was submitted and
 // shared by every copy of the record. A sink may copy a record and keep it;
 // the views stay valid as long as any copy is alive. The strings in `source`
-// are not copied: they come from std::source_location and live for the whole
-// program.
+// usually come from std::source_location, live for the whole program and are
+// not copied; a source given as text (a call site in another language, see
+// BasicRecordBuilder) is copied into `storage` too.
 //
 // Completeness. Records are only created by Core's producers (the builders
 // in lumen/record_builder.hpp and ProgressHandle in lumen/progress.hpp). Each

@@ -159,14 +159,22 @@ private:
     friend class ProgressHandle;
     friend Core& core();
 
+    // Where a log record's source strings live. Static: they come from
+    // std::source_location and live for the whole program, so they are not
+    // copied. Copied: they were given as text (a call site in another
+    // language) and are copied into the record's storage with its other
+    // strings.
+    enum class SourceStrings : uint8_t { Static, Copied };
+
     // The one way records enter: stamps, merges context, owns the strings,
     // queues. `tags_dropped` counts explicit tags the builder could not hold.
-    void submit_(LogRecord&& record, uint32_t tags_dropped) noexcept;
+    void submit_(LogRecord&& record, uint32_t tags_dropped, SourceStrings source) noexcept;
     void submit_(MetricRecord&& record, uint32_t tags_dropped) noexcept;
     void submit_(ProgressRecord&& record, uint32_t tags_dropped) noexcept;
     // For a Fatal record: delivers everything queued, then this record, flushes
     // the sinks and terminates (see BasicRecordBuilder).
-    [[noreturn]] void submit_fatal_(LogRecord& record, uint32_t tags_dropped) noexcept;
+    [[noreturn]] void submit_fatal_(LogRecord& record, uint32_t tags_dropped,
+                                    SourceStrings source) noexcept;
 
     // Shuts the global core down at static destruction (see above).
     struct ShutdownAtExit;

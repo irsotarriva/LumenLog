@@ -65,6 +65,23 @@ public:
         record_.message = scratch_.store_formatted(fmt, std::forward<Args>(args)...);
     }
 
+    // A log record whose source is given as text instead of a
+    // std::source_location: a call site in another language, such as Python.
+    // The source strings are copied like the message, so they may be
+    // temporaries.
+    BasicRecordBuilder(Core& core, LogLevel level, const SourceLocation& source,
+                       std::string_view message)
+        requires std::same_as<R, LogRecord>
+        : core_(&core)
+        , source_strings_(Core::SourceStrings::Copied) {
+        record_.level = level;
+        record_.source.file = scratch_.store(source.file);
+        record_.source.function = scratch_.store(source.function);
+        record_.source.class_name = scratch_.store(source.class_name);
+        record_.source.line = source.line;
+        record_.message = scratch_.store(message);
+    }
+
     // A metric record.
     BasicRecordBuilder(Core& core, std::string_view name, double value)
         requires std::same_as<R, MetricRecord>
@@ -76,10 +93,12 @@ public:
     ~BasicRecordBuilder() {
         if constexpr (std::same_as<R, LogRecord>) {
             if (record_.level == LogLevel::Fatal) {
-                core_->submit_fatal_(record_, tags_dropped_);
+                core_->submit_fatal_(record_, tags_dropped_, source_strings_);
             }
+            core_->submit_(std::move(record_), tags_dropped_, source_strings_);
+        } else {
+            core_->submit_(std::move(record_), tags_dropped_);
         }
-        core_->submit_(std::move(record_), tags_dropped_);
     }
 
     BasicRecordBuilder(const BasicRecordBuilder&) = delete;
@@ -126,6 +145,8 @@ private:
     }
 
     Core* core_;  // non-owning
+    // Log records only: whether record_.source points into scratch_.
+    Core::SourceStrings source_strings_ = Core::SourceStrings::Static;
     R record_{};
     uint32_t tags_dropped_ = 0;
     detail::StringScratch scratch_;

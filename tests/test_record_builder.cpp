@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -138,6 +139,30 @@ TEST_F(RecordBuilderTest, ClassNameIsTakenFromTheEnclosingMemberFunction) {
     };
     Emitter::emit(_core);
     EXPECT_EQ(_only_log().source.class_name, "Emitter");
+}
+
+TEST_F(RecordBuilderTest, SourceGivenAsTextIsCopiedAndOutlivesTheStringsItCameFrom) {
+    {
+        auto file = std::make_unique<std::string>("/scripts/" + std::string(600, 'f') + ".py");
+        auto function = std::make_unique<std::string>("Trainer.step_" + std::string(40, 'x'));
+        auto class_name = std::make_unique<std::string>("Trainer" + std::string(40, 'c'));
+        {
+            const RecordBuilder statement(_core, LogLevel::Warn,
+                                          SourceLocation{*file, *function, *class_name, 17},
+                                          "from text");
+        }
+        // Freed before delivery: ASan reports a record still pointing at them.
+        file.reset();
+        function.reset();
+        class_name.reset();
+    }
+    const LogRecord r = _only_log();
+    EXPECT_EQ(r.level, LogLevel::Warn);
+    EXPECT_EQ(r.message, "from text");
+    EXPECT_EQ(r.source.file, "/scripts/" + std::string(600, 'f') + ".py");
+    EXPECT_EQ(r.source.function, "Trainer.step_" + std::string(40, 'x'));
+    EXPECT_EQ(r.source.class_name, "Trainer" + std::string(40, 'c'));
+    EXPECT_EQ(r.source.line, 17U);
 }
 
 TEST_F(RecordBuilderTest, MetricBuilderAppliesTheSameTagRules) {

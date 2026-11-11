@@ -1,6 +1,7 @@
 #include "lumen/core.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <concepts>
@@ -131,12 +132,15 @@ constexpr std::string_view callback_name<MetricRecord> = "on_metric";
 template <>
 constexpr std::string_view callback_name<ProgressRecord> = "on_progress";
 
-// Copies the record's text and every tag string into one NUL-terminated
-// block and re-points the views at it.
+// Copies `texts` (the record's text, and for some log records its source
+// strings) and every tag string into one NUL-terminated block and re-points
+// the views at it.
 template <AnyRecord R>
-void own_strings(R& record) {
-    std::string_view& text = text_of(record);
-    std::size_t total = text.size() + 1;
+void own_strings(R& record, std::span<std::string_view* const> texts) {
+    std::size_t total = 0;
+    for (const std::string_view* const text : texts) {
+        total += text->size() + 1;
+    }
     for (const auto& e : record.tags) {
         total += e.key.size() + 1 + e.value.size() + 1;
     }
@@ -151,7 +155,9 @@ void own_strings(R& record) {
         out = out.subspan(s.size() + 1);
         return owned;
     };
-    text = copy(text);
+    for (std::string_view* const text : texts) {
+        *text = copy(*text);
+    }
     record.tags.remap(copy);
     record.storage = std::move(block);
 }
@@ -200,25 +206,35 @@ struct Core::Impl {
     }
 
     template <AnyRecord R>
-    void finalize(R& record, uint32_t tags_dropped_explicit) {
+    void finalize(R& record, uint32_t tags_dropped_explicit, SourceStrings source) {
         record.timestamp_ns = now_ns();
         record.thread_id = this_thread_id();
         const uint32_t dropped = tags_dropped_explicit + detail::merge_context(record.tags);
         if (dropped != 0) {
             tags_dropped.fetch_add(dropped, std::memory_order_relaxed);
         }
-        own_strings(record);
+        if constexpr (std::same_as<R, LogRecord>) {
+            if (source == SourceStrings::Copied) {
+                const std::array texts{&record.message, &record.source.file,
+                                       &record.source.function, &record.source.class_name};
+                own_strings(record, texts);
+                return;
+            }
+        }
+        const std::array texts{&text_of(record)};
+        own_strings(record, texts);
     }
 
     // R is named explicitly by the caller, so `record` is an rvalue
-    // reference, not a forwarding one.
+    // reference, not a forwarding one. `source` matters for log records only.
     template <AnyRecord R>
-    void submit(std::type_identity_t<R>&& record, uint32_t tags_dropped_explicit) {
+    void submit(std::type_identity_t<R>&& record, uint32_t tags_dropped_explicit,
+                SourceStrings source = SourceStrings::Static) {
         if (!accepting.load(std::memory_order_acquire)) {
             after_shutdown<R>().fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        finalize(record, tags_dropped_explicit);
+        finalize(record, tags_dropped_explicit, source);
         // A refused record is counted by the queue (rejected_count) and
         // reported once by the dispatcher.
         static_cast<void>(queue<R>().try_push(std::move(record)));
@@ -465,12 +481,12 @@ struct Core::Impl {
         flush_sinks();
     }
 
-    void submit_fatal(LogRecord& record, uint32_t tags_dropped_explicit) {
+    void submit_fatal(LogRecord& record, uint32_t tags_dropped_explicit, SourceStrings source) {
         if (!accepting.load(std::memory_order_acquire)) {
             logs_after_shutdown.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        finalize(record, tags_dropped_explicit);
+        finalize(record, tags_dropped_explicit, source);
         if (delivering_here()) {
             // Inside a callback: this thread already holds consume_mutex.
             deliver_fatal(record);
@@ -642,8 +658,8 @@ void Core::set_diagnostic_handler(DiagnosticHandler handler) {
     impl_->set_diagnostic_handler(std::move(handler));
 }
 
-void Core::submit_(LogRecord&& record, uint32_t tags_dropped) noexcept {
-    impl_->submit<LogRecord>(std::move(record), tags_dropped);
+void Core::submit_(LogRecord&& record, uint32_t tags_dropped, SourceStrings source) noexcept {
+    impl_->submit<LogRecord>(std::move(record), tags_dropped, source);
 }
 
 void Core::submit_(MetricRecord&& record, uint32_t tags_dropped) noexcept {
@@ -654,8 +670,8 @@ void Core::submit_(ProgressRecord&& record, uint32_t tags_dropped) noexcept {
     impl_->submit<ProgressRecord>(std::move(record), tags_dropped);
 }
 
-void Core::submit_fatal_(LogRecord& record, uint32_t tags_dropped) noexcept {
-    impl_->submit_fatal(record, tags_dropped);
+void Core::submit_fatal_(LogRecord& record, uint32_t tags_dropped, SourceStrings source) noexcept {
+    impl_->submit_fatal(record, tags_dropped, source);
     std::terminate();
 }
 
