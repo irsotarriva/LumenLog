@@ -62,8 +62,14 @@ foreach(header IN LISTS lumen_bridge_headers)
   file(CONFIGURE OUTPUT "${tu}" CONTENT "#include \"lumen/bridges/${name}.hpp\"\n")
   list(APPEND lumen_bridge_tus "${tu}")
 endforeach()
-add_executable(lumen_check_bridges_without_frameworks check_main.cpp ${lumen_bridge_tus})
+# Compiled but never linked: when a framework's headers happen to be on the
+# default include path, the guard lets the bridge through, and its objects
+# would then need the framework's libraries, which this check does not have.
+add_library(lumen_check_bridge_objects OBJECT ${lumen_bridge_tus})
+target_link_libraries(lumen_check_bridge_objects PRIVATE lumen)
+add_executable(lumen_check_bridges_without_frameworks check_main.cpp)
 target_link_libraries(lumen_check_bridges_without_frameworks PRIVATE lumen)
+add_dependencies(lumen_check_bridges_without_frameworks lumen_check_bridge_objects)
 add_test(NAME CompileCheck.BridgesWithoutFrameworks COMMAND lumen_check_bridges_without_frameworks)
 
 # Every bridge also compiles, as the only include, with its framework
