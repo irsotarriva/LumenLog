@@ -20,6 +20,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "immortal.hpp"
@@ -69,6 +70,17 @@ struct SinkEntry {
 
 using Registry = std::vector<std::shared_ptr<SinkEntry>>;
 
+// A record being handed to the sinks of one snapshot, and the index of the
+// next sink to try. A fatal record raised from a callback (or a shutdown run
+// from one) finishes this record for the remaining sinks, because the loop
+// that was handing it out will never resume.
+struct InFlight {
+    std::variant<std::monostate, const LogRecord*, const MetricRecord*, const ProgressRecord*>
+        record;                       // non-owning
+    const Registry* sinks = nullptr;  // non-owning: the delivery snapshot
+    std::size_t next = 0;
+};
+
 // One delivery in progress on the calling thread: the thread holds this
 // Core's consume mutex. A sink of one Core may flush another, so a thread can
 // deliver for several Cores at once; the frames form a stack, innermost
@@ -77,6 +89,7 @@ using Registry = std::vector<std::shared_ptr<SinkEntry>>;
 struct DeliveryFrame {
     const void* core = nullptr;      // non-owning: the Core::Impl
     DeliveryFrame* outer = nullptr;  // non-owning: the frame below it on this thread
+    InFlight in_flight;
 };
 
 // The calling thread's innermost delivery frame; this file is its only user.
@@ -85,7 +98,7 @@ thread_local DeliveryFrame* tls_innermost_delivery = nullptr;
 
 class DeliveryScope {
 public:
-    explicit DeliveryScope(const void* core) noexcept : frame_{core, tls_innermost_delivery} {
+    explicit DeliveryScope(const void* core) noexcept : frame_{core, tls_innermost_delivery, {}} {
         tls_innermost_delivery = &frame_;
     }
     ~DeliveryScope() { tls_innermost_delivery = frame_.outer; }
@@ -98,14 +111,14 @@ private:
     DeliveryFrame frame_;
 };
 
-[[nodiscard]] bool thread_delivers_for(const void* core) noexcept {
-    for (const DeliveryFrame* frame = tls_innermost_delivery; frame != nullptr;
-         frame = frame->outer) {
+// This thread's frame for `core`, or null if it does not deliver for it.
+[[nodiscard]] DeliveryFrame* delivery_frame_for(const void* core) noexcept {
+    for (DeliveryFrame* frame = tls_innermost_delivery; frame != nullptr; frame = frame->outer) {
         if (frame->core == core) {
-            return true;
+            return frame;
         }
     }
-    return false;
+    return nullptr;
 }
 
 [[nodiscard]] std::string_view& text_of(LogRecord& r) {
@@ -381,10 +394,12 @@ struct Core::Impl {
     // Caller holds consume_mutex. The registry as the delivering thread sees
     // it: a snapshot refreshed when registry_version moves, so delivering a
     // record takes no lock. A callback that adds or removes a sink replaces
-    // `registry`, not this snapshot, so the loop over the snapshot that is
-    // running the callback stays valid.
+    // `registry`, not this snapshot. A delivery nested inside a callback (a
+    // fatal record) keeps the snapshot, so the loops further up the stack
+    // never see theirs freed.
     [[nodiscard]] const Registry& delivery_registry() {
-        if (registry_version.load(std::memory_order_acquire) != delivery_version) {
+        if (snapshot_loops == 0 &&
+            registry_version.load(std::memory_order_acquire) != delivery_version) {
             const std::scoped_lock lock(registry_mutex);
             delivery_snapshot = registry;
             delivery_version = registry_version.load(std::memory_order_relaxed);
@@ -392,20 +407,56 @@ struct Core::Impl {
         return *delivery_snapshot;
     }
 
+    // Caller holds consume_mutex.
     template <AnyRecord R>
     void dispatch(const R& record) {
-        for (const std::shared_ptr<SinkEntry>& entry : delivery_registry()) {
-            if (!matches(entry->predicate, record)) {
-                continue;
+        DeliveryFrame* const frame = delivery_frame_for(this);
+        const InFlight outer =
+            std::exchange(frame->in_flight, InFlight{&record, &delivery_registry(), 0});
+        continue_in_flight(frame->in_flight);
+        frame->in_flight = outer;
+    }
+
+    // Hands the frame's record to the sinks it has not been offered to yet.
+    void continue_in_flight(InFlight& in_flight) {
+        ++snapshot_loops;
+        std::visit(
+            [&]<typename P>(const P record) {
+                if constexpr (!std::same_as<P, std::monostate>) {
+                    offer_to_remaining_sinks(*record, in_flight);
+                }
+            },
+            in_flight.record);
+        in_flight.record = std::monostate{};
+        --snapshot_loops;
+    }
+
+    template <AnyRecord R>
+    void offer_to_remaining_sinks(const R& record, InFlight& in_flight) {
+        while (in_flight.sinks != nullptr && in_flight.next < in_flight.sinks->size()) {
+            SinkEntry& entry = *(*in_flight.sinks)[in_flight.next++];
+            if (matches(entry.predicate, record)) {
+                call_sink(entry, callback_name<R>, [&] { deliver_to(*entry.sink, record); });
             }
-            call_sink(*entry, callback_name<R>, [&] { deliver_to(*entry->sink, record); });
+        }
+    }
+
+    // Caller holds consume_mutex. Finishes the record this thread was handing
+    // out when a callback raised a fatal record or shut the Core down.
+    void finish_in_flight() {
+        DeliveryFrame* const frame = delivery_frame_for(this);
+        if (frame != nullptr) {
+            continue_in_flight(frame->in_flight);
         }
     }
 
     void flush_sinks() {
-        for (const std::shared_ptr<SinkEntry>& entry : delivery_registry()) {
+        const Registry& sinks = delivery_registry();
+        ++snapshot_loops;
+        for (const std::shared_ptr<SinkEntry>& entry : sinks) {
             call_sink(*entry, "flush", [&] { entry->sink->flush(); });
         }
+        --snapshot_loops;
     }
 
     // Runs one callback. A sink that is already busy is in a callback further
@@ -519,7 +570,9 @@ struct Core::Impl {
         }
     }
 
-    [[nodiscard]] bool delivering_here() const noexcept { return thread_delivers_for(this); }
+    [[nodiscard]] bool delivering_here() const noexcept {
+        return delivery_frame_for(this) != nullptr;
+    }
 
     void flush() {
         if (delivering_here() || !accepting.load(std::memory_order_acquire)) {
@@ -537,26 +590,56 @@ struct Core::Impl {
         report_first_losses();
     }
 
-    void deliver_fatal(const LogRecord& record) {
-        deliver_everything_queued();
-        dispatch(record);
-        flush_sinks();
-    }
-
-    void submit_fatal(LogRecord& record, uint32_t tags_dropped_explicit, SourceStrings source) {
+    // Several threads may raise fatal records at once. Each is announced
+    // (counted) before it is stamped and posted, and the one thread that
+    // delivers does not terminate until every announced record has been
+    // delivered, so a fatal record raised while another is being delivered
+    // is delivered too.
+    [[noreturn]] void submit_fatal(LogRecord& record, uint32_t tags_dropped_explicit,
+                                   SourceStrings source) {
         if (!accepting.load(std::memory_order_acquire)) {
             logs_after_shutdown.fetch_add(1, std::memory_order_relaxed);
-            return;
+            std::terminate();
         }
+        fatals_announced.fetch_add(1, std::memory_order_acq_rel);
         finalize(record, tags_dropped_explicit, source);
+        {
+            const std::scoped_lock lock(fatal_mutex);
+            fatal_mailbox.push_back(std::move(record));
+        }
         if (delivering_here()) {
             // Inside a callback: this thread already holds consume_mutex.
-            deliver_fatal(record);
-            return;
+            deliver_fatal_records();
+            std::terminate();
         }
         const std::scoped_lock consume(consume_mutex);
         const DeliveryScope scope(this);
-        deliver_fatal(record);
+        deliver_fatal_records();
+        std::terminate();
+    }
+
+    // Caller holds consume_mutex.
+    void deliver_fatal_records() {
+        finish_in_flight();
+        while (true) {
+            deliver_everything_queued();
+            for (const LogRecord& fatal : take_fatal_records()) {
+                dispatch(fatal);
+                ++fatals_delivered;
+            }
+            if (fatals_delivered == fatals_announced.load(std::memory_order_acquire)) {
+                break;
+            }
+            // Another thread has announced a fatal record and is posting it.
+            std::this_thread::yield();
+        }
+        flush_sinks();
+        report_first_losses();
+    }
+
+    [[nodiscard]] std::vector<LogRecord> take_fatal_records() {
+        const std::scoped_lock lock(fatal_mutex);
+        return std::exchange(fatal_mailbox, {});
     }
 
     void shut_down() noexcept {
@@ -670,7 +753,9 @@ struct Core::Impl {
             return QueueStatistics{q.head_position(), q.rejected_count(),
                                    after.load(std::memory_order_relaxed)};
         };
-        return CoreStatistics{of(logs, logs_after_shutdown), of(metrics, metrics_after_shutdown),
+        QueueStatistics log_statistics = of(logs, logs_after_shutdown);
+        log_statistics.accepted += fatals_announced.load(std::memory_order_relaxed);
+        return CoreStatistics{log_statistics, of(metrics, metrics_after_shutdown),
                               of(progress, progress_after_shutdown),
                               tags_dropped.load(std::memory_order_relaxed)};
     }
@@ -711,6 +796,7 @@ struct Core::Impl {
     std::atomic<uint64_t> registry_version{0};          // bumped under registry_mutex
     bool registry_closed = false;                       // guarded by registry_mutex
     std::shared_ptr<const Registry> delivery_snapshot;  // guarded by consume_mutex
+    uint32_t snapshot_loops = 0;  // loops over delivery_snapshot running; guarded by consume_mutex
     uint64_t delivery_version = std::numeric_limits<uint64_t>::max();  // guarded by consume_mutex
     std::atomic<SinkId> next_sink_id{1};
 
@@ -722,6 +808,13 @@ struct Core::Impl {
     bool draining = false;                                 // guarded by diagnostics_mutex
     std::atomic<bool> reported_queue_full{false};
     std::atomic<bool> reported_tags_dropped{false};
+
+    // Fatal records: posted by any thread, delivered by the thread that holds
+    // consume_mutex.
+    std::atomic<uint64_t> fatals_announced{0};
+    uint64_t fatals_delivered = 0;  // guarded by consume_mutex
+    std::mutex fatal_mutex;
+    std::vector<LogRecord> fatal_mailbox;  // guarded by fatal_mutex
 
     std::thread dispatcher;  // last: it starts in the constructor and uses everything above
 };
@@ -774,7 +867,6 @@ void Core::submit_(ProgressRecord&& record, uint32_t tags_dropped) noexcept {
 
 void Core::submit_fatal_(LogRecord& record, uint32_t tags_dropped, SourceStrings source) noexcept {
     impl_->submit_fatal(record, tags_dropped, source);
-    std::terminate();
 }
 
 struct Core::ShutdownAtExit {

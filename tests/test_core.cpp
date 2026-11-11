@@ -837,7 +837,8 @@ TEST(CoreFatalDeathTest,
         "delivered:earlier\ndelivered:boom\nflushed");
 }
 
-TEST(CoreFatalDeathTest, FatalFromASinkCallbackReachesTheOtherSinksAndFlushesThem) {
+TEST(CoreFatalDeathTest,
+     FatalFromASinkCallbackGivesTheOtherSinksTheRecordInFlightThenTheQueueThenTheFatal) {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_DEATH(
         {
@@ -850,11 +851,36 @@ TEST(CoreFatalDeathTest, FatalFromASinkCallbackReachesTheOtherSinksAndFlushesThe
             })));
             EXPECT_TRUE(core.add_sink(std::make_unique<StderrSink>()));
             log_to(core, "trigger");
+            log_to(core, "queued after the trigger");
             core.flush();
         },
-        // The sink that logged is skipped; the other one has not seen
-        // "trigger" yet (it comes later in the list) and never will.
-        "^delivered:fatal from callback\nflushed");
+        // The sink that raised the fatal record is skipped; the other one
+        // comes later in the list and still receives "trigger".
+        "^delivered:trigger\ndelivered:queued after the trigger\ndelivered:fatal from "
+        "callback\nflushed");
+}
+
+TEST(CoreFatalDeathTest, FatalRaisedOnASecondThreadWhileTheFirstIsDeliveredIsDeliveredToo) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_DEATH(
+        {
+            Core core;
+            Core* const target = &core;
+            std::thread second;  // ends with the process, never joined
+            EXPECT_TRUE(core.add_sink(callback_sink([target, &second](const LogRecord& r) {
+                if (r.message != "fatal from the first thread") return;
+                const uint64_t before = target->statistics().logs.accepted;
+                second = std::thread(
+                    [target] { log_to(*target, "fatal from the second thread", LogLevel::Fatal); });
+                // Return only once the second record has been submitted.
+                while (target->statistics().logs.accepted == before) {
+                    std::this_thread::yield();
+                }
+            })));
+            EXPECT_TRUE(core.add_sink(std::make_unique<StderrSink>()));
+            log_to(core, "fatal from the first thread", LogLevel::Fatal);
+        },
+        "delivered:fatal from the first thread\ndelivered:fatal from the second thread\nflushed");
 }
 
 TEST(CoreFatalDeathTest, SinkReceivingAFatalRaisedByAnotherSinkCannotRemoveItAndGetsSinkBusy) {

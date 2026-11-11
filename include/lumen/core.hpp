@@ -46,6 +46,17 @@
 // is reported once through the diagnostic handler. Nothing else is lost
 // while the Core is running.
 //
+// Fatal records (LogLevel::Fatal, see BasicRecordBuilder) are not queued: the
+// thread that raises one delivers, on its own stack, everything queued
+// before it, then the fatal record, flushes every sink and calls
+// std::terminate(). Raised from inside a sink callback, the record whose
+// callback is running is first handed to the sinks that had not received it
+// yet; the sink whose callback raised the fatal record receives nothing more
+// (it is in the middle of a call). When several threads raise fatal records
+// at once, each one whose submission began before the delivering thread
+// finished is delivered, in the order they were submitted, before the
+// process terminates; one raised after that moment is not.
+//
 // Lifetime of the global core(). It is created on first use and never
 // destroyed. When static destruction reaches the point where a function-local
 // static constructed at that first use would be destroyed, the core shuts
@@ -99,7 +110,7 @@ using DiagnosticHandler = std::function<void(std::string_view line)>;
 [[nodiscard]] DiagnosticHandler stderr_diagnostics();
 
 struct QueueStatistics {
-    uint64_t accepted = 0;                // queued for delivery
+    uint64_t accepted = 0;  // queued for delivery (for logs, fatal records included)
     uint64_t dropped_queue_full = 0;      // refused: the queue was full
     uint64_t dropped_after_shutdown = 0;  // submitted after the Core shut down
 };
@@ -206,7 +217,7 @@ private:
     void submit_(MetricRecord&& record, uint32_t tags_dropped) noexcept;
     void submit_(ProgressRecord&& record, uint32_t tags_dropped) noexcept;
     // For a Fatal record: delivers everything queued, then this record, flushes
-    // the sinks and terminates (see BasicRecordBuilder).
+    // the sinks and terminates (see "Fatal records" above).
     [[noreturn]] void submit_fatal_(LogRecord& record, uint32_t tags_dropped,
                                     SourceStrings source) noexcept;
 
