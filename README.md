@@ -299,15 +299,24 @@ the sinks' `Config`, except the builder's buffer
   `.progress`), and the first refusal is reported once through the Core's
   diagnostic handler, which writes to standard error unless you replace it
   (`Core::set_diagnostic_handler`).
+- **Memory.** The queues are allocated with the Core: capacity × (record size
+  + 8 bytes), about 41 MB for logs, 9.3 MB for metrics and 2.4 MB for progress
+  with the default capacities on a 64-bit platform (records are 576 to 632
+  bytes). Pages become resident as the queue is first used and stay
+  resident, so once more than 65536 log records have passed, the log queue
+  is resident in full. Smaller capacities shrink it in proportion
+  (`lumen/limits.hpp`, "Memory").
 - **Sink queues.** The shipped sinks write from a thread of their own, through
   a queue of `max_queued_lines` lines (10000 for `TerminalSink`, 65536 for
   `FileSink`). When it is full the line is dropped and counted in the sink's
   `statistics().lines_dropped`; the first drop is reported once.
-- **Threads.** Any thread may log. A producer takes no lock, except to refresh
-  its copy of the process tags after they changed, and makes a system call
-  only when the dispatch thread is asleep. Submission allocates one block on
-  the heap for the record's strings; a statement whose strings exceed the
-  builder's 512-byte stack buffer allocates more. Sink callbacks run on one
+- **Threads.** Any thread may log. A producer takes no lock of Lumen's, except
+  to refresh its copy of the process tags after they changed, and Lumen makes
+  a system call for it only when the dispatch thread is asleep (the memory
+  allocator may make its own, rarely). Submission allocates one block on the
+  heap for the record's strings; each string that does not fit in the
+  builder's 512-byte stack buffer adds two allocations (`lumen/core.hpp`,
+  "Cost of a statement"). Sink callbacks run on one
   thread at a time, never concurrently with each other; they must not block
   (see [Sinks](docs/sinks.md#the-contract)).
 - **Order.** Records of one type reach a sink in the order they were queued.

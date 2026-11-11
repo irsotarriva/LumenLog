@@ -49,9 +49,9 @@ Every record enters through `Core::submit_` (private; the builders and
 4. copies every string the record points to (message or name or label, every
    tag key and value, and a log record's source if it was given as text) into
    one immutable block, `std::shared_ptr<const char[]>`, and re-points the
-   views at it. That is the Core's one allocation per record (the refresh of
-   the thread's copy of the process tags after a change, and a message longer
-   than the builder's buffer, allocate too);
+   views at it. That is the one allocation per record (each string longer
+   than what is left of the builder's buffer adds two, made by the builder;
+   `lumen/core.hpp`, "Cost of a statement", lists the costs);
 5. pushes the record into the queue of its type and, if the dispatcher is
    asleep, wakes it.
 
@@ -93,10 +93,11 @@ a snapshot of the registry and calls every sink whose predicate accepts it.
 Wake-up. After a pass that delivered something, the dispatcher checks the
 queues five more times, 100 µs apart, before it sleeps, because records tend
 to come in bursts. To sleep it sets an atomic flag, checks the queues once
-more and waits on a condition variable. A producer, after pushing, clears the
-flag with an atomic exchange and notifies only if it was set: every record
-costs one atomic exchange, and only a producer that finds the dispatcher
-asleep pays for the mutex and the notify. The comment on `Wakeup` in
+more and waits on a condition variable. A producer, after pushing, reads the
+flag and, only if it is set, clears it with an atomic exchange and notifies:
+every record costs one atomic load of a cache line that nobody writes while
+the dispatcher is awake, and only a producer that finds the dispatcher asleep
+pays for the exchange, the mutex and the notify. The comment on `Wakeup` in
 `src/wakeup.hpp` argues why no record can wait for a sleeping dispatcher.
 
 `Core::flush()` takes the same delivery lock as the dispatcher and delivers

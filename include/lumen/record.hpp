@@ -28,6 +28,13 @@
 // one arrives with its timestamp, the producing thread's id, its explicit
 // tags and the ambient context merged after them (lumen/context.hpp), and no
 // key twice.
+//
+// Size. The tags are held inline, max_record_tags slots of two views each
+// (RecordTags is 520 bytes on 64-bit platforms), so a record is large: on a
+// 64-bit platform LogRecord is 632 bytes, MetricRecord 576 and
+// ProgressRecord 592, and each is at most 640 (checked below). Every queue
+// slot holds one record, which is what a queue's memory is made of
+// (lumen/limits.hpp, "Memory"); the strings are not part of it.
 
 namespace lumen {
 
@@ -82,6 +89,11 @@ struct ProgressRecord {
 template <typename R>
 concept RecordType =
     std::same_as<R, LogRecord> || std::same_as<R, MetricRecord> || std::same_as<R, ProgressRecord>;
+
+// The bound "Size" above states (640 bytes), on the platforms it is stated for.
+static_assert(sizeof(void*) != 8 || (sizeof(LogRecord) <= 640 && sizeof(MetricRecord) <= 640 &&
+                                     sizeof(ProgressRecord) <= 640),
+              "update \"Size\" at the top of lumen/record.hpp");
 
 }  // namespace lumen
 

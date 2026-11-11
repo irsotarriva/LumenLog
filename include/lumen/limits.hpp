@@ -25,6 +25,19 @@
 // length), the nesting depth of scopes, and the number of sinks registered
 // with a Core. The shipped sinks bound their own line queues
 // (lumen/writer_statistics.hpp).
+//
+// Memory. A Core allocates its three queues when it is constructed: per
+// queue, capacity × (sizeof(record) + 8) bytes, where the 8 is the slot's
+// sequence number and the record sizes are in lumen/record.hpp ("Size").
+// With the default capacities on a 64-bit platform that is 41 MB for logs,
+// 9.3 MB for metrics and 2.4 MB for progress, about 53 MB in all. It is
+// address space at first: a page of slots becomes resident when a record is
+// first queued on it, and stays resident, so a queue that has wrapped (more
+// records have passed through it than it holds) is resident in full. On
+// top of that, each queued record holds its string block on the heap until
+// it is delivered; delivery frees it unless a sink kept a copy of the
+// record, and an empty slot holds no heap memory. Smaller capacities (CMake
+// LUMEN_LOG_CAPACITY etc.) reduce the queues in proportion.
 
 namespace lumen {
 
