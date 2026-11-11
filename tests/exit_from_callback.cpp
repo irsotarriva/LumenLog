@@ -5,10 +5,12 @@
 // still queued reached the other sink, that sink was flushed, and no sink was
 // destroyed (they may be in a call on the exiting thread's stack).
 #include <atomic>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -45,13 +47,14 @@ public:
             while (!all_submitted.load()) {
                 std::this_thread::yield();
             }
-            std::exit(0);
+            // Calling exit() from a callback is what this test is about.
+            std::exit(0);  // NOLINT(concurrency-mt-unsafe)
         }
     }
     void flush() override {
         if (exit_on_flush_) {
             LUMEN_LOG_INFO("logged by the exiting flush");
-            std::exit(0);
+            std::exit(0);  // NOLINT(concurrency-mt-unsafe): as above
         }
     }
 
@@ -121,7 +124,8 @@ Verdict verdict;
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::vector<std::string_view> args(argv, argv + argc);
+    const std::span<char*> arguments(argv, static_cast<std::size_t>(argc));
+    const std::vector<std::string_view> args(arguments.begin(), arguments.end());
     if (args.size() != 2 || (args[1] != "on_log" && args[1] != "flush")) {
         std::cerr << "usage: lumen_test_exit_from_callback on_log|flush\n";
         std::_Exit(2);

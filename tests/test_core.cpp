@@ -455,7 +455,7 @@ public:
         while (now > seen && !max_in_flight_.compare_exchange_weak(seen, now)) {
         }
         if (calls_.fetch_add(1) == 0) {
-            gate.wait_inside();
+            gate_.wait_inside();
         }
         {
             const std::scoped_lock lock(mutex_);
@@ -473,10 +473,10 @@ public:
         return lines_;
     }
     [[nodiscard]] int max_in_flight() const { return max_in_flight_.load(); }
-
-    Gate gate;
+    [[nodiscard]] Gate& gate() { return gate_; }
 
 private:
+    Gate gate_;
     std::atomic<int> in_flight_{0};
     std::atomic<int> max_in_flight_{0};
     std::atomic<int> calls_{0};
@@ -505,14 +505,14 @@ TEST(CoreDiagnosticsTest, LineReportedWhileTheHandlerRunsElsewhereIsPassedOnAfte
 
     // The dispatcher reports the dropped tag and blocks inside the handler.
     log_with_one_tag_too_many(core);
-    ASSERT_TRUE(observed->gate.wait_until_entered(1));
+    ASSERT_TRUE(observed->gate().wait_until_entered(1));
     // This thread delivers the next record and reports the sink's exception
     // while the dispatcher is still inside the handler.
     log_to(core, "throws").tag("throw", true);
     core.flush();
     EXPECT_TRUE(observed->lines().empty());
 
-    observed->gate.open();
+    observed->gate().open();
     ASSERT_TRUE(observed->wait_for_lines(2));
     const auto lines = observed->lines();
     ASSERT_EQ(lines.size(), 2U);

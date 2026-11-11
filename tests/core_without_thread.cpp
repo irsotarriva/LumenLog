@@ -26,7 +26,8 @@ std::atomic<bool> refuse_threads{false};
 
 }  // namespace
 
-// NOLINTNEXTLINE(readability-identifier-naming): the C library's name and signature
+// The C library's function, so its declaration's parameter names are not ours.
+// NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
 extern "C" int pthread_create(pthread_t* thread, const pthread_attr_t* attributes,
                               void* (*start)(void*), void* argument) {
     if (refuse_threads.load()) {
@@ -49,12 +50,21 @@ using test::log_to;
 // capture sink.
 class CoreWithoutThreadTest : public ::testing::Test {
 protected:
+    [[nodiscard]] Core& _core() { return *core_; }
+    [[nodiscard]] Captured& _captured() { return *captured_; }
+    void _destroy_core() { core_.reset(); }
+    [[nodiscard]] std::vector<std::string> _diagnostic_lines() const {
+        const std::scoped_lock lock(diagnostics_->mutex);
+        return diagnostics_->lines;
+    }
+
+private:
     struct Diagnostics {
         std::mutex mutex;
         std::vector<std::string> lines;  // guarded by mutex
     };
 
-    static std::unique_ptr<Core> make_core(const std::shared_ptr<Diagnostics>& diagnostics) {
+    static std::unique_ptr<Core> make_core_(const std::shared_ptr<Diagnostics>& diagnostics) {
         refuse_threads.store(true);
         auto core = std::make_unique<Core>([diagnostics](std::string_view line) {
             const std::scoped_lock lock(diagnostics->mutex);
@@ -64,15 +74,10 @@ protected:
         return core;
     }
 
-    [[nodiscard]] std::vector<std::string> _diagnostic_lines() const {
-        const std::scoped_lock lock(_diagnostics->mutex);
-        return _diagnostics->lines;
-    }
-
-    test::CleanContext _context;
-    std::shared_ptr<Diagnostics> _diagnostics = std::make_shared<Diagnostics>();
-    std::unique_ptr<Core> _core = make_core(_diagnostics);
-    std::shared_ptr<Captured> _captured = test::capture(*_core);
+    test::CleanContext context_;
+    std::shared_ptr<Diagnostics> diagnostics_ = std::make_shared<Diagnostics>();
+    std::unique_ptr<Core> core_ = make_core_(diagnostics_);
+    std::shared_ptr<Captured> captured_ = test::capture(*core_);
 };
 
 TEST_F(CoreWithoutThreadTest, ConstructionSucceedsAndReportsTheFailureOnce) {
@@ -82,15 +87,15 @@ TEST_F(CoreWithoutThreadTest, ConstructionSucceedsAndReportsTheFailureOnce) {
 }
 
 TEST_F(CoreWithoutThreadTest, RecordIsDeliveredOnTheSubmittingThreadBeforeSubmissionReturns) {
-    log_to(*_core, "on this thread");
+    log_to(_core(), "on this thread");
     uint32_t other_thread_id = 0;
     std::thread other([&] {
         other_thread_id = this_thread_id();
-        log_to(*_core, "on another thread");
+        log_to(_core(), "on another thread");
     });
     other.join();
 
-    const auto logs = _captured->logs();
+    const auto logs = _captured().logs();
     ASSERT_EQ(logs.size(), 2U);
     EXPECT_EQ(logs[0].message, "on this thread");
     EXPECT_EQ(logs[1].message, "on another thread");
@@ -98,7 +103,7 @@ TEST_F(CoreWithoutThreadTest, RecordIsDeliveredOnTheSubmittingThreadBeforeSubmis
 }
 
 TEST_F(CoreWithoutThreadTest, RecordSubmittedFromACallbackIsDeliveredByTheNextFlush) {
-    Core& core = *_core;
+    Core& core = _core();
     struct LogsOnce : Sink {
         explicit LogsOnce(Core& target) : core(target) {}
         void on_log(const LogRecord& r) override {
@@ -111,17 +116,17 @@ TEST_F(CoreWithoutThreadTest, RecordSubmittedFromACallbackIsDeliveredByTheNextFl
     };
     ASSERT_TRUE(core.add_sink(std::make_unique<LogsOnce>(core)));
     log_to(core, "first");
-    EXPECT_EQ(_captured->messages(), (std::vector<std::string>{"first"}));
+    EXPECT_EQ(_captured().messages(), (std::vector<std::string>{"first"}));
     core.flush();
-    EXPECT_EQ(_captured->messages(), (std::vector<std::string>{"first", "from the callback"}));
+    EXPECT_EQ(_captured().messages(), (std::vector<std::string>{"first", "from the callback"}));
 }
 
 TEST_F(CoreWithoutThreadTest, DestroyingTheCoreFlushesItsSinksOnceAndDeliversNothingTwice) {
-    const std::size_t flushes_before = _captured->flushes();
-    log_to(*_core, "last");
-    _core.reset();
-    EXPECT_EQ(_captured->messages(), (std::vector<std::string>{"last"}));
-    EXPECT_EQ(_captured->flushes(), flushes_before + 1);
+    const std::size_t flushes_before = _captured().flushes();
+    log_to(_core(), "last");
+    _destroy_core();
+    EXPECT_EQ(_captured().messages(), (std::vector<std::string>{"last"}));
+    EXPECT_EQ(_captured().flushes(), flushes_before + 1);
 }
 
 }  // namespace
