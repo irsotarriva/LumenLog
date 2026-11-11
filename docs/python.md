@@ -103,7 +103,7 @@ METRIC loss=0.25 {'epoch': '3', 'app': 'python_example'}
 PROGRESS files 1/2
 PROGRESS files 2/2
 ERROR bad filter: invalid predicate at offset 9: expected a level (TRACE, DEBUG, INFO, WARN, ERROR, FATAL) [app=python_example] in main()
-INFO epoch done [epoch=3 logger=trainer app=python_example] in main()
+INFO epoch done [logger=trainer epoch=3 app=python_example] in main()
 ```
 
 On standard error (the `TerminalSink`, warnings and above):
@@ -300,9 +300,15 @@ forwards each `logging.LogRecord` as one Lumen log record:
   whose level is not one of those four standard levels also gets the tag
   `logging.level` with its level name;
 - source: the record's `pathname`, `lineno` and `funcName`;
-- tags: `logger` with the logger's name, and every `extra` field; values that
-  are not `str`, `bool`, `int` or `float` are passed as `str(value)`. Tags
-  beyond 16 are dropped and counted (`tags_dropped`).
+- tags, in this order: `logger` with the logger's name, `logging.level`
+  (above), then every `extra` field in the order given. A `str`, `bool` or
+  `float` is passed as it is, and an `int` too if it fits in int64 or uint64;
+  anything else, a larger `int` included, as `str(value)`. An `extra` field
+  whose name an earlier tag already has is passed with `extra.` put in front
+  of its name (as often as it takes to be new), so `extra={"logger": ...}`
+  becomes the tag `extra.logger`. Tags beyond 16 are dropped and counted
+  (`tags_dropped`); the handler's own tags come first, so they are kept.
+  `lumen_tags(record)` returns the tags a record is forwarded with.
 
 An error while forwarding goes to `logging`'s own `handleError()`.
 

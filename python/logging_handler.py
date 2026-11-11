@@ -20,10 +20,17 @@ Each logging.LogRecord becomes one Lumen log record:
   that map one to one (CRITICAL, or a custom level) also gets the tag
   ``logging.level`` with its level name, so nothing is lost;
 - source: the record's pathname, lineno and funcName (the logging call site);
-- tags: ``logger`` with the logger's name, and every ``extra`` field. Values
-  that are str, bool, int or float are passed as they are, anything else as
-  str(value). A record holds at most 16 tags; the library drops and counts
-  the rest (Core.statistics().tags_dropped).
+- tags, in this order: ``logger`` with the logger's name, ``logging.level``
+  (above), then every ``extra`` field in the order given. A str, bool or
+  float value is passed as it is, and an int too if it fits in int64 or
+  uint64; anything else, a larger int included, as str(value). An ``extra``
+  field whose name an earlier tag already has (``logger``,
+  ``logging.level``, or another field renamed this way) is passed with
+  ``extra.`` put in front of its name, as many times as it takes to be new,
+  so no value is lost. A record holds at most 16 tags; the
+  library drops the extra fields past that and counts them
+  (Core.statistics().tags_dropped). The handler's own tags come first, so
+  they are never the ones dropped.
 
 An error while forwarding goes to logging's own handleError(), like any
 other handler's.
@@ -40,6 +47,10 @@ _STANDARD_ATTRIBUTES = frozenset(
 
 _ONE_TO_ONE = frozenset({logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR})
 
+# The ints a Lumen tag value takes as a number: int64 and uint64.
+_SMALLEST_INT = -(2**63)
+_LARGEST_INT = 2**64 - 1
+
 
 def lumen_level(levelno: int) -> lumen.LogLevel:
     """The Lumen level a logging level maps to (see the module docstring)."""
@@ -55,9 +66,26 @@ def lumen_level(levelno: int) -> lumen.LogLevel:
 
 
 def _tag_value(value):
-    if isinstance(value, (str, bool, int, float)):
+    if isinstance(value, (str, bool, float)):
+        return value
+    if isinstance(value, int) and _SMALLEST_INT <= value <= _LARGEST_INT:
         return value
     return str(value)
+
+
+def lumen_tags(record: logging.LogRecord) -> dict:
+    """The tags a record is forwarded with (see the module docstring)."""
+    tags = {"logger": record.name}
+    if record.levelno not in _ONE_TO_ONE:
+        tags["logging.level"] = record.levelname
+    for key, value in vars(record).items():
+        if key in _STANDARD_ATTRIBUTES:
+            continue
+        name = key if isinstance(key, str) else str(key)
+        while name in tags:
+            name = "extra." + name
+        tags[name] = _tag_value(value)
+    return tags
 
 
 class LumenHandler(logging.Handler):
@@ -65,15 +93,8 @@ class LumenHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            tags = {
-                key: _tag_value(value)
-                for key, value in vars(record).items()
-                if key not in _STANDARD_ATTRIBUTES
-            }
-            tags["logger"] = record.name
-            if record.levelno not in _ONE_TO_ONE:
-                tags["logging.level"] = record.levelname
             source = (record.pathname, record.lineno, record.funcName or "")
-            lumen.log(lumen_level(record.levelno), self.format(record), tags=tags, source=source)
+            lumen.log(lumen_level(record.levelno), self.format(record),
+                      tags=lumen_tags(record), source=source)
         except Exception:
             self.handleError(record)
