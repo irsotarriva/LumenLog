@@ -2,7 +2,6 @@
 #define LUMEN_MACROS_HPP
 
 #include <exception>
-#include <source_location>
 #include <type_traits>
 #include <utility>
 
@@ -120,9 +119,11 @@ inline constexpr LogLevel compiled_min_level = static_cast<LogLevel>(LUMEN_MIN_L
     } else                                            \
         expr
 
-#define LUMEN_LOG_AT(LEVEL, ...)                                       \
-    LUMEN_IF_ENABLED(LEVEL, lumen::RecordBuilder(lumen::core(), LEVEL, \
-                                                 std::source_location::current(), __VA_ARGS__))
+// lumen::call_site() is evaluated by the compiler, so a log statement does
+// not look up its class name at run time.
+#define LUMEN_LOG_AT(LEVEL, ...) \
+    LUMEN_IF_ENABLED(LEVEL,      \
+                     lumen::RecordBuilder(lumen::core(), LEVEL, lumen::call_site(), __VA_ARGS__))
 
 #define LUMEN_LOG_TRACE(...) LUMEN_LOG_AT(lumen::LogLevel::Trace, __VA_ARGS__)
 #define LUMEN_LOG_DEBUG(...) LUMEN_LOG_AT(lumen::LogLevel::Debug, __VA_ARGS__)
@@ -132,11 +133,11 @@ inline constexpr LogLevel compiled_min_level = static_cast<LogLevel>(LUMEN_MIN_L
 
 // The builder's destructor terminates; the std::terminate() after it is never
 // reached and only tells the compiler that the statement does not return.
-#define LUMEN_LOG_FATAL(...)                                                \
-    do {                                                                    \
-        lumen::RecordBuilder(lumen::core(), lumen::LogLevel::Fatal,         \
-                             std::source_location::current(), __VA_ARGS__); \
-        std::terminate();                                                   \
+#define LUMEN_LOG_FATAL(...)                                                            \
+    do {                                                                                \
+        lumen::RecordBuilder(lumen::core(), lumen::LogLevel::Fatal, lumen::call_site(), \
+                             __VA_ARGS__);                                              \
+        std::terminate();                                                               \
     } while (false)
 
 // Short names, for code that does not also use another library's LOG_*.

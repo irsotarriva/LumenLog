@@ -254,9 +254,11 @@ Python. It has `add_sink`, `remove_sink`, `sink_exception_count`, `flush`,
 `CoreStatistics` with `logs`, `metrics`, `progress` and `tags_dropped`;
 each `QueueStatistics` has `accepted`, `dropped_queue_full`,
 `dropped_after_shutdown` and `queued`), `set_diagnostic_handler(callable or
-None)`, `reset_diagnostic_handler()` and `set_shutdown_timeout(seconds)`. A Python diagnostic handler is called with one
-`str` on the library's dispatch thread; an exception it raises goes to
-`sys.unraisablehook`.
+None)`, `reset_diagnostic_handler()` and `set_shutdown_timeout(seconds)`. A
+Python diagnostic handler is called with one `str`, on the thread that
+delivers records (the dispatch thread, or the one inside `Core.flush`; the
+comment of the C++ `lumen::DiagnosticHandler` gives the full rule); an
+exception it raises goes to `sys.unraisablehook`.
 
 ## Errors
 

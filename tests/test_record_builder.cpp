@@ -10,6 +10,7 @@
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -232,6 +233,29 @@ TEST_F(RecordBuilderTest, ClassNameIsTakenFromTheEnclosingMemberFunction) {
     };
     Emitter::emit(_core);
     EXPECT_EQ(_only_log().source.class_name, "Emitter");
+}
+
+// The compile-time call site the macros use: the same location and class
+// name as the run-time one, and a constant expression.
+struct CallSiteProbe {
+    static constexpr CallSite here() { return call_site(); }
+    static void emit(Core& core) {
+        const RecordBuilder statement(core, LogLevel::Info, call_site(), "member");
+    }
+};
+
+TEST_F(RecordBuilderTest, CallSiteGivesTheFileLineFunctionAndClassOfItsCaller) {
+    static constexpr CallSite site = CallSiteProbe::here();
+    static_assert(site.source.class_name == "CallSiteProbe");
+    const std::source_location probe_location = std::source_location::current();
+    EXPECT_EQ(site.source.file, probe_location.file_name());
+    EXPECT_NE(site.source.function.find("here"), std::string_view::npos) << site.source.function;
+    EXPECT_GT(site.source.line, 0U);
+    CallSiteProbe::emit(_core);
+    const LogRecord record = _only_log();
+    EXPECT_EQ(record.source.class_name, "CallSiteProbe");
+    EXPECT_NE(record.source.function.find("emit"), std::string_view::npos);
+    EXPECT_EQ(record.source.line, site.source.line + 2);
 }
 
 TEST_F(RecordBuilderTest, SourceGivenAsTextIsCopiedAndOutlivesTheStringsItCameFrom) {

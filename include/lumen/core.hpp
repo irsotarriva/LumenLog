@@ -19,18 +19,36 @@
 // Flow. A producer (a logging macro, lumen::metric, a ProgressHandle) builds
 // a record on its own thread and submits it to a Core. Submission stamps the
 // record (timestamp, thread id), merges the ambient context
-// (lumen/context.hpp), copies every string into the record's own storage (one
-// allocation by the Core; refreshing the thread's copy of the process tags
-// and a message longer than the builder's buffer allocate too) and pushes the
-// record into a bounded lock-free queue, one per record type. A dispatch
-// thread owned by the Core pops records and calls the sinks whose predicate
-// matches.
+// (lumen/context.hpp), copies every string into the record's own storage and
+// pushes the record into a bounded lock-free queue, one per record type. A
+// dispatch thread owned by the Core pops records and calls the sinks whose
+// predicate matches.
+//
+// Cost of a statement, on the producing thread, once that thread has logged
+// before (its first statement creates its context):
+//   - Heap allocations: one, the block that holds all of the record's
+//     strings, for any log statement, metric or progress update, with or
+//     without tags and ambient context, and also for a record that its full
+//     queue then refuses. Each string that does not fit in the builder's
+//     512-byte buffer adds two (lumen/detail/string_scratch.hpp). Nothing
+//     else allocates; the first record after the process tags changed only
+//     shares the new table.
+//   - Locks: none of Lumen's own, except that the first record after the
+//     process tags changed takes the process table's mutex to read them (so
+//     does every record of a thread whose context was destroyed, see
+//     lumen/context.hpp, and every record of a Core without a dispatch
+//     thread, see "Threads"). The memory allocator has locks of its own,
+//     which the dispatch thread also takes when it frees a delivered
+//     record's block.
+//   - System calls: none of Lumen's own unless the dispatch thread is asleep
+//     (then one, to wake it). The allocator makes some when it grows a
+//     thread's heap: on Linux with glibc, about one per 90 000 records while
+//     the dispatcher keeps up, and about one per 450 records while producers
+//     outpace it and the queue stays full.
+//   - Time: tests/bench_emit.cpp measures it.
 //
 // Threads.
-//   - Producers: any number of threads. Submission takes no lock (except a
-//     refresh of the thread's copy of the process tags after they changed)
-//     and makes no system call of its own unless the dispatch thread is
-//     asleep. The memory allocator may make one (to grow a thread's heap).
+//   - Producers: any number of threads; see "Cost of a statement".
 //   - Sink callbacks (on_log, on_metric, on_progress, flush): one thread at a
 //     time. Usually the dispatch thread; flush() delivers on its caller's
 //     thread instead (flush_for asks the dispatch thread), and fatal records

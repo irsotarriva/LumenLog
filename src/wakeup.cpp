@@ -14,7 +14,10 @@ constexpr std::chrono::microseconds idle_check_interval{100};
 }  // namespace
 
 void Wakeup::wake_if_sleeping() noexcept {
-    if (!sleeping_.exchange(false, std::memory_order_acq_rel)) {
+    // A plain load first: while the dispatcher is awake, producers only read
+    // the flag's cache line and do not take it from each other.
+    if (!sleeping_.load(std::memory_order_seq_cst) ||
+        !sleeping_.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
     {

@@ -24,6 +24,14 @@
 // full expression, on the producing thread. That is when the record gets its
 // timestamp and thread id and when the ambient context is merged.
 //
+// Size and cost. A builder is a stack object of about 1.2 KB: the record it
+// fills (lumen/record.hpp, "Size") and a 512-byte buffer for the strings it
+// is given (detail::StringScratch). On a 64-bit platform RecordBuilder is
+// 1184 bytes and MetricBuilder 1128 with GCC's or Clang's standard library,
+// and both are at most 1200 (checked below). Submission moves the record
+// into its queue slot once. The heap allocations of a statement are listed
+// in lumen/core.hpp ("Cost of a statement").
+//
 // Tags. .tag(key, value) copies both strings at once, so temporaries are
 // fine. Numbers are written as text: integers exactly, floating point in the
 // shortest form that reads back as the same value; bool as "true"/"false".
@@ -44,35 +52,75 @@
 
 namespace lumen {
 
+// Where a log statement is: its std::source_location and the class named in
+// its function's signature (detail::extract_class_name), as views of strings
+// that live for the whole program. call_site() works all of it out at
+// compile time, which is what the logging macros use; CallSite::at() does the
+// same at run time, for a std::source_location obtained elsewhere.
+struct CallSite {
+    SourceLocation source;
+
+    [[nodiscard]] static constexpr CallSite at(std::source_location loc) noexcept {
+        return CallSite{
+            SourceLocation{.file = loc.file_name(),
+                           .function = loc.function_name(),
+                           .class_name = detail::extract_class_name(loc.function_name()),
+                           .line = loc.line()}};
+    }
+};
+
+// The call site of the expression that calls it (the default argument is
+// evaluated there), computed by the compiler.
+[[nodiscard]] consteval CallSite call_site(
+    std::source_location loc = std::source_location::current()) noexcept {
+    return CallSite::at(loc);
+}
+
 template <BuiltRecord R>
 class BasicRecordBuilder {
 public:
     // A log record whose message is `message`, verbatim.
-    BasicRecordBuilder(Core& core, LogLevel level, std::source_location loc,
-                       std::string_view message)
+    BasicRecordBuilder(Core& core, LogLevel level, const CallSite& site, std::string_view message)
         requires std::same_as<R, LogRecord>
         : core_(&core) {
-        init_log_(level, loc);
+        init_log_(level, site);
         record_.message = scratch_.store(message);
     }
 
     // As above, for a C string; a null pointer is logged as "(null)".
-    BasicRecordBuilder(Core& core, LogLevel level, std::source_location loc, const char* message)
+    BasicRecordBuilder(Core& core, LogLevel level, const CallSite& site, const char* message)
         requires std::same_as<R, LogRecord>
-        : BasicRecordBuilder(core, level, loc, text_or_null_(message)) {}
+        : BasicRecordBuilder(core, level, site, text_or_null_(message)) {}
 
     // A log record whose message is std::format(fmt, args...), checked at
     // compile time and formatted into the builder's scratch buffer. A
     // formatting failure at run time does not throw: the message then says
     // that formatting failed (see StringScratch::store_formatted).
-    template <typename... Args>
+    template <detail::FormatArgument... Args>
+        requires std::same_as<R, LogRecord> && (sizeof...(Args) > 0)
+    BasicRecordBuilder(Core& core, LogLevel level, const CallSite& site,
+                       std::format_string<Args...> fmt, Args&&... args)
+        : core_(&core) {
+        init_log_(level, site);
+        record_.message = scratch_.store_formatted(fmt, std::forward<Args>(args)...);
+    }
+
+    // The three constructors above, for a std::source_location: the class
+    // name is then looked up at run time (CallSite::at).
+    BasicRecordBuilder(Core& core, LogLevel level, std::source_location loc,
+                       std::string_view message)
+        requires std::same_as<R, LogRecord>
+        : BasicRecordBuilder(core, level, CallSite::at(loc), message) {}
+
+    BasicRecordBuilder(Core& core, LogLevel level, std::source_location loc, const char* message)
+        requires std::same_as<R, LogRecord>
+        : BasicRecordBuilder(core, level, CallSite::at(loc), text_or_null_(message)) {}
+
+    template <detail::FormatArgument... Args>
         requires std::same_as<R, LogRecord> && (sizeof...(Args) > 0)
     BasicRecordBuilder(Core& core, LogLevel level, std::source_location loc,
                        std::format_string<Args...> fmt, Args&&... args)
-        : core_(&core) {
-        init_log_(level, loc);
-        record_.message = scratch_.store_formatted(fmt, std::forward<Args>(args)...);
-    }
+        : BasicRecordBuilder(core, level, CallSite::at(loc), fmt, std::forward<Args>(args)...) {}
 
     // A log record whose source is given as text instead of a
     // std::source_location: a call site in another language, such as Python.
@@ -146,12 +194,9 @@ private:
         return text == nullptr ? std::string_view("(null)") : std::string_view(text);
     }
 
-    void init_log_(LogLevel level, std::source_location loc) {
+    void init_log_(LogLevel level, const CallSite& site) {
         record_.level = level;
-        record_.source.file = loc.file_name();
-        record_.source.function = loc.function_name();
-        record_.source.class_name = detail::extract_class_name(loc.function_name());
-        record_.source.line = loc.line();
+        record_.source = site.source;
     }
 
     void set_tag_(std::string_view key, std::string_view stored_value) {
@@ -172,6 +217,11 @@ private:
 
 using RecordBuilder = BasicRecordBuilder<LogRecord>;
 using MetricBuilder = BasicRecordBuilder<MetricRecord>;
+
+// The bound "Size and cost" above states (1200 bytes), where it is stated.
+static_assert(sizeof(void*) != 8 ||
+                  (sizeof(RecordBuilder) <= 1200 && sizeof(MetricBuilder) <= 1200),
+              "update \"Size and cost\" at the top of lumen/record_builder.hpp");
 
 // A metric record for the global core(): lumen::metric("loss", 0.25).tag("epoch", 3);
 inline MetricBuilder metric(std::string_view name, double value) {

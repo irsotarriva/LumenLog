@@ -7,12 +7,14 @@ namespace lumen::detail {
 uint64_t FlushRequests::request() {
     const std::scoped_lock lock(mutex_);
     const uint64_t ticket = requested_.load(std::memory_order_relaxed) + 1;
-    requested_.store(ticket, std::memory_order_release);
+    // seq_cst: the wake-up protocol of src/wakeup.hpp orders it with the
+    // dispatcher's seq_cst store to its sleeping flag.
+    requested_.store(ticket, std::memory_order_seq_cst);
     return ticket;
 }
 
 bool FlushRequests::pending() const noexcept {
-    return requested_.load(std::memory_order_acquire) > completed_.load(std::memory_order_acquire);
+    return requested_.load(std::memory_order_seq_cst) > completed_.load(std::memory_order_acquire);
 }
 
 uint64_t FlushRequests::latest() const noexcept {

@@ -305,13 +305,16 @@ when CMake finds its framework; otherwise configuring prints
 `Lumen: <Framework> bridge tests: NOT BUILT, ...` and they are absent from
 ctest, so a passing run never contains a bridge test that did not run.
 Setting `LUMEN_REQUIRED_BRIDGE_FRAMEWORKS` (e.g. `Eigen3;OpenMP`) turns a
-missing framework into a configure error; every CI job below that tests a
-bridge sets it. All of these jobs fail the workflow when a test fails.
+missing framework into a configure error. The CI jobs `linux-gcc-debug-asan`
+(Eigen and OpenMP), `bridges (torch)` (Eigen, OpenMP and libtorch) and
+`bridges (root)` set it; in the other jobs a bridge's tests run where its
+framework happens to be found. Every job named below fails the workflow
+when a test fails.
 
 | Bridge | Exercised by |
 |---|---|
-| Eigen | Eigen 3.4.0 (Ubuntu 24.04 `libeigen3-dev`), GCC 13: CI jobs `linux-gcc-debug-asan` (ASan + UBSan) and `bridges (torch)`, and locally |
-| OpenMP | GCC 13 libgomp (OpenMP 4.5): the Linux GCC jobs of the main CI matrix except `linux-gcc-tsan` (`linux-gcc-debug-asan` requires it), `bridges (torch)`, and locally. Not built under ThreadSanitizer (libgomp is not instrumented, so TSan reports false races) |
+| Eigen | Eigen 3.4.0 (Ubuntu 24.04 `libeigen3-dev`), GCC 13: CI jobs `linux-gcc-debug-asan` (ASan + UBSan), `coverage (gcovr)` and `bridges (torch)` |
+| OpenMP | GCC 13 libgomp (OpenMP 4.5): the jobs of the main CI matrix that build with GCC except `linux-gcc-tsan`, and `coverage (gcovr)` and `bridges (torch)`. Not built under ThreadSanitizer (libgomp is not instrumented, so TSan reports false races) |
 | libtorch | libtorch 2.5.1 CPU (cxx11 ABI), GCC 13: CI job `bridges (torch)` only |
 | ROOT | ROOT 6.32 from conda-forge, conda-forge GCC 13: CI job `bridges (root)` only |
 

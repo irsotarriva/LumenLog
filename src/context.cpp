@@ -101,9 +101,14 @@ auto change_process_tags(Change change) {
     return next.fetch_add(1, std::memory_order_relaxed);
 }
 
+// What a frame holds: a scope's own copy of its tag, or the Tagged object of
+// a member scope.
+template <typename T>
+concept FrameEntry = std::same_as<T, OwnedTag> || std::same_as<T, const Tagged*>;
+
 // One stack of frames, innermost last. Slots at and above `count` are kept,
 // so that pushing again reuses their strings' capacity.
-template <typename Entry>
+template <FrameEntry Entry>
 struct FrameStack {
     std::vector<Entry> slots;
     std::size_t count = 0;
@@ -225,7 +230,7 @@ private:
     return dropped;
 }
 
-template <typename Entry>
+template <FrameEntry Entry>
 void pop_frame(FrameStack<Entry> ThreadContext::*stack, const FrameToken& token) noexcept {
     if (token.context == 0) {
         return;  // never pushed
