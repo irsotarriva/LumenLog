@@ -1,0 +1,12 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Threads)
+if(@LUMEN_PACKAGE_NEEDS_FTXUI@)
+  find_dependency(ftxui CONFIG)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/lumenTargets.cmake")
+
+check_required_components(lumen)

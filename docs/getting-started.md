@@ -1,103 +1,122 @@
-# Getting Started
+# Getting started
 
-## Requirements
+## 1. Build and test Lumen
 
-- **C++23** compiler: Clang 17+, GCC 14+, or MSVC 2022+
-- **CMake** 3.28 or newer
-- **vcpkg** — used in manifest mode, auto-resolves dependencies
-
-### Optional
-
-- **FTXUI** — enables the terminal dashboard (auto-resolved by vcpkg when `LUMEN_ENABLE_DASHBOARD=ON`)
-- **pybind11** — enables Python bindings when `LUMEN_ENABLE_PYTHON=ON`
-
-## Installation
+The [README](../README.md#requirements) lists the requirements. On Linux with
+GCC 13, CMake 3.28, GoogleTest and Python 3 installed and no vcpkg:
 
 ```sh
-git clone https://github.com/user/lumen.git
-cd lumen
+git clone https://github.com/irsotarriva/LumenLog.git
+cd LumenLog
 cmake --preset debug
-cmake --build build/debug
+cmake --build --preset debug
 ctest --preset debug
 ```
 
-For a release build without tests:
+The dashboard is built when FTXUI is found and left out otherwise; the
+configure output says which. With vcpkg (`VCPKG_ROOT` set), vcpkg installs
+FTXUI and GoogleTest.
+
+The `debug` preset builds with AddressSanitizer and UBSan. The test suite
+includes the examples (`Example.*`), the documentation checks (`Docs.*`) and
+tests that install Lumen and build a small project against it
+(`Consumer.*`; `Consumer.FindPackageAndAddSubdirectory` is the slowest one).
+The tests that build Lumen with non-default settings are left out of the
+`debug`, `tsan`, `release` and `ci` test presets; run them with
+`ctest --preset build-settings` after building the `release` preset.
+
+To build only the library, without tests (no GoogleTest or Python needed):
 
 ```sh
-cmake --preset release
-cmake --build build/release
+cmake -S . -B build/lib -DCMAKE_BUILD_TYPE=Release -DLUMEN_BUILD_TESTS=OFF \
+      -DLUMEN_BUILD_EXAMPLES=OFF -DLUMEN_ENABLE_DASHBOARD=OFF
+cmake --build build/lib
 ```
 
-## Using Lumen in your project
+## 2. Use it from your project
 
-Add Lumen as a subdirectory dependency:
+A project with Lumen checked out (or added as a git submodule) next to its
+sources:
+
+<!-- check: illustrative="a directory layout" -->
+```text
+my_project/
+  CMakeLists.txt
+  main.cpp
+  LumenLog/
+```
 
 ```cmake
-add_subdirectory(path/to/lumen)
-target_link_libraries(your_target PRIVATE lumen::lumen)
+# my_project/CMakeLists.txt
+cmake_minimum_required(VERSION 3.28)
+project(my_project LANGUAGES CXX)
+add_subdirectory(LumenLog)
+add_executable(my_program main.cpp)
+target_link_libraries(my_program PRIVATE lumen::lumen)
 ```
 
-Or install system-wide (the library target `lumen::lumen` includes all necessary include paths):
+`lumen::lumen` brings the include directories and the C++23 requirement;
+`LUMEN_MIN_LEVEL` and the queue capacities reach the code through the
+generated header `lumen/config.hpp`, not through definitions. Inside another
+project, Lumen's tests, examples and install rules are off, its warnings are
+not errors, no sanitizer is added, and the dashboard is built only if FTXUI
+is found (configuring does not fail without it).
 
-```sh
-cmake --install build/release --prefix /usr/local
-```
-
-```cmake
-find_package(lumen REQUIRED)
-target_link_libraries(your_target PRIVATE lumen::lumen)
-```
-
-## Your first program
+`main.cpp` can be as short as this; ctest builds and runs it:
 
 ```cpp
-#include "lumen/lumen.h"
+#include <iostream>
+
+#include "lumen/lumen.hpp"
 
 int main() {
-    // Get the global core. Sinks register here.
-    auto& core = lumen::core();
-
-    // Add a terminal sink that sees everything.
-    core.add_sink(
-        std::make_unique<lumen::TerminalSink>(),
-        lumen::always()
-    );
-
-    // Set process-wide tags attached to every record.
-    core.set_process_tag("app", "my_app");
-    core.set_process_tag("version", "1.0.0");
-
-    // Emit a log.
-    LOG_INFO("hello from Lumen");
-
-    // Emit a metric.
-    lumen::metric("items_processed", 150);
-
-    // Track progress.
-    auto bar = lumen::progress("loading", 100);
-    for (int i = 0; i < 100; i++) {
-        do_work(i);
-        bar.tick();
+    auto sink = lumen::TerminalSink::create({});
+    if (!sink) {
+        std::cerr << "cannot create the terminal sink: " << sink.error().message() << '\n';
+        return 1;
     }
-
-    core.flush();
+    if (const auto id = lumen::core().add_sink(std::move(*sink)); !id) {
+        std::cerr << "cannot register the terminal sink: " << id.error().message() << '\n';
+        return 1;
+    }
+    LUMEN_LOG_INFO("hello from {}", "my_program").tag("stage", "setup");
+    lumen::core().flush();
+    return 0;
 }
 ```
 
-Compile with:
+It prints one line like `12:04:05.123 INFO  hello from my_program` on
+standard error (the tag is on the record but not on the line: see
+`inline_tags` in [Sinks](sinks.md#terminalsink)).
+
+To use an installed Lumen instead, install a build without sanitizers (a
+sanitized static library would force the sanitizer runtime on the consumer):
 
 ```sh
-cmake --preset debug && cmake --build build/debug
-./build/debug/examples/basic
+cmake --preset release -DLUMEN_ENABLE_DASHBOARD=OFF
+cmake --build --preset release
+cmake --install build/release --prefix "$HOME/opt/lumen"
 ```
 
-## Compile-time level control
+and in `CMakeLists.txt`, in place of `add_subdirectory`:
 
-Control which log levels survive compilation with `LUMEN_MIN_LEVEL`:
-
-```sh
-# Strip all DEBUG and TRACE calls from the binary
-cmake --preset release -DLUMEN_MIN_LEVEL=INFO
+```cmake
+find_package(lumen 0.1 CONFIG REQUIRED)
 ```
 
-Below the threshold, macro calls expand to `((void)0)` — no formatting, no allocation, no runtime cost. Metrics and progress are never elided.
+configured with `-DCMAKE_PREFIX_PATH=$HOME/opt/lumen`. An installed Lumen
+built with the dashboard needs FTXUI to be findable by the consumer too.
+
+A build that does not use CMake needs the install's `include` directory and
+its library (`lib/liblumen.a`, plus the threads library). The installed
+`lumen/config.hpp` holds the settings the library was built with, so such a
+build sees the same level threshold and queue capacities; defining another
+`LUMEN_LOG_CAPACITY` (or metric or progress capacity) stops the compilation
+with an error.
+
+## 3. Next
+
+- [Usage](usage.md): log statements, metrics, progress, context.
+- [Sinks](sinks.md): where records go, and writing your own.
+- [Predicates](predicates.md): which records go where.
+- The examples in `examples/`, each run by ctest.

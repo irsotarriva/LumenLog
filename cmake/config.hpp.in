@@ -1,0 +1,40 @@
+#ifndef LUMEN_CONFIG_HPP
+#define LUMEN_CONFIG_HPP
+
+// The build settings this copy of Lumen was compiled with. CMake writes this
+// file from cmake/config.hpp.in (the options are in
+// cmake/build_settings.cmake) and installs it with the other headers, so a
+// consumer sees the library's own values whether or not it uses CMake.
+
+// Lowest log level compiled in, as the LogLevel number (0 = Trace ... 5 =
+// Fatal); lumen/macros.hpp reads it. Only the logging statements of the
+// translation unit being compiled depend on it, so a translation unit may
+// define LUMEN_MIN_LEVEL_VALUE itself, before its first Lumen include, to
+// compile more or fewer of its own statements.
+#ifndef LUMEN_MIN_LEVEL_VALUE
+#define LUMEN_MIN_LEVEL_VALUE @lumen_min_level_value@
+#endif
+
+// Queue capacities; lumen/limits.hpp reads them. The library's queues have
+// exactly these sizes, so a translation unit that defines another value
+// would see a capacity the library does not have: that stops the build.
+#if defined(LUMEN_LOG_CAPACITY) && LUMEN_LOG_CAPACITY != @LUMEN_LOG_CAPACITY@
+#error "LUMEN_LOG_CAPACITY differs from the value this Lumen library was built with (@LUMEN_LOG_CAPACITY@)"
+#endif
+#if defined(LUMEN_METRIC_CAPACITY) && LUMEN_METRIC_CAPACITY != @LUMEN_METRIC_CAPACITY@
+#error "LUMEN_METRIC_CAPACITY differs from the value this Lumen library was built with (@LUMEN_METRIC_CAPACITY@)"
+#endif
+#if defined(LUMEN_PROGRESS_CAPACITY) && LUMEN_PROGRESS_CAPACITY != @LUMEN_PROGRESS_CAPACITY@
+#error "LUMEN_PROGRESS_CAPACITY differs from the value this Lumen library was built with (@LUMEN_PROGRESS_CAPACITY@)"
+#endif
+#ifndef LUMEN_LOG_CAPACITY
+#define LUMEN_LOG_CAPACITY @LUMEN_LOG_CAPACITY@
+#endif
+#ifndef LUMEN_METRIC_CAPACITY
+#define LUMEN_METRIC_CAPACITY @LUMEN_METRIC_CAPACITY@
+#endif
+#ifndef LUMEN_PROGRESS_CAPACITY
+#define LUMEN_PROGRESS_CAPACITY @LUMEN_PROGRESS_CAPACITY@
+#endif
+
+#endif

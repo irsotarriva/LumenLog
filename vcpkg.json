@@ -1,14 +1,23 @@
 {
   "name": "lumen",
   "version": "0.1.0",
-  "dependencies": [
-    "gtest",
-    {
-      "name": "ftxui",
-      "platform": "!windows"
-    }
-  ],
+  "dependencies": [],
   "features": {
+    "dashboard": {
+      "description": "FTXUI terminal dashboard (LUMEN_ENABLE_DASHBOARD=ON)",
+      "dependencies": [
+        {
+          "name": "ftxui",
+          "platform": "!windows"
+        }
+      ]
+    },
+    "tests": {
+      "description": "GoogleTest, for the test suite only (LUMEN_BUILD_TESTS=ON)",
+      "dependencies": [
+        "gtest"
+      ]
+    },
     "python": {
       "description": "pybind11 Python bindings (LUMEN_ENABLE_PYTHON=ON)",
       "dependencies": [

@@ -1,285 +1,377 @@
 # Lumen
 
-**Zero-instrumentation structured telemetry for C++20.**
+Lumen is a C++23 library that records log messages, metrics and progress bars
+as structured records carrying key/value tags. A logging statement pushes its
+record onto a lock-free queue; one background thread delivers it to sinks
+(terminal, files, a terminal dashboard, or your own), and each sink receives
+only the records that its predicate on level and tags accepts.
 
-Producers write only semantic content. Consumers receive maximally rich, filterable records — automatically enriched with tags from five layers of context.
+Tags come from the statement itself and from context set elsewhere: the
+process, the thread, the enclosing scopes and the object whose member function
+is running. The statement does not repeat them.
 
+Version 0.1.0. The API may still change between minor versions.
+
+## Quick start
+
+<!-- check: from=examples/quick_start.cpp -->
+```cpp
+// Quick start: a terminal sink, process tags, log statements, a metric and a
+// progress bar. Every line goes to standard error.
+#include <cstdint>
+#include <iostream>
+#include <utility>
+
+#include "lumen/lumen.hpp"
+
+int main() {
+    lumen::TerminalSink::Config config;
+    // Tags are shown only when listed here, in this order.
+    config.inline_tags = {"app", "detector", "run"};
+    auto terminal = lumen::TerminalSink::create(std::move(config));
+    if (!terminal) {
+        std::cerr << "cannot create the terminal sink: " << terminal.error().message() << '\n';
+        return 1;
+    }
+    if (const auto id = lumen::core().add_sink(std::move(*terminal)); !id) {
+        std::cerr << "cannot register the terminal sink: " << id.error().message() << '\n';
+        return 1;
+    }
+
+    // Every record from now on carries app=quick_start and run=42.
+    for (const auto& [key, value] : {std::pair{"app", "quick_start"}, std::pair{"run", "42"}}) {
+        if (const auto set = lumen::set_process_tag(key, value); !set) {
+            std::cerr << "cannot set the process tag " << key << ": " << set.error().message()
+                      << '\n';
+            return 1;
+        }
+    }
+
+    LUMEN_LOG_INFO("starting");
+    const double energy = 41.53;
+    LUMEN_LOG_WARN("energy {:.1f} GeV above threshold", energy).tag("detector", "calorimeter");
+    LUMEN_LOG_DEBUG("{} channels masked", 3).tag("detector", "tracker");
+    LUMEN_LOG_ERROR("explicit tags win").tag("run", 43);
+
+    lumen::metric("loss", 0.25).tag("epoch", 3);
+
+    auto bar = lumen::progress("events", 3);
+    for (uint32_t event = 0; event < 3; ++event) {
+        bar.tick();
+    }
+    bar.finish();  // 3/3 was already sent by the last tick(), so nothing more is sent
+
+    // Delivers everything logged so far and waits until the sink has written it.
+    lumen::core().flush();
+    return 0;
+}
 ```
-LOG_INFO("cluster energy {:.2f} GeV", energy)
-    .tag("subsystem", "calorimeter");
+
+It prints, on standard error (`<time>` stands for the local time, `HH:MM:SS.mmm`):
+
+<!-- check: output=examples/expected/quick_start.stderr -->
+```text
+<time> INFO  starting app=quick_start run=42
+<time> WARN  energy 41.5 GeV above threshold app=quick_start detector=calorimeter run=42
+<time> DEBUG 3 channels masked app=quick_start detector=tracker run=42
+<time> ERROR explicit tags win app=quick_start run=43
+<time> METRIC loss=0.25 app=quick_start run=42
+<time> PROGRESS events 1/3 app=quick_start run=42
+<time> PROGRESS events 2/3 app=quick_start run=42
+<time> PROGRESS events 3/3 app=quick_start run=42
 ```
 
-Designed as core infrastructure for any project.
+The `epoch` tag is on the metric record but not on the line: a terminal sink
+shows only the tags named in `inline_tags`. Log, metric and progress lines can
+come out in a different order from run to run; within one type the order is
+the order of the statements. The level name is coloured when standard error is
+a terminal (the exact rule is in [Sinks](docs/sinks.md#terminalsink)).
 
----
+This program is `examples/quick_start.cpp`. ctest builds it, runs it and
+compares its output with the text above (test `Example.QuickStart`). The other
+examples are:
 
-## Philosophy
-
-Lumen is built on the idea that **the producer should not carry the cost of the consumer's needs.**
-
-Traditional logging forces every call site to decide what context to attach, what format to use, where to write, and whether the record matters. This couples the producer to every consumer — change your output format, and you edit thousands of log lines. Add a new filter, and every call site needs new annotations.
-
-Lumen inverts this. Producers emit only what they uniquely know — a message, a severity, and optionally explicit tags. Everything else is assembled automatically from ambient context.
-
-### The producer-consumer model
-
-```
-Producer                      Lumen                      Consumer
-────────                      ─────                      ────────
-Writes message + level   →    Merges context         →   Receives full record
-Optional .tag() calls         Evaluates predicates       Filters by predicate
-No formatting decisions        Dispatches to sinks       Chooses format & destination
-```
-
-**Producers** call `LOG_INFO`, `lumen::metric`, or `lumen::progress`. That's the entire producer API. No decision about output format, destination, or filtering.
-
-**Context** is assembled from five layers at emit time. Higher layers override lower layers when the same key appears:
-
-1. **Explicit** — `.tag("k", "v")` on the emit call (always wins)
-2. **Instance** — tags set on the enclosing object via `lumen::Tagged`
-3. **Scope** — tags pushed by `LUMEN_SCOPE` for the current lexical block
-4. **Thread** — tags registered once per thread
-5. **Process** — tags registered once at startup
-
-This means a class can tag itself once in its constructor, and every log call from any of its methods automatically carries those tags. A loop wrapper can tag every record inside the loop body. Process-wide identifiers (job ID, hostname, rank) are attached to every record without a single extra line at the call site.
-
-**Consumers** are sinks. Each sink subscribes to a subset of the record stream via composable predicates (`level_at_least(WARN) && tag_equals("subsystem", "calorimeter")`). Sinks decide format, color, destination, and layout — independently of each other and of the producers.
-
-### Zero-instrumentation
-
-In production builds, records below a configurable level threshold compile to nothing. If `LUMEN_MIN_LEVEL=WARN`, every `LOG_DEBUG` and `LOG_INFO` call in the entire codebase is `((void)0)`. No formatting cost, no tag construction, no allocation, no function call. The processor never sees them.
-
-Bridges extend this further — include a header and framework calls (PyTorch forward/backward, ROOT TTree fills, Eigen matrix operations, OpenMP thread pools) automatically emit records with zero changes to user code.
-
----
+| Example | Shows |
+|---|---|
+| `examples/context_layers.cpp` | `lumen::Tagged` and `LUMEN_MEMBER_SCOPE`, `LUMEN_SCOPE`, thread tags, `LUMEN_LOOP`, and which tags each record carries |
+| `examples/routing.cpp` | several sinks with predicates built in C++ and parsed from text; text, logfmt and JSON files; error handling; `Core::statistics()` |
+| `examples/custom_sink.cpp` | a sink of your own with a writer thread, honouring the non-blocking contract |
+| `examples/python/quick_start.py` | the Python module and the `logging` handler |
 
 ## Requirements
 
-- **C++23** compiler (Clang 17+, GCC 14+, MSVC 2022+)
-- **CMake** 3.28+
-- **vcpkg** (manifest mode, auto-resolved via CMake preset)
+- A C++23 compiler and standard library with `<expected>`, `<format>` and
+  `<source_location>`. Clang with GNU libstdc++ 13 does not work: Clang 18
+  does not see `std::expected` in that library.
+- Windows: experimental. MSVC is built and tested by one CI job that is
+  allowed to fail, with the dashboard off; no CI job builds the dashboard
+  on Windows.
+- CMake 3.28 or later.
+- For the tests: GoogleTest and a Python 3 interpreter (the example and
+  documentation checks run in Python; no Python package is needed).
+- Optional: FTXUI for the terminal dashboard (`LUMEN_ENABLE_DASHBOARD`,
+  on by default when FTXUI is found); pybind11 3.0 or later and Python 3.11
+  or later for the Python module (`LUMEN_ENABLE_PYTHON`).
 
-Optional dependencies (auto-resolved by vcpkg):
-- **FTXUI** — terminal dashboard (`LUMEN_ENABLE_DASHBOARD=ON`, default)
-- **pybind11** — Python bindings (`LUMEN_ENABLE_PYTHON=OFF`, default)
+### Continuous integration
 
----
+The CI workflow (`.github/workflows/ci.yml`) has these jobs. Every one of
+them fails the workflow when it fails, except
+`windows-msvc-debug (experimental)`:
 
-## Installation
+<!-- check: ci-jobs -->
+| Job | Toolchain | What it builds and runs |
+|---|---|---|
+| `linux-gcc-debug-asan` | GCC 13, libstdc++, Ubuntu 24.04, vcpkg | Debug, ASan + UBSan, dashboard; the Eigen and OpenMP bridge tests (required) and the locale tests; fails if any test is skipped |
+| `linux-gcc-tsan` | GCC 13, vcpkg | Debug, ThreadSanitizer, dashboard |
+| `linux-gcc-release` | GCC 13, vcpkg | Release, dashboard; also the `build-settings` test preset, and `lumen_bench_transport`, whose numbers are only printed |
+| `linux-gcc-release-no-dashboard` | GCC 13, apt packages, no vcpkg | Release without the dashboard |
+| `linux-clang-libcxx-debug-asan` | Clang 18, libc++ 18, vcpkg | Debug, ASan + UBSan, dashboard |
+| `macos-appleclang-debug-asan` | Apple Clang, `macos-latest`, vcpkg | Debug, ASan + UBSan, dashboard |
+| `python-bindings` | GCC 13, Python 3.12, pybind11 from pip | Debug, ASan + UBSan, the Python module and its tests |
+| `lint (clang-format, clang-tidy)` | clang-format 18, clang-tidy 18 | the `format-check` and `lint` targets, dashboard and Python module included |
+| `coverage (gcovr)` | GCC 13, vcpkg | line and branch coverage of `src/` and `include/lumen/` (bridges excepted), dashboard included, measured with the `coverage` presets; uploads the report and fails under its thresholds (in `ci.yml`) |
+| `bridges (torch)` | GCC 13, libtorch 2.5.1 (CPU), Eigen and OpenMP | builds the bridge tests and the bridge documentation blocks against the three frameworks (required) and runs the tests whose name contains `Bridge` |
+| `bridges (root)` | conda-forge GCC 13 and ROOT 6.32 | the same for ROOT |
+| `windows-msvc-debug (experimental)` | MSVC, `windows-latest`, vcpkg | Debug, no sanitizer, dashboard off; allowed to fail |
+
+## Building
 
 ```sh
-# Clone
 git clone https://github.com/irsotarriva/LumenLog.git
-cd lumen
-
-# Configure & build (debug, with tests and examples)
-cmake --preset debug
-cmake --build build/debug
-
-# Run tests
+cd LumenLog
+cmake --preset debug          # Debug, ASan + UBSan, tests and examples
+cmake --build --preset debug
 ctest --preset debug
-
-# Release build (no tests/examples, optimized)
-cmake --preset release
-cmake --build build/release
 ```
 
-### CMake integration
+The dashboard is built when FTXUI is found (from vcpkg or installed) and
+left out otherwise; the configure output says which. `-DLUMEN_ENABLE_DASHBOARD=ON`
+makes FTXUI required, `-DLUMEN_ENABLE_DASHBOARD=OFF` skips looking for it.
+
+The configure presets are `debug`, `tsan` (ThreadSanitizer), `release`, `ci`
+(Debug, ASan + UBSan, warnings as errors) and `coverage` (Debug with GCC's
+`--coverage`, for gcovr). Each one builds in `build/<preset>`. The test
+presets of the same names leave out the tests labelled `build-settings`,
+which build and install Lumen with non-default settings and take minutes
+(the `coverage` test preset also leaves out those labelled `consumer`);
+`ctest --preset build-settings` runs them against the `release` build.
+
+With vcpkg: set the environment variable `VCPKG_ROOT` to a vcpkg checkout. The
+presets then use its toolchain file, and vcpkg installs the manifest features
+of `vcpkg.json` that the options select: `tests` (GoogleTest, with
+`LUMEN_BUILD_TESTS`), `dashboard` (FTXUI, with `LUMEN_ENABLE_DASHBOARD`) and
+`python` (pybind11, with `LUMEN_ENABLE_PYTHON`). `vcpkg.json` lists Lumen's
+own dependencies; this repository is not a vcpkg port of Lumen.
+
+Without vcpkg: leave `VCPKG_ROOT` unset; CMake then finds installed packages
+(set `CMAKE_PREFIX_PATH` if they are not in a default location):
+
+```sh
+cmake --preset release -DLUMEN_ENABLE_DASHBOARD=OFF
+cmake --build --preset release
+```
+
+The CI job `linux-gcc-release-no-dashboard` builds this way.
+
+Sanitizers and multi-configuration generators (Ninja Multi-Config, Visual
+Studio, Xcode): `LUMEN_SANITIZER` instruments the Debug configuration only,
+and defaults to `address` for a top-level build; Release, RelWithDebInfo and
+MinSizeRel are never instrumented. With a single-configuration generator
+(Ninja, Unix Makefiles) it instruments the one build, whatever its
+`CMAKE_BUILD_TYPE`. The presets do not choose a generator, so they get
+CMake's default: a single-configuration one on Linux and macOS, Visual
+Studio on Windows.
+
+## Using Lumen from CMake
+
+As a subdirectory of your project (tests, examples, install rules and
+sanitizers are then off by default, and the dashboard is built only if FTXUI
+is found):
 
 ```cmake
-# In your project's CMakeLists.txt
-add_subdirectory(path/to/lumen)
-target_link_libraries(your_target PRIVATE lumen::lumen)
+add_subdirectory(LumenLog)
+target_link_libraries(my_program PRIVATE lumen::lumen)
 ```
 
-### Compile-time options
+As an installed package:
 
-| Flag | Default | Effect |
+```sh
+cmake --install build/release --prefix /opt/lumen
+```
+
+```cmake
+find_package(lumen 0.1 CONFIG REQUIRED)   # with CMAKE_PREFIX_PATH=/opt/lumen
+target_link_libraries(my_program PRIVATE lumen::lumen)
+```
+
+Both ways are tested by `Consumer.FindPackageAndAddSubdirectory`, which
+builds `tests/consumer/` against an install and against the source tree.
+`lumen::lumen` carries the include directories and the C++23 requirement.
+The build settings (`LUMEN_MIN_LEVEL`, the queue capacities) are written into
+the generated header `lumen/config.hpp`, which is installed with the others,
+so a build that does not use CMake (`-I<prefix>/include` and
+`<prefix>/lib/liblumen.a`) sees the values the library was built with, and
+one that defines a different queue capacity fails to compile.
+`Consumer.WarnLevelAndSmallQueues` and `Consumer.FatalLevel` (label
+`build-settings`) check this with non-default settings.
+
+## Build options
+
+<!-- check: options-table -->
+| Option | Default | Meaning |
 |---|---|---|
-| `LUMEN_MIN_LEVEL` | `DEBUG` | Elides records below this level (TRACE/DEBUG/INFO/WARN/ERROR/FATAL) |
-| `LUMEN_ENABLE_DASHBOARD` | `ON` | FTXUI terminal dashboard |
-| `LUMEN_ENABLE_LATEX` | `OFF` | LaTeX math rendering in sinks |
-| `LUMEN_ENABLE_PYTHON` | `OFF` | pybind11 Python bindings |
-| `LUMEN_ENABLE_REFLECTION` | `AUTO` | C++26 class-name harvesting |
+| `LUMEN_MIN_LEVEL` | `DEBUG` | Lowest log level compiled in: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR` or `FATAL`. Statements below it are removed at compile time. |
+| `LUMEN_LOG_CAPACITY` | `65536` | Log records the log queue holds (a power of two) |
+| `LUMEN_METRIC_CAPACITY` | `16384` | Metric records the metric queue holds (a power of two) |
+| `LUMEN_PROGRESS_CAPACITY` | `4096` | Progress records the progress queue holds (a power of two) |
+| `LUMEN_ENABLE_DASHBOARD` | `ON` if FTXUI is found, else `OFF` | Build `DashboardSink`. `ON` requires FTXUI |
+| `LUMEN_ENABLE_PYTHON` | `OFF` | Build the Python module `lumen_bindings` (needs pybind11 3.0+) |
+| `LUMEN_SANITIZER` | `address` for a top-level build with a Debug configuration, else `none` | `none`, `address` (ASan + UBSan) or `thread` (TSan); with a multi-configuration generator, for the Debug configuration only |
+| `LUMEN_BUILD_TESTS` | `ON` when top level | Build the tests (needs GoogleTest and Python 3) |
+| `LUMEN_BUILD_EXAMPLES` | `ON` when top level | Build the examples |
+| `LUMEN_INSTALL` | `ON` when top level | Install rules and the `lumen` CMake package |
+| `LUMEN_INSTALL_CMAKEDIR` | `${CMAKE_INSTALL_LIBDIR}/cmake/lumen` | Where the package files are installed |
+| `LUMEN_WARNINGS_AS_ERRORS` | `ON` when top level | `-Werror` or `/WX` |
+| `LUMEN_COVERAGE` | `OFF` | For a GCC `--coverage` build (the `coverage` preset turns it on): the test programs also write their coverage counts when they end by `SIGABRT` or `_exit()`, and the benchmarks are not built |
+| `LUMEN_REQUIRED_BRIDGE_FRAMEWORKS` | empty | Bridge frameworks whose tests must be built (`Eigen3;OpenMP;Torch;ROOT`); configuring fails if one is missing |
 
----
+`LUMEN_MIN_LEVEL` and the capacities change what the public headers compile
+to. They are written into the generated header `lumen/config.hpp` (installed
+with the library), not passed as definitions, so every user of a build of
+Lumen sees the same values, with CMake or without.
 
-## Usage
+## What is in the library
 
-### Quick start
+- **Records** (`lumen/record.hpp`): `LogRecord`, `MetricRecord`,
+  `ProgressRecord`. Each carries at most 16 tags, a nanosecond timestamp and
+  a thread number, and owns its strings. [Usage](docs/usage.md)
+- **Producers**: `LUMEN_LOG_TRACE` … `LUMEN_LOG_FATAL` with `std::format`
+  arguments checked at compile time, `lumen::metric`, `lumen::progress`,
+  `LUMEN_LOOP`. [Usage](docs/usage.md)
+- **Context**: process tags, thread tags, `LUMEN_SCOPE`, `lumen::Tagged`
+  objects. [Usage](docs/usage.md#context)
+- **Predicates**: built in C++ (`level_at_least`, `tag_equals`, `&&`, …) or
+  parsed from text (`level >= WARN && run == 42`). [Predicates](docs/predicates.md)
+- **Sinks**: `TerminalSink`, `FileSink` (text, logfmt or JSON lines, with
+  rotation), `DashboardSink` (full-screen terminal view), `NullSink`, and your
+  own. [Sinks](docs/sinks.md)
+- **Python**: the same Core from Python, and a `logging.Handler`.
+  [Python](docs/python.md)
+- **Bridges**: helpers for Eigen, OpenMP, ROOT and libtorch, below.
 
+### Bridges
+
+Optional bridge headers turn values held by Eigen, OpenMP, ROOT and libtorch
+objects into metric records: matrix norms and solver convergence, OpenMP work
+balance, TTree sizes, training loss, gradient norm and learning rate. They
+hook nothing; your code calls them where it has the values. Each is
+header-only and empty unless its framework is available.
+
+<!-- check: requires=torch prelude=bridge_torch wrap=body -->
 ```cpp
-#include "lumen/lumen.h"
+#include "lumen/bridges/torch.hpp"
 
-int main() {
-    auto& core = lumen::core();
-
-    // Register a terminal sink that receives everything
-    core.add_sink(
-        std::make_unique<lumen::TerminalSink>(),
-        lumen::always()
-    );
-
-    // Set process-wide tags
-    core.set_process_tag("app", "analysis");
-    core.set_process_tag("run_id", "42");
-
-    // Emit logs — simplest form
-    LOG_INFO("starting event processing");
-
-    // With explicit tags
-    LOG_WARN("energy out of range, got {:.2f}", e)
-        .tag("subsystem", "calorimeter")
-        .tag("event_id", "4821");
-
-    // Emit metrics
-    lumen::metric("loss", 0.0314);
-    lumen::metric("fps", 60.0).tag("scene", "main_menu");
-
-    // Track progress
-    auto job = lumen::progress("training", 1000);
-    for (int i = 0; i < 1000; i++) {
-        train_step();
-        job.tick();
-    }
-    // ProgressHandle destructor auto-finishes
-
-    core.flush();  // drain all records before exit
+const lumen::bridges::TorchTrainingMetrics metrics("regressor");
+LUMEN_LOOP("epoch", epoch, n_epochs) {
+    optimizer.zero_grad();
+    const torch::Tensor loss = torch::mse_loss(model->forward(inputs), targets);
+    loss.backward();
+    static_cast<void>(metrics.emit_loss(loss));             // torch.loss       model=regressor epoch=<e>
+    static_cast<void>(metrics.emit_gradient_norm(*model));  // torch.grad_norm  (global L2 norm)
+    optimizer.step();
 }
 ```
 
-### Context layers in practice
+The `static_cast<void>` drops the `std::expected` results for brevity;
+[Bridges](docs/bridges.md) handles them, and lists every metric, tag and
+error and the CI status of each bridge.
 
-```cpp
-class JetFinder : public lumen::Tagged {
-public:
-    JetFinder(int run, std::string algo) {
-        lumen_tag("class", "JetFinder");
-        lumen_tag("run_id", std::to_string(run));
-        lumen_tag("algorithm", std::move(algo));
-    }
+## Limits and guarantees
 
-    void cluster(const EventData& ev) {
-        LUMEN_MEMBER_SCOPE;  // activates instance tags for this call
-        LOG_DEBUG("starting cluster step");
-        // record carries: class=JetFinder, run_id=42, algorithm=antikt
-    }
-};
+The numbers below are the constants of `lumen/limits.hpp` and the defaults of
+the sinks' `Config`, except the builder's buffer
+(`lumen/detail/string_scratch.hpp`).
 
-void process_run(const std::string& run) {
-    LUMEN_SCOPE("run_id", run);       // scoped to this block
-    LOG_INFO("run started");           // carries run_id
-    {
-        LUMEN_SCOPE("event_id", "7");  // nested scopes merge
-        LOG_INFO("processing event");  // carries both run_id and event_id
-    }
-}
-
-void frame_loop(float dt) {
-    LUMEN_FRAME_SCOPE(frame_counter, dt) {
-        update(dt);
-        render();
-        // all records carry frame_number and delta_time_ms
-    }
-}
-
-// Loop with automatic progress + tags
-LUMEN_LOOP("training batches", batch, num_batches) {
-    forward_pass(batch);
-    // records carry: loop_label="training batches", iteration=batch
-    // progress bar auto-updates each iteration
-}
-```
-
-### Filtering with predicates
-
-```cpp
-using namespace lumen;
-
-// A sink that only sees warnings and above from the calorimeter
-core.add_sink(
-    std::make_unique<lumen::TerminalSink>(),
-    level_at_least(WARN) && tag_equals("subsystem", "calorimeter")
-);
-
-// A JSON sink for all metrics regardless of source
-core.add_sink(
-    std::make_unique<lumen::JsonSink>("metrics.jsonl"),
-    always()
-);
-
-// A file sink for a specific run, excluding suppressed records
-core.add_sink(
-    std::make_unique<lumen::FileSink>("run_42.log"),
-    tag_equals("run_id", "42") && !tag_exists("suppress")
-);
-
-// The same filter as text, e.g. from a config file or a CLI flag
-if (auto query = lumen::parse_predicate("run_id == 42 && altitude < 70000 && !exists(suppress)")) {
-    core.add_sink(std::make_unique<lumen::FileSink>("low.log"), std::move(*query));
-}
-```
-
-### Custom sinks
-
-```cpp
-class MySink : public lumen::Sink {
-public:
-    void on_log(const lumen::LogRecord& r) override {
-        // r.message, r.level, r.tags, r.source — all populated
-        // Must be non-blocking! Offload I/O to your own thread if needed.
-    }
-    void on_metric(const lumen::MetricRecord& r) override { /* ... */ }
-    void on_progress(const lumen::ProgressRecord& r) override { /* ... */ }
-    void flush() override { /* drain internal queue */ }
-};
-```
-
-### Bridges (zero-instrumentation for frameworks)
-
-```cpp
-#include "lumen/lumen.h"
-#include "lumen/bridges/torch.h"   // auto-logs forward/backward, loss, lr
-
-// From here, torch::nn::Module subclasses automatically emit metrics.
-// No changes to training code required.
-
-auto model = MyModel();
-model->train();  // MetricRecord: "loss", "grad_norm", "lr" emitted automatically
-```
-
-### Python bindings
-
-```python
-import lumen_bindings as lumen
-
-lumen.info("analysis starting")
-lumen.metric("loss", 0.0314)
-
-bar = lumen.progress("training", 1000)
-bar.tick()
-
-lumen.core().add_sink(lumen.TerminalSink(), lumen.level_at_least("INFO"))
-```
-
----
+- **Tags.** A record holds at most 16 tags (`max_record_tags`): the explicit
+  `.tag()` calls first, then context, highest layer first. A tag that does not
+  fit is left out and counted in `Core::statistics().tags_dropped`. The
+  process layer holds 16 keys, a thread 8, a `Tagged` object 8; setting a new
+  key in a full table fails with `LumenError::TagTableFull` and changes
+  nothing.
+- **Queues.** Each record type has a bounded queue: 65536 log records, 16384
+  metrics, 4096 progress records by default (`LUMEN_LOG_CAPACITY` etc.). A
+  producer never waits: a record submitted to a full queue is refused and
+  counted in `statistics().logs.dropped_queue_full` (and `.metrics`,
+  `.progress`), and the first refusal is reported once through the Core's
+  diagnostic handler, which writes to standard error unless you replace it
+  (`Core::set_diagnostic_handler`).
+- **Memory.** The queues are allocated with the Core: capacity × (record size
+  + 8 bytes), about 41 MB for logs, 9.3 MB for metrics and 2.4 MB for progress
+  with the default capacities on a 64-bit platform (records are 576 to 632
+  bytes). Pages become resident as the queue is first used and stay
+  resident, so once more than 65536 log records have passed, the log queue
+  is resident in full. Smaller capacities shrink it in proportion
+  (`lumen/limits.hpp`, "Memory").
+- **Sink queues.** The shipped sinks write from a thread of their own, through
+  a queue of `max_queued_lines` lines (10000 for `TerminalSink`, 65536 for
+  `FileSink`). When it is full the line is dropped and counted in the sink's
+  `statistics().lines_dropped`; the first drop is reported once.
+- **Threads.** Any thread may log. A producer takes no lock of Lumen's, except
+  to refresh its copy of the process tags after they changed, and Lumen makes
+  a system call for it only when the dispatch thread is asleep (the memory
+  allocator may make its own, rarely). Submission allocates one block on the
+  heap for the record's strings; each string that does not fit in the
+  builder's 512-byte stack buffer adds two allocations (`lumen/core.hpp`,
+  "Cost of a statement"). Sink callbacks run on one
+  thread at a time, never concurrently with each other; they must not block
+  (see [Sinks](docs/sinks.md#the-contract)).
+- **Order.** Records of one type reach a sink in the order they were queued.
+  Records of different types are not ordered with each other.
+- **Flush.** `Core::flush()` delivers every record submitted before the call,
+  on the calling thread, then calls `flush()` on every sink, and returns when
+  that is done. For the shipped sinks that means written and the stream
+  flushed (no `fsync`).
+- **Shutdown and late logging.** `lumen::core()` is created on first use and
+  shuts down during static destruction: it stops its thread, delivers what is
+  queued, flushes and destroys its sinks. A record submitted after that, for
+  example from the destructor of a static object, is not delivered; it is
+  counted in `statistics().logs.dropped_after_shutdown` (and the same for the
+  other types). A record submitted by another thread while shutdown runs may
+  be lost without being counted: stop your threads first.
+- **`LUMEN_LOG_FATAL`** delivers every record queued before it, then the fatal
+  record, flushes every sink and aborts the process (SIGABRT); a terminate
+  handler you installed with `std::set_terminate` is called instead.
+  Destructors and `atexit` functions do not run.
+- **Compile-time level.** Statements below `LUMEN_MIN_LEVEL` (default
+  `DEBUG`, so `LUMEN_LOG_TRACE` is removed by default) are discarded at
+  compile time: they produce no code and their arguments are not evaluated.
+  Fatal statements are never discarded. Metrics, progress and Python calls
+  are not affected.
+- **Errors.** Fallible calls return `std::expected<T, std::error_code>` (or
+  `PredicateParseError` for `parse_predicate`); the codes are listed in
+  `lumen/error.hpp`. An exception thrown by a sink callback is caught, counted
+  (`Core::sink_exception_count`) and reported once per sink; delivery goes on.
 
 ## Documentation
 
-Full documentation is available in the [`docs/`](docs/index.md) folder:
-
-| Document | Contents |
+| Page | Contents |
 |---|---|
-| [Getting Started](docs/getting-started.md) | Requirements, installation, first program |
-| [Philosophy](docs/philosophy.md) | Producer-consumer model, context layers, design rationale |
-| [Usage Guide](docs/usage.md) | Logging, metrics, progress, scopes, tags |
-| [Sinks](docs/sinks.md) | Built-in sinks, configuration, custom sinks |
-| [Predicates](docs/predicates.md) | Predicate DSL reference and examples |
-| [API Reference](docs/api.md) | Complete public API |
-| [Bridges](docs/bridges.md) | Framework integration (Torch, ROOT, Eigen, OpenMP) |
+| [Getting started](docs/getting-started.md) | Building, consuming, the first program |
+| [Usage](docs/usage.md) | Log statements, metrics, progress, context, compile-time level, fatal |
+| [Predicates](docs/predicates.md) | Building and parsing filters, the rules they follow |
+| [Sinks](docs/sinks.md) | The shipped sinks, their formats and queues, writing your own |
+| [Python](docs/python.md) | The Python module and the `logging` handler |
+| [Bridges](docs/bridges.md) | Helpers for Eigen, OpenMP, ROOT and libtorch |
+| [Headers](docs/api.md) | Which header declares what |
+| [Design](docs/design.md) | How the library works inside, for maintainers |
 
----
+Every C++ block in these pages is compiled by the build (a bridge block only
+when its framework is found), and the complete programs among them are run by
+ctest. Python blocks are run when the module is built. Quoted examples and
+outputs must equal the files they quote. `Docs.Check` verifies this, and
+`tests/docs/check_docs.py` states the rules.
 
 ## License
 
-[MIT](LICENSE) — free to use, copy, modify, merge, publish, distribute, sublicense, and sell. See the license file for full terms.
+[MIT](LICENSE).

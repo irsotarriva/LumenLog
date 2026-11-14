@@ -1,89 +1,51 @@
-#include "lumen/tagged.h"
+#include "lumen/tagged.hpp"
+
+#include <memory>
+
+#include "lumen/limits.hpp"
 
 namespace lumen {
 
-namespace {
-
-const TagSet<8>*& tls_instance_tags() {
-    static thread_local const TagSet<8>* ptr = nullptr;  // non-owning
-    return ptr;
-}
-
-}  // namespace
-
-Tagged::Scope::Scope(const TagSet<8>* tags)
-    : previous_(tls_instance_tags()) {
-    tls_instance_tags() = tags;
-}
+Tagged::Scope::Scope(const Tagged& object) : frame_(detail::push_instance(object)) {}
 
 Tagged::Scope::~Scope() {
-    tls_instance_tags() = previous_;
+    detail::pop_instance(frame_);
 }
 
 Tagged::Tagged(const Tagged& other)
-    : keys_(other.keys_), values_(other.values_), count_(other.count_) {
-    rebuild_tags_();
-}
+    : tags_(other.tags_ ? std::make_unique<detail::TagTable>(*other.tags_) : nullptr) {}
 
 Tagged& Tagged::operator=(const Tagged& other) {
     if (this != &other) {
-        keys_ = other.keys_;
-        values_ = other.values_;
-        count_ = other.count_;
-        rebuild_tags_();
+        Tagged copy(other);
+        tags_ = std::move(copy.tags_);
     }
     return *this;
 }
 
-Tagged::Tagged(Tagged&& other) noexcept
-    : keys_(std::move(other.keys_)), values_(std::move(other.values_)),
-      count_(other.count_) {
-    rebuild_tags_();
-    other.count_ = 0;
-    other.rebuild_tags_();
-}
-
-Tagged& Tagged::operator=(Tagged&& other) noexcept {
-    if (this != &other) {
-        keys_ = std::move(other.keys_);
-        values_ = std::move(other.values_);
-        count_ = other.count_;
-        rebuild_tags_();
-        other.count_ = 0;
-        other.rebuild_tags_();
+std::expected<void, std::error_code> Tagged::lumen_tag(std::string_view key,
+                                                       std::string_view value) {
+    if (!tags_) {
+        tags_ = std::make_unique<detail::TagTable>(max_instance_tags);
     }
-    return *this;
+    return tags_->set(key, value);
 }
 
-void Tagged::lumen_tag(std::string_view key, std::string_view value) {
-    if (count_ >= keys_.size()) {
-        return;
+bool Tagged::lumen_untag(std::string_view key) {
+    return tags_ && tags_->remove(key);
+}
+
+std::span<const OwnedTag> Tagged::lumen_tags() const noexcept {
+    if (!tags_) {
+        return {};
     }
-    keys_[count_] = key;
-    values_[count_] = value;
-    ++count_;
-    rebuild_tags_();
-}
-
-void Tagged::rebuild_tags_() {
-    tags_ = TagSet<8>{};
-    for (size_t i = 0; i < count_; ++i) {
-        tags_.add(keys_[i], values_[i]);
-    }
-}
-
-Tagged::Scope Tagged::lumen_scope() {
-    return Scope(&tags_);
-}
-
-const TagSet<8>* Tagged::current_instance_tags() {
-    return tls_instance_tags();
+    return tags_->tags();
 }
 
 namespace detail {
 
-const TagSet<8>* current_instance_tags() {
-    return Tagged::current_instance_tags();
+std::span<const OwnedTag> instance_tags(const Tagged& object) noexcept {
+    return object.lumen_tags();
 }
 
 }  // namespace detail

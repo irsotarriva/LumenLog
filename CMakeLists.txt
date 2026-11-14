@@ -1,180 +1,147 @@
 cmake_minimum_required(VERSION 3.28)
 
-# Must precede project(): vcpkg installs manifest dependencies while the
-# toolchain is loaded. pybind11 (and the python3 build it pulls in) is only
-# needed for the bindings.
-if(LUMEN_ENABLE_PYTHON)
+# vcpkg installs the manifest features while its toolchain file runs inside
+# project(), so they must be chosen before it. Only meaningful when Lumen is
+# the top-level project and the presets' vcpkg toolchain is in use.
+if(NOT DEFINED LUMEN_BUILD_TESTS OR LUMEN_BUILD_TESTS)
+  list(APPEND VCPKG_MANIFEST_FEATURES "tests")
+endif()
+# WIN32 is not known before project(); vcpkg.json itself skips FTXUI there.
+if(NOT DEFINED LUMEN_ENABLE_DASHBOARD OR LUMEN_ENABLE_DASHBOARD)
+  list(APPEND VCPKG_MANIFEST_FEATURES "dashboard")
+endif()
+# A pybind11 named with pybind11_DIR (for instance pip's) is used instead.
+if(LUMEN_ENABLE_PYTHON AND NOT DEFINED pybind11_DIR)
   list(APPEND VCPKG_MANIFEST_FEATURES "python")
 endif()
 
 project(lumen VERSION 0.1.0 LANGUAGES CXX)
 
-# ── C++ Standard ──────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-# ── Build types ───────────────────────────────────────────────────────────────
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# When Lumen is built inside another project (add_subdirectory/FetchContent),
-# none of the developer-only settings below are forced on the parent build.
-option(LUMEN_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ${PROJECT_IS_TOP_LEVEL})
-option(LUMEN_ENABLE_SANITIZERS "Build with ASan/UBSan in Debug" ${PROJECT_IS_TOP_LEVEL})
+include(GNUInstallDirs)
 
-# ── Warnings ──────────────────────────────────────────────────────────────────
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+# Options. When Lumen is built inside another project (add_subdirectory or
+# FetchContent), the developer-only settings default to off so that nothing is
+# forced on the parent build.
+include(cmake/dashboard_option.cmake)
+option(LUMEN_ENABLE_PYTHON "Build the pybind11 Python module" OFF)
+option(LUMEN_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
+option(LUMEN_BUILD_EXAMPLES "Build the examples" ${PROJECT_IS_TOP_LEVEL})
+option(LUMEN_INSTALL "Generate install rules and the lumen CMake package" ${PROJECT_IS_TOP_LEVEL})
+option(LUMEN_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ${PROJECT_IS_TOP_LEVEL})
+option(LUMEN_COVERAGE "Tests write GCC coverage counts on abort and _exit; benchmarks are not built" OFF)
+
+# Warnings
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wno-unknown-warning-option)
   endif()
   if(LUMEN_WARNINGS_AS_ERRORS)
     add_compile_options(-Werror)
   endif()
-endif()
-
-if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-  add_compile_options(/W4)
+elseif(MSVC)
+  # C4324 reports padding added by alignas; the ring buffer asks for it on
+  # purpose to keep its counters on separate cache lines.
+  add_compile_options(/W4 /wd4324)
   if(LUMEN_WARNINGS_AS_ERRORS)
     add_compile_options(/WX)
   endif()
 endif()
 
-# ── Sanitizers (Debug) ────────────────────────────────────────────────────────
-# Instrumenting a static library forces every consumer to link the sanitizer
-# runtime too, so this is off by default when Lumen is a subproject.
-if(LUMEN_ENABLE_SANITIZERS AND CMAKE_BUILD_TYPE STREQUAL "Debug")
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address,undefined)
-  endif()
-endif()
+include(cmake/sanitizers.cmake)
 
-# ── Platform macros ───────────────────────────────────────────────────────────
-if(WIN32)
-  add_compile_definitions(PLATFORM_WINDOWS)
-elseif(APPLE)
-  add_compile_definitions(PLATFORM_MACOS)
-else()
-  add_compile_definitions(PLATFORM_LINUX)
-endif()
-
-# ── Options ───────────────────────────────────────────────────────────────────
-option(LUMEN_ENABLE_DASHBOARD  "Include FTXUI dependency; enables dashboard rendering" ON)
-option(LUMEN_ENABLE_LATEX     "Include MicroTeX; enables LaTeX math rendering in sinks" OFF)
-option(LUMEN_ENABLE_PYTHON    "Build pybind11 bindings" OFF)
-set(LUMEN_ENABLE_REFLECTION "AUTO" CACHE STRING "Enable C++26 class-name harvesting (AUTO, ON, OFF)")
-
-# ── vcpkg ─────────────────────────────────────────────────────────────────────
-# CMAKE_TOOLCHAIN_FILE is set via CMakePresets.json using $env{VCPKG_ROOT}.
-# Dependencies are declared in vcpkg.json (manifest mode).
-
-# ── Library target ────────────────────────────────────────────────────────────
+# Library
 add_library(lumen
   src/core.cpp
-  src/sink.cpp
+  src/delivery.cpp
+  src/delivery_stack.cpp
+  src/diagnostic_reporter.cpp
+  src/dispatcher_thread.cpp
+  src/fatal_records.cpp
+  src/first_reports.cpp
+  src/flush_requests.cpp
+  src/fork_handlers.cpp
+  src/record_queues.cpp
+  src/sink_registry.cpp
+  src/termination.cpp
+  src/wakeup.cpp
   src/predicate.cpp
+  src/predicate_lexer.cpp
   src/predicate_parser.cpp
   src/context.cpp
   src/tagged.cpp
+  src/progress.cpp
   src/error.cpp
+  # Sinks, and the line formats and writer thread they share.
+  src/text_encoding.cpp
+  src/time_format.cpp
+  src/record_format.cpp
+  src/line_writer.cpp
+  src/terminal_output.cpp
+  src/terminal_sink.cpp
+  src/rotating_file.cpp
+  src/file_sink.cpp
+  src/dashboard_model.cpp
 )
+add_library(lumen::lumen ALIAS lumen)
 
-target_include_directories(lumen PUBLIC include)
-target_include_directories(lumen PRIVATE src)
-
+target_include_directories(lumen
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
+    src
+)
 target_compile_features(lumen PUBLIC cxx_std_23)
 
-# Compile-time level threshold
-set(LUMEN_MIN_LEVEL "DEBUG" CACHE STRING "Elides records below this level at compile time")
-target_compile_definitions(lumen PUBLIC LUMEN_MIN_LEVEL=${LUMEN_MIN_LEVEL})
+find_package(Threads REQUIRED)
+target_link_libraries(lumen PRIVATE Threads::Threads)
 
+# PRIVATE: only src/ reads the platform macros; no public header does.
+if(WIN32)
+  target_compile_definitions(lumen PRIVATE PLATFORM_WINDOWS)
+elseif(APPLE)
+  target_compile_definitions(lumen PRIVATE PLATFORM_MACOS)
+else()
+  target_compile_definitions(lumen PRIVATE PLATFORM_LINUX)
+endif()
 
-# Buffer capacities
-set(LUMEN_LOG_CAPACITY "65536" CACHE STRING "LogBuffer slot count (must be power of two)")
-set(LUMEN_METRIC_CAPACITY "16384" CACHE STRING "MetricBuffer slot count")
-set(LUMEN_PROGRESS_CAPACITY "4096" CACHE STRING "ProgressBuffer slot count")
+include(cmake/build_settings.cmake)
 
-# PUBLIC: the capacities set the layout of Core, which consumers see through the
-# headers. A PRIVATE define would give the library and its users different layouts.
-target_compile_definitions(lumen PUBLIC
-  LUMEN_LOG_CAPACITY=${LUMEN_LOG_CAPACITY}
-  LUMEN_METRIC_CAPACITY=${LUMEN_METRIC_CAPACITY}
-  LUMEN_PROGRESS_CAPACITY=${LUMEN_PROGRESS_CAPACITY}
-)
-
-# Feature flags
+# The dashboard sink is the only code that needs FTXUI; its state model
+# (src/dashboard_model.cpp, above) is built either way. FTXUI was looked for
+# in cmake/dashboard_option.cmake.
 if(LUMEN_ENABLE_DASHBOARD)
-  target_compile_definitions(lumen PRIVATE LUMEN_ENABLE_DASHBOARD)
-  find_package(ftxui CONFIG REQUIRED)
+  target_sources(lumen PRIVATE src/dashboard_sink.cpp src/dashboard_frame.cpp)
   target_link_libraries(lumen PRIVATE ftxui::dom ftxui::screen)
 endif()
 
-if(LUMEN_ENABLE_LATEX)
-  target_compile_definitions(lumen PRIVATE LUMEN_ENABLE_LATEX)
-endif()
-
 if(LUMEN_ENABLE_PYTHON)
-  target_compile_definitions(lumen PUBLIC LUMEN_ENABLE_PYTHON)
-  # The static library is linked into the Python extension module (a shared object).
+  # The static library is linked into the Python extension module, a shared object.
   set_target_properties(lumen PROPERTIES POSITION_INDEPENDENT_CODE ON)
-  find_package(pybind11 REQUIRED)
-  target_link_libraries(lumen PUBLIC pybind11::headers)
 endif()
 
-# ── C++26 Reflection ───────────────────────────────────────────────────────────
-set(LUMEN_HAS_REFLECTION FALSE)
-
-if(LUMEN_ENABLE_REFLECTION STREQUAL "AUTO" OR LUMEN_ENABLE_REFLECTION STREQUAL "ON")
-    message(STATUS "Lumen: probing C++26 static reflection support...")
-
-    # CMAKE_CURRENT_SOURCE_DIR, not CMAKE_SOURCE_DIR: the latter is the parent
-    # project's root when Lumen is added with add_subdirectory/FetchContent.
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/try_reflection.cpp" lumen_reflection_code_)
-
-    include(CheckCXXSourceCompiles)
-    include(CMakePushCheckState)
-    cmake_push_check_state(RESET)
-    set(CMAKE_REQUIRED_FLAGS "-std=c++26")
-    # The result variable must not be pre-set: check_cxx_source_compiles skips
-    # the probe entirely when the variable is already defined.
-    check_cxx_source_compiles("${lumen_reflection_code_}" LUMEN_REFLECTION_PROBE)
-    cmake_pop_check_state()
-    set(LUMEN_HAS_REFLECTION ${LUMEN_REFLECTION_PROBE})
-
-    if(LUMEN_HAS_REFLECTION)
-        message(STATUS "Lumen: C++26 static reflection detected — class-name harvesting enabled")
-    elseif(LUMEN_ENABLE_REFLECTION STREQUAL "AUTO")
-        message(STATUS "Lumen: C++26 static reflection not available — using function-name parsing fallback")
-    elseif(LUMEN_ENABLE_REFLECTION STREQUAL "ON")
-        message(SEND_ERROR "LUMEN_ENABLE_REFLECTION=ON but C++26 static reflection is not supported by this compiler"
-                           " (requires ^T operator and <meta> header)."
-                           " Set to AUTO for automatic fallback or OFF to disable.")
-    endif()
+if(LUMEN_INSTALL)
+  include(cmake/install.cmake)
 endif()
 
-if(LUMEN_HAS_REFLECTION)
-    target_compile_definitions(lumen PUBLIC LUMEN_HAS_REFLECTION)
-endif()
-
-# ── Aliases for convenience ───────────────────────────────────────────────────
-add_library(lumen::lumen ALIAS lumen)
-
-# ── Tests ─────────────────────────────────────────────────────────────────────
-option(LUMEN_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 if(LUMEN_BUILD_TESTS)
   enable_testing()
   find_package(GTest REQUIRED)
   add_subdirectory(tests)
 endif()
 
-# ── Examples ──────────────────────────────────────────────────────────────────
-option(LUMEN_BUILD_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
 if(LUMEN_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
 
-# ── Python bindings ───────────────────────────────────────────────────────────
 if(LUMEN_ENABLE_PYTHON)
   add_subdirectory(python)
 endif()
+
+include(cmake/lint.cmake)

@@ -1,48 +1,59 @@
-#include <system_error>
-
+// The "lumen" error category.
 #include <gtest/gtest.h>
 
-#include "lumen/detail/error.h"
+#include <set>
+#include <string>
+#include <system_error>
+
+#include "lumen/error.hpp"
 
 namespace lumen {
 namespace {
 
-TEST(LumenErrorTest, ErrorCodeConstruction) {
-    std::error_code ec = make_error_code(LumenError::none);
-    EXPECT_EQ(ec.value(), 0);
-    EXPECT_EQ(ec.category(), lumen_error_category());
-}
-
-TEST(LumenErrorTest, ErrorCategoryName) {
+TEST(LumenErrorTest, CategoryIsNamedLumen) {
     EXPECT_STREQ(lumen_error_category().name(), "lumen");
 }
 
-TEST(LumenErrorTest, ErrorMessages) {
-    EXPECT_EQ(lumen_error_category().message(0), "no error");
-    EXPECT_EQ(lumen_error_category().message(static_cast<int>(LumenError::buffer_full)),
-              "ring buffer is full");
-    EXPECT_EQ(lumen_error_category().message(static_cast<int>(LumenError::invalid_sink_id)),
-              "sink id not found");
+TEST(LumenErrorTest, MakeErrorCodeUsesTheLumenCategoryAndTheEnumeratorValue) {
+    const std::error_code ec = make_error_code(LumenError::TagTableFull);
+    EXPECT_EQ(ec.category(), lumen_error_category());
+    EXPECT_EQ(ec.value(), static_cast<int>(LumenError::TagTableFull));
 }
 
-TEST(LumenErrorTest, IsErrorCodeEnum) {
-    EXPECT_TRUE((std::is_error_code_enum_v<LumenError>));
+TEST(LumenErrorTest, EnumeratorComparesEqualToItsOwnCodeOnly) {
+    const std::error_code ec = LumenError::SinkBusy;
+    EXPECT_EQ(ec, LumenError::SinkBusy);
+    EXPECT_NE(ec, LumenError::InvalidSinkId);
+    // The same value in another category is a different error.
+    EXPECT_NE(ec, std::error_code(static_cast<int>(LumenError::SinkBusy), std::generic_category()));
 }
 
-TEST(LumenErrorTest, CategoryEquality) {
-    std::error_code ec1 = make_error_code(LumenError::none);
-    std::error_code ec2 = make_error_code(LumenError::buffer_full);
-    EXPECT_EQ(ec1.category(), ec2.category());
+TEST(LumenErrorTest, NoneIsTheOnlyCodeThatTestsFalse) {
+    EXPECT_FALSE(make_error_code(LumenError::None));
+    EXPECT_TRUE(make_error_code(LumenError::NullSink));
 }
 
-TEST(LumenErrorTest, ErrorCodeDistinctValues) {
-    EXPECT_NE(static_cast<int>(LumenError::none), static_cast<int>(LumenError::buffer_full));
-    EXPECT_NE(static_cast<int>(LumenError::buffer_full), static_cast<int>(LumenError::invalid_sink_id));
+TEST(LumenErrorTest, EveryErrorHasItsOwnMessage) {
+    const std::set<std::string> messages = {
+        lumen_error_category().message(static_cast<int>(LumenError::None)),
+        lumen_error_category().message(static_cast<int>(LumenError::InvalidSinkId)),
+        lumen_error_category().message(static_cast<int>(LumenError::NullSink)),
+        lumen_error_category().message(static_cast<int>(LumenError::SinkBusy)),
+        lumen_error_category().message(static_cast<int>(LumenError::TagTableFull)),
+        lumen_error_category().message(static_cast<int>(LumenError::InvalidPredicate)),
+        lumen_error_category().message(static_cast<int>(LumenError::InvalidSinkConfig)),
+        lumen_error_category().message(static_cast<int>(LumenError::FileOpenFailed)),
+        lumen_error_category().message(static_cast<int>(LumenError::IoError)),
+        lumen_error_category().message(static_cast<int>(LumenError::NotATerminal)),
+        lumen_error_category().message(static_cast<int>(LumenError::CoreShutDown)),
+        lumen_error_category().message(static_cast<int>(LumenError::FlushTimedOut)),
+    };
+    EXPECT_EQ(messages.size(), 12U);
+    EXPECT_FALSE(messages.contains("unknown lumen error"));
 }
 
-TEST(LumenErrorTest, UnknownErrorMessage) {
-    std::string msg = lumen_error_category().message(999);
-    EXPECT_NE(msg.find("unknown"), std::string::npos);
+TEST(LumenErrorTest, UnknownValueHasTheUnknownMessage) {
+    EXPECT_EQ(lumen_error_category().message(999), "unknown lumen error");
 }
 
 }  // namespace

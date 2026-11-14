@@ -1,450 +1,198 @@
-#include <atomic>
-#include <cstdio>
-#include <chrono>
-#include <mutex>
-#include <set>
-#include <string>
-#include <thread>
-#include <vector>
-
+// The logging macros, which always go to the global core(). Each test starts
+// from a clean context and a fresh capture sink (GlobalCoreTest). Thresholds
+// other than this target's are covered by test_elision.cpp.
 #include <gtest/gtest.h>
 
-#include "lumen/core.h"
-#include "lumen/predicate.h"
-#include "lumen/sink.h"
+#include <concepts>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <source_location>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <type_traits>
+#include <vector>
+
+#include "lumen/macros.hpp"
+#include "test_support.hpp"
 
 namespace lumen {
 namespace {
 
-struct CaptureSink : public Sink {
-    std::vector<LogRecord> logs;
-    std::mutex mtx;
+using test::GlobalCoreTest;
+using test::StderrSink;
+using test::tag_of;
 
-    void on_log(const LogRecord& r) override {
-        std::lock_guard lock(mtx);
-        logs.push_back(r);
-    }
-    void on_metric(const MetricRecord&) override {}
-    void on_progress(const ProgressRecord&) override {}
-    void flush() override {}
-};
-
-void wait_flush(int ms = 100) {
-    core().flush();
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+template <typename T>
+    requires std::is_arithmetic_v<T> || std::convertible_to<T, std::string_view>
+void log_from_a_function_template(const T& value) {
+    LOG_INFO("from a function template {}", value);
 }
 
-class MacroTest : public ::testing::Test {
+class MacroTest : public GlobalCoreTest {
 protected:
-    std::vector<SinkId> ids_;
-
-    void TearDown() override {
-        for (auto id : ids_) {
-            (void)core().remove_sink(id);
-        }
-        ids_.clear();
-    }
-
-    SinkId register_sink(std::unique_ptr<Sink> sink, Predicate pred) {
-        SinkId id = core().add_sink(std::move(sink), std::move(pred));
-        ids_.push_back(id);
-        return id;
+    [[nodiscard]] std::vector<LogRecord> _logs() {
+        core().flush();
+        return _captured->logs();
     }
 };
 
-TEST_F(MacroTest, MacroCallsRecordBuilder) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("test message");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].message, "test message");
-    EXPECT_EQ(raw->logs[0].level, LogLevel::INFO);
+TEST_F(MacroTest, EachEnabledLevelMacroEmitsOneRecordAtItsLevel) {
+    LUMEN_LOG_DEBUG("debug");
+    LUMEN_LOG_INFO("info");
+    LUMEN_LOG_WARN("warn");
+    LUMEN_LOG_ERROR("error");
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 4U);
+    EXPECT_EQ(records[0].level, LogLevel::Debug);
+    EXPECT_EQ(records[1].level, LogLevel::Info);
+    EXPECT_EQ(records[2].level, LogLevel::Warn);
+    EXPECT_EQ(records[3].level, LogLevel::Error);
+    EXPECT_EQ(records[3].message, "error");
 }
 
-TEST_F(MacroTest, MacroChainsTags) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("tagged msg").tag("key1", "val1").tag("key2", "val2");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].message, "tagged msg");
-    EXPECT_EQ(raw->logs[0].tags.find("key1"), "val1");
-    EXPECT_EQ(raw->logs[0].tags.find("key2"), "val2");
+TEST_F(MacroTest, ShortNamesEmitLikeThePrefixedOnes) {
+    LOG_INFO("short info");
+    LOG_ERROR("short error");
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_EQ(records[0].level, LogLevel::Info);
+    EXPECT_EQ(records[1].level, LogLevel::Error);
 }
 
-TEST_F(MacroTest, SourceLocationCaptured) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    const int expected_line = __LINE__ + 1;
-    LOG_INFO("location test");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_FALSE(raw->logs[0].source.file.empty());
-    EXPECT_FALSE(raw->logs[0].source.function.empty());
-    EXPECT_EQ(raw->logs[0].source.line, expected_line);
+TEST_F(MacroTest, TraceIsElidedAtTheDefaultThresholdAndItsArgumentsAreNotEvaluated) {
+    static_assert(compiled_min_level == LogLevel::Debug,
+                  "this target is built with the default threshold");
+    int evaluated = 0;
+    auto side_effect = [&evaluated] { return ++evaluated; };
+    LUMEN_LOG_TRACE("trace {}", side_effect());
+    LOG_TRACE("trace {}", side_effect());
+    EXPECT_EQ(evaluated, 0);
+    EXPECT_TRUE(_logs().empty());
 }
 
-TEST_F(MacroTest, FatalCallsTerminate) {
-    EXPECT_DEATH(
-        {
-            LOG_FATAL("fatal error");
-        },
-        "");
+TEST_F(MacroTest, MacroRecordsTheCallersSourceLocationAndClass) {
+    struct Caller {
+        static std::source_location log_here() {
+            const std::source_location here = std::source_location::current();
+            LUMEN_LOG_INFO("located");
+            return here;
+        }
+    };
+    const std::source_location here = Caller::log_here();
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(records[0].source.line, here.line() + 1);
+    EXPECT_EQ(records[0].source.file, here.file_name());
+    EXPECT_EQ(records[0].source.class_name, "Caller");
 }
 
-TEST_F(MacroTest, DebugMacroEmits) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_DEBUG("debug info");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_EQ(raw->logs[0].level, LogLevel::DEBUG);
+TEST_F(MacroTest, FormatArgumentsAreFormattedAndASingleArgumentIsVerbatim) {
+    LOG_INFO("cluster energy {:.2f} GeV in {} hits", 12.3456, 7).tag("run", 3);
+    LOG_WARN("single argument is verbatim: {braces} stay");
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 2U);
+    EXPECT_EQ(records[0].message, "cluster energy 12.35 GeV in 7 hits");
+    EXPECT_EQ(tag_of(records[0].tags, "run"), "3");
+    EXPECT_EQ(records[1].message, "single argument is verbatim: {braces} stay");
 }
 
-TEST_F(MacroTest, TraceMacroCompileTimeElision) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_DEBUG("debug level emits");
-    LOG_INFO("info level emits");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 2);
-    EXPECT_EQ(raw->logs[0].level, LogLevel::DEBUG);
-    EXPECT_EQ(raw->logs[1].level, LogLevel::INFO);
+TEST_F(MacroTest, ChainedTagsAreAllOnTheRecord) {
+    LOG_INFO("tags").tag("a", "1").tag("b", 2).tag("c", true);
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(tag_of(records[0].tags, "a"), "1");
+    EXPECT_EQ(tag_of(records[0].tags, "b"), "2");
+    EXPECT_EQ(tag_of(records[0].tags, "c"), "true");
 }
 
-TEST_F(MacroTest, WarnErrorMacrosEmit) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_WARN("warning");
-    LOG_ERROR("error");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 2);
-    bool found_warn = false;
-    bool found_error = false;
-    for (const auto& r : raw->logs) {
-        if (r.level == LogLevel::WARN) found_warn = true;
-        if (r.level == LogLevel::ERROR) found_error = true;
+// The missing braces are what this test is about.
+// NOLINTBEGIN(readability-braces-around-statements)
+TEST_F(MacroTest, ElseAfterAnEnabledMacroBindsToTheCallersIf) {
+    int else_taken = 0;
+    for (const bool condition : {false, true}) {
+        if (condition)
+            LOG_INFO("taken");
+        else
+            ++else_taken;
     }
-    EXPECT_TRUE(found_warn);
-    EXPECT_TRUE(found_error);
+    EXPECT_EQ(else_taken, 1);
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(records[0].message, "taken");
+}
+// NOLINTEND(readability-braces-around-statements)
+
+TEST_F(MacroTest, MacroWorksInsideALambdaAGenericLambdaAndAFunctionTemplate) {
+    auto in_lambda = [] { LOG_INFO("from lambda"); };
+    in_lambda();
+    [](auto value) { LOG_INFO("from generic lambda {}", value); }(5);
+    log_from_a_function_template(7);
+    log_from_a_function_template(std::string("text"));
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 4U);
+    EXPECT_EQ(records[0].message, "from lambda");
+    EXPECT_EQ(records[1].message, "from generic lambda 5");
+    EXPECT_EQ(records[2].message, "from a function template 7");
+    EXPECT_EQ(records[3].message, "from a function template text");
 }
 
-// ── Error-path tests ──────────────────────────────────────────────────────────
-
-TEST_F(MacroTest, EmptyMessageLog) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_TRUE(raw->logs[0].message.empty());
+TEST_F(MacroTest, FormatFailureInsideTheMacroIsLoggedInsteadOfThrown) {
+    const int negative_width = -1;
+    LUMEN_LOG_WARN("width {:{}}", 5, negative_width).tag("kept", "yes");
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_TRUE(records[0].message.starts_with("formatting failed: ")) << records[0].message;
+    EXPECT_TRUE(records[0].message.ends_with("; format string: width {:{}}")) << records[0].message;
+    EXPECT_EQ(records[0].level, LogLevel::Warn);
+    EXPECT_EQ(tag_of(records[0].tags, "kept"), "yes");
 }
 
-TEST_F(MacroTest, TagWithMaxValue) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("max int").tag("max_int64", static_cast<int64_t>(INT64_MAX));
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_FALSE(raw->logs[0].tags.find("max_int64").empty());
+TEST_F(MacroTest, NullCStringMessageIsLoggedAsNull) {
+    const char* const message = nullptr;
+    LUMEN_LOG_INFO(message);
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(records[0].message, "(null)");
 }
 
-TEST_F(MacroTest, TagWithNegativeValue) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("negative").tag("neg", static_cast<int64_t>(-42));
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_FALSE(raw->logs[0].tags.find("neg").empty());
-}
-
-TEST_F(MacroTest, TagWithDoubleValue) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("double tag").tag("pi", 3.14159265358979);
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_FALSE(raw->logs[0].tags.find("pi").empty());
-}
-
-TEST_F(MacroTest, ManyTagsOnOneLog) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("many tags")
-        .tag("key0", "val0")
-        .tag("key1", "val1")
-        .tag("key2", "val2")
-        .tag("key3", "val3")
-        .tag("key4", "val4")
-        .tag("key5", "val5")
-        .tag("key6", "val6")
-        .tag("key7", "val7")
-        .tag("key8", "val8")
-        .tag("key9", "val9")
-        .tag("key10", "val10")
-        .tag("key11", "val11")
-        .tag("key12", "val12")
-        .tag("key13", "val13")
-        .tag("key14", "val14")
-        .tag("key15", "val15")
-        .tag("key16", "val16")
-        .tag("key17", "val17")
-        .tag("key18", "val18")
-        .tag("key19", "val19");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 1);
-    EXPECT_LE(raw->logs[0].tags.count(), 16);
-    EXPECT_GE(raw->logs[0].tags.count(), 1);
-}
-
-TEST_F(MacroTest, AllLevelsEmit) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_DEBUG("debug msg");
-    LOG_INFO("info msg");
-    LOG_WARN("warn msg");
-    LOG_ERROR("error msg");
-
-    wait_flush();
-
-    ASSERT_GE(raw->logs.size(), 4);
-
-    std::set<LogLevel> levels;
-    for (const auto& r : raw->logs) {
-        levels.insert(r.level);
-    }
-
-    EXPECT_NE(levels.find(LogLevel::DEBUG), levels.end());
-    EXPECT_NE(levels.find(LogLevel::INFO), levels.end());
-    EXPECT_NE(levels.find(LogLevel::WARN), levels.end());
-    EXPECT_NE(levels.find(LogLevel::ERROR), levels.end());
-}
-
-// ── Lifetime: records must own their strings ─────────────────────────────────
-
-TEST_F(MacroTest, RuntimeMessageOutlivesTemporary) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    for (int i = 0; i < 8; ++i) {
-        LOG_INFO(std::string(64, 'm') + std::to_string(i));
-    }
-    core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), 8u);
-    for (size_t i = 0; i < raw->logs.size(); ++i) {
-        EXPECT_EQ(raw->logs[i].message, std::string(64, 'm') + std::to_string(i));
-    }
-}
-
-TEST_F(MacroTest, RuntimeStringTagOutlivesTemporary) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    LOG_INFO("string tag").tag(std::string("dynamic_key_long_enough_for_heap"),
-                               std::string(48, 'v'));
-    core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), 1u);
-    EXPECT_EQ(raw->logs[0].tags.find("dynamic_key_long_enough_for_heap"), std::string(48, 'v'));
-}
-
-TEST_F(MacroTest, NumericTagsSurviveLargeBurst) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    constexpr int64_t kCount = 1000;
-    for (int64_t i = 0; i < kCount; ++i) {
-        LOG_INFO("burst").tag("i", i).tag("half", static_cast<double>(i) / 2.0);
-    }
-    core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), static_cast<size_t>(kCount));
-    for (int64_t i = 0; i < kCount; ++i) {
-        const auto& rec = raw->logs[static_cast<size_t>(i)];
-        EXPECT_EQ(rec.tags.find("i"), std::to_string(i));
-        char expected[32];
-        std::snprintf(expected, sizeof(expected), "%g", static_cast<double>(i) / 2.0);
-        EXPECT_EQ(rec.tags.find("half"), std::string_view(expected));
-    }
-}
-
-TEST_F(MacroTest, RecordsFromExitedThreadKeepThreadTags) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
+TEST_F(MacroTest, RecordFromAnExitedThreadKeepsThatThreadsTags) {
     std::thread worker([] {
-        set_thread_tag("worker", std::string(40, 'w'));
+        ASSERT_TRUE(set_thread_tag("worker", std::string(40, 'w')));
         LOG_INFO("from worker");
     });
     worker.join();
-    core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), 1u);
-    EXPECT_EQ(raw->logs[0].tags.find("worker"), std::string(40, 'w'));
+    const auto records = _logs();
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(tag_of(records[0].tags, "worker"), std::string(40, 'w'));
 }
 
-TEST_F(MacroTest, FormatArgumentsAreFormatted) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    const double energy = 12.3456;
-    LOG_INFO("cluster energy {:.2f} GeV in {} hits", energy, 7).tag("run", int64_t{3});
-    LOG_WARN("single argument is verbatim: {braces} stay");
+TEST_F(MacroTest, MetricAndProgressHelpersUseTheGlobalCore) {
+    lumen::metric("loss", 0.5).tag("epoch", 1);
+    lumen::progress("bar", 2).finish();
     core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), 2u);
-    EXPECT_EQ(raw->logs[0].message, "cluster energy 12.35 GeV in 7 hits");
-    EXPECT_EQ(raw->logs[0].tags.find("run"), "3");
-    EXPECT_EQ(raw->logs[1].message, "single argument is verbatim: {braces} stay");
+    const auto metrics = _captured->metrics();
+    const auto progress = _captured->progress();
+    ASSERT_EQ(metrics.size(), 1U);
+    ASSERT_EQ(progress.size(), 1U);
+    EXPECT_EQ(tag_of(metrics[0].tags, "epoch"), "1");
+    EXPECT_EQ(progress[0].current, 2U);
 }
 
-TEST_F(MacroTest, ElseBindsToCallersIf) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    bool else_taken = false;
-    const bool condition = false;
-    if (condition)
-        LOG_INFO("not logged");
-    else
-        else_taken = true;
-    core().flush();
-
-    EXPECT_TRUE(else_taken);
-    std::lock_guard lock(raw->mtx);
-    EXPECT_TRUE(raw->logs.empty());
+TEST(MacroCoreTest, CoreReturnsTheSameObjectEveryTime) {
+    EXPECT_EQ(&core(), &core());
 }
 
-TEST_F(MacroTest, ScopeValueFromTemporaryIsCopied) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    {
-        LUMEN_SCOPE("run", std::string(40, 'r'));
-        LOG_INFO("inside scope");
-    }
-    core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), 1u);
-    EXPECT_EQ(raw->logs[0].tags.find("run"), std::string(40, 'r'));
-}
-
-TEST_F(MacroTest, ContextPriorityScopeOverThreadOverProcess) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    std::thread worker([] {
-        set_process_tag("prio_key", "process");
-        set_thread_tag("prio_key", "thread");
-        LOG_INFO("thread beats process");
+TEST(MacroFatalDeathTest, FatalMacroDeliversItsRecordFlushesAndTerminates) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_DEATH(
         {
-            LUMEN_SCOPE("prio_key", "scope");
-            LOG_INFO("scope beats thread");
-            LOG_INFO("explicit beats scope").tag("prio_key", "explicit");
-        }
-    });
-    worker.join();
-    core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), 3u);
-    EXPECT_EQ(raw->logs[0].tags.find("prio_key"), "thread");
-    EXPECT_EQ(raw->logs[1].tags.find("prio_key"), "scope");
-    EXPECT_EQ(raw->logs[2].tags.find("prio_key"), "explicit");
-}
-
-TEST_F(MacroTest, NumericTagsAcceptAnyArithmeticTypeAndRoundTrip) {
-    auto sink = std::make_unique<CaptureSink>();
-    auto* raw = sink.get();
-    register_sink(std::move(sink), always());
-
-    const int vessel = 42;
-    const unsigned stage = 3u;
-    const float thrust = 0.5f;
-    LOG_INFO("types")
-        .tag("vessel_id", vessel)
-        .tag("stage", stage)
-        .tag("big", uint64_t{18446744073709551615u})
-        .tag("thrust", thrust)
-        .tag("altitude", 69999.97)
-        .tag("tenth", 0.1)
-        .tag("armed", true)
-        .tag("label", "literal still a string");
-    core().flush();
-
-    std::lock_guard lock(raw->mtx);
-    ASSERT_EQ(raw->logs.size(), 1u);
-    const auto& tags = raw->logs[0].tags;
-    EXPECT_EQ(tags.find("vessel_id"), "42");
-    EXPECT_EQ(tags.find("stage"), "3");
-    EXPECT_EQ(tags.find("big"), "18446744073709551615");
-    EXPECT_EQ(tags.find("thrust"), "0.5");
-    EXPECT_EQ(tags.find("altitude"), "69999.97");  // not rounded to "70000"
-    EXPECT_EQ(tags.find("tenth"), "0.1");
-    EXPECT_EQ(tags.find("armed"), "true");
-    EXPECT_EQ(tags.find("label"), "literal still a string");
+            EXPECT_TRUE(core().add_sink(std::make_unique<StderrSink>()));
+            LUMEN_LOG_INFO("before");
+            LUMEN_LOG_FATAL("fatal {}", 42);
+        },
+        "delivered:before\ndelivered:fatal 42\nflushed");
 }
 
 }  // namespace

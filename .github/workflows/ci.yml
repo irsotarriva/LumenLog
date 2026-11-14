@@ -2,40 +2,447 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**', 'ci/**']
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # Only the Windows entry sets `experimental` (and says so in its name):
+    # MSVC is not a supported toolchain yet, so its result is reported but
+    # does not fail the workflow. Every other job of this workflow gates.
+    continue-on-error: ${{ matrix.experimental == true }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The only job that compiles the FTXUI dashboard with sanitizers.
+          # It also runs the Eigen and OpenMP bridge tests and the locale
+          # tests, and fails if any test is skipped.
+          - name: linux-gcc-debug-asan
+            os: ubuntu-24.04
+            preset: ci
+            vcpkg: true
+            apt: libeigen3-dev locales
+            locales: true
+            no_skips: true
+            required_bridges: Eigen3;OpenMP
+
+          - name: linux-gcc-tsan
+            os: ubuntu-24.04
+            preset: tsan
+            vcpkg: true
+
+          # Also builds and installs Lumen with non-default settings and
+          # consumes it (the build-settings test preset).
+          - name: linux-gcc-release
+            os: ubuntu-24.04
+            preset: release
+            vcpkg: true
+            bench: true
+            build_settings: true
+
+          # Also the job that proves the build works without vcpkg.
+          - name: linux-gcc-release-no-dashboard
+            os: ubuntu-24.04
+            preset: release
+            vcpkg: false
+            apt: libgtest-dev
+            cmake_args: -DLUMEN_ENABLE_DASHBOARD=OFF
+
+          - name: linux-clang-libcxx-debug-asan
+            os: ubuntu-24.04
+            preset: ci
+            vcpkg: true
+            triplet: x64-linux-libcxx
+            cc: clang-18
+            cxx: clang++-18
+            apt: libc++-18-dev libc++abi-18-dev
+            # The distro libc++ frees std::runtime_error's message with free()
+            # although it was allocated with operator new; ASan reports that
+            # as a mismatch whenever any exception is thrown and caught.
+            asan_options: alloc_dealloc_mismatch=0
+            cmake_args: >-
+              -DCMAKE_CXX_FLAGS=-stdlib=libc++
+              -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
+              -DVCPKG_TARGET_TRIPLET=x64-linux-libcxx
+
+          - name: macos-appleclang-debug-asan
+            os: macos-latest
+            preset: ci
+            vcpkg: true
+
+          - name: python-bindings
+            os: ubuntu-24.04
+            preset: ci
+            vcpkg: false
+            python: true
+            apt: libgtest-dev
+            cmake_args: -DLUMEN_ENABLE_DASHBOARD=OFF -DLUMEN_ENABLE_PYTHON=ON
+
+          - name: windows-msvc-debug (experimental)
+            os: windows-latest
+            preset: ci
+            vcpkg: true
+            experimental: true
+            cmake_args: -DLUMEN_SANITIZER=none -DLUMEN_ENABLE_DASHBOARD=OFF
 
     env:
-      # The runner image ships vcpkg but does not set VCPKG_ROOT, which the
-      # presets use to locate the toolchain file.
-      VCPKG_ROOT: /usr/local/share/vcpkg
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/cmake/triplets
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
+
+      # Recent Ubuntu runner kernels randomise mmap addresses with more bits
+      # than the sanitizer runtimes of GCC 13 accept ("unexpected memory
+      # mapping"); 28 bits is what they were built for.
+      - name: Limit address-space randomisation for sanitizers
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Install system packages
+        if: matrix.apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+
+      # The predicate parser tests that switch the C locale
+      # (tests/test_predicate_parser.cpp) need these two; without them they
+      # skip, which no_skips turns into a failure.
+      - name: Install the ISO-8859 locales the locale tests use
+        if: matrix.locales
+        run: |
+          sudo localedef -i de_DE -f ISO-8859-1 de_DE.ISO-8859-1
+          sudo localedef -i tr_TR -f ISO-8859-9 tr_TR.ISO-8859-9
+          locale -a
+
+      - name: Select compiler
+        if: matrix.cxx
+        run: |
+          echo "CC=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        if: matrix.python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pybind11
+        if: matrix.python
+        run: |
+          python -m pip install 'pybind11>=3.0,<4'
+          echo "PYBIND11_ARGS=-Dpybind11_DIR=$(python -m pybind11 --cmakedir) -DPython_EXECUTABLE=$(command -v python)" >> "$GITHUB_ENV"
+
+      # The presets load vcpkg only when VCPKG_ROOT is set (see
+      # cmake/vcpkg_if_available.cmake), so the no-vcpkg jobs leave it unset.
+      - name: Locate vcpkg
+        if: matrix.vcpkg
+        run: |
+          root="${VCPKG_INSTALLATION_ROOT:-}"
+          if [ -z "$root" ] || [ ! -f "$root/scripts/buildsystems/vcpkg.cmake" ]; then
+            root="$RUNNER_TEMP/vcpkg"
+            git clone --depth 1 https://github.com/microsoft/vcpkg "$root"
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              "$root/bootstrap-vcpkg.bat" -disableMetrics
+            else
+              "$root/bootstrap-vcpkg.sh" -disableMetrics
+            fi
+          fi
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: Restore vcpkg binary cache
+        if: matrix.vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('vcpkg.json', 'cmake/triplets/**') }}
+          restore-keys: vcpkg-${{ matrix.name }}-
+
+      - name: Configure
+        run: >-
+          cmake --preset ${{ matrix.preset }} -DLUMEN_WARNINGS_AS_ERRORS=ON ${{ matrix.cmake_args }} $PYBIND11_ARGS
+          "-DLUMEN_REQUIRED_BRIDGE_FRAMEWORKS=${{ matrix.required_bridges }}"
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Test
+        if: ${{ !matrix.no_skips }}
+        env:
+          ASAN_OPTIONS: ${{ matrix.asan_options }}
+        run: ctest --preset ${{ matrix.preset }} --parallel 4
+
+      - name: Test, failing on any skipped test
+        if: matrix.no_skips
+        env:
+          ASAN_OPTIONS: ${{ matrix.asan_options }}
+        run: python3 tests/ci/ctest_without_skips.py --preset ${{ matrix.preset }} --parallel 4
+
+      - name: Build and consume Lumen with non-default settings
+        if: matrix.build_settings
+        run: ctest --preset build-settings --parallel 2
+
+      - name: Benchmark (informational)
+        if: matrix.bench
+        run: ./build/${{ matrix.preset }}/tests/lumen_bench_transport
+
+  # clang-tidy reads the compile database, so it lints what this build
+  # compiles: here the FTXUI dashboard (FTXUI and GTest from vcpkg) and the
+  # Python module (pybind11 from pip), besides src/, examples/ and tests/.
+  lint:
+    name: lint (clang-format, clang-tidy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18 clang-tidy-18
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pybind11
+        run: |
+          python -m pip install 'pybind11>=3.0,<4'
+          echo "PYBIND11_ARGS=-Dpybind11_DIR=$(python -m pybind11 --cmakedir) -DPython_EXECUTABLE=$(command -v python)" >> "$GITHUB_ENV"
+
+      - name: Locate vcpkg
+        run: |
+          root="${VCPKG_INSTALLATION_ROOT:-}"
+          if [ -z "$root" ] || [ ! -f "$root/scripts/buildsystems/vcpkg.cmake" ]; then
+            root="$RUNNER_TEMP/vcpkg"
+            git clone --depth 1 https://github.com/microsoft/vcpkg "$root"
+            "$root/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: vcpkg-${{ runner.os }}-
+          key: vcpkg-lint-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-lint-
 
-      - name: Prepare vcpkg
+      # LUMEN_ENABLE_DASHBOARD=ON: configuring fails if vcpkg did not provide
+      # FTXUI, so the dashboard cannot silently drop out of the lint.
+      - name: Configure
+        run: cmake --preset release -DLUMEN_ENABLE_DASHBOARD=ON -DLUMEN_ENABLE_PYTHON=ON $PYBIND11_ARGS
+
+      - name: clang-format
+        run: cmake --build --preset release --target format-check
+
+      - name: clang-tidy
+        run: cmake --build --preset release --target lint
+
+  # The bridges against their real frameworks. The frameworks are fetched here,
+  # on the runner, and only for this job: Lumen's build never downloads them.
+  # LUMEN_REQUIRED_BRIDGE_FRAMEWORKS makes configuring fail if one is not
+  # found, so that the job cannot pass by skipping the tests it exists for.
+  bridges:
+    name: bridges (${{ matrix.framework }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # libtorch (official CPU build) with the runner's GCC 13. Eigen comes
+          # from apt and OpenMP with GCC, so their bridges are tested here too.
+          - framework: torch
+            required: Eigen3;OpenMP;Torch
+          # ROOT from conda-forge. Lumen is compiled with conda-forge's GCC 13
+          # in the same environment, so that ROOT, the compiler, libstdc++ and
+          # the headers ROOT's interpreter reads at run time all come from one
+          # toolchain.
+          - framework: root
+            required: ROOT
+
+    env:
+      LIBTORCH_VERSION: 2.5.1
+      LIBTORCH_URL: https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcpu.zip
+      ROOT_VERSION: '6.32'
+
+    defaults:
+      run:
+        # A login shell, so that the conda environment of the root entry is
+        # active in every step.
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Eigen and GTest
+        if: matrix.framework == 'torch'
         run: |
-          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeigen3-dev libgtest-dev
 
-      - name: Configure CMake
-        run: cmake --preset ci
+      - name: Restore the libtorch download
+        if: matrix.framework == 'torch'
+        uses: actions/cache@v4
+        with:
+          path: ~/downloads/libtorch-${{ env.LIBTORCH_VERSION }}-cpu.zip
+          key: libtorch-${{ env.LIBTORCH_VERSION }}-cpu-cxx11-abi
+
+      - name: Download and unpack libtorch
+        if: matrix.framework == 'torch'
+        run: |
+          zip="$HOME/downloads/libtorch-${LIBTORCH_VERSION}-cpu.zip"
+          if [ ! -f "$zip" ]; then
+            mkdir -p "$(dirname "$zip")"
+            curl --fail --location --retry 3 --output "$zip" "$LIBTORCH_URL"
+          fi
+          unzip -q "$zip" -d "$RUNNER_TEMP"
+          echo "BRIDGE_PREFIX=$RUNNER_TEMP/libtorch" >> "$GITHUB_ENV"
+
+      # setup-micromamba keeps its package downloads and the solved
+      # environment in the Actions cache (it uses actions/cache internally).
+      - name: Install ROOT and a GCC 13 toolchain from conda-forge
+        if: matrix.framework == 'root'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: lumen-root
+          create-args: >-
+            root=${{ env.ROOT_VERSION }}
+            gxx_linux-64=13
+            gtest
+          cache-downloads: true
+          cache-environment: true
+          init-shell: bash
+
+      - name: Point CMake at the conda environment
+        if: matrix.framework == 'root'
+        run: |
+          echo "BRIDGE_PREFIX=$CONDA_PREFIX" >> "$GITHUB_ENV"
+          # conda-forge builds ROOT as C++20 and RConfigure.h warns (#warning)
+          # when it is included from C++23 code. Keep the warning visible but
+          # do not let -Werror turn it into a build failure.
+          echo "CXXFLAGS=$CXXFLAGS -Wno-error=cpp" >> "$GITHUB_ENV"
+          "$CXX" --version
+          root-config --version
+
+      - name: Configure
+        run: >-
+          cmake --preset release
+          -DLUMEN_ENABLE_DASHBOARD=OFF
+          -DLUMEN_WARNINGS_AS_ERRORS=ON
+          "-DCMAKE_PREFIX_PATH=$BRIDGE_PREFIX"
+          "-DLUMEN_REQUIRED_BRIDGE_FRAMEWORKS=${{ matrix.required }}"
 
       - name: Build
-        run: cmake --build build/ci --parallel
+        run: cmake --build --preset release --parallel
 
-      - name: Run tests
-        run: ctest --preset ci
+      - name: Bridge tests and bridge compile checks
+        run: ctest --preset release --tests-regex Bridge --parallel 4
+
+  # Line and branch coverage of the library's own code (src/ and include/,
+  # bridges excepted), dashboard included, measured by the tests of the
+  # coverage test preset, including the processes that end by a fatal record
+  # or by _exit() (tests/coverage_exit.cpp). The report is uploaded as an
+  # artifact. The job fails below the thresholds. With the dashboard off the
+  # same command measured 90.7 % of lines and 82.4 % of branches, not counting
+  # the branches that only an exception would take.
+  coverage:
+    name: coverage (gcovr)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+      LINE_THRESHOLD: 86
+      BRANCH_THRESHOLD: 80
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gcovr, Eigen and the locales
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeigen3-dev locales
+          sudo localedef -i de_DE -f ISO-8859-1 de_DE.ISO-8859-1
+          sudo localedef -i tr_TR -f ISO-8859-9 tr_TR.ISO-8859-9
+          python3 -m pip install --user 'gcovr==8.8'
+
+      - name: Locate vcpkg
+        run: |
+          root="${VCPKG_INSTALLATION_ROOT:-}"
+          if [ -z "$root" ] || [ ! -f "$root/scripts/buildsystems/vcpkg.cmake" ]; then
+            root="$RUNNER_TEMP/vcpkg"
+            git clone --depth 1 https://github.com/microsoft/vcpkg "$root"
+            "$root/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-coverage-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-coverage-
+
+      - name: Configure
+        run: cmake --preset coverage -DLUMEN_ENABLE_DASHBOARD=ON
+
+      - name: Build
+        run: cmake --build --preset coverage --parallel
+
+      - name: Test
+        run: ctest --preset coverage --parallel 4
+
+      - name: Report
+        run: >-
+          mkdir -p build/coverage/coverage &&
+          gcovr --root . --object-directory build/coverage
+          --gcov-exclude-directories '.*/CMakeFiles/[0-9.]+/.*'
+          --filter 'src/' --filter 'include/lumen/'
+          --exclude 'include/lumen/bridges/'
+          --exclude-throw-branches
+          --print-summary
+          --html-details build/coverage/coverage/index.html
+          --txt build/coverage/coverage/summary.txt
+          --fail-under-line "$LINE_THRESHOLD"
+          --fail-under-branch "$BRANCH_THRESHOLD"
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/coverage/coverage/
+          if-no-files-found: error

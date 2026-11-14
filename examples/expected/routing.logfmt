@@ -1,0 +1,3 @@
+time=<time> kind=log level=INFO msg="tracker aligned" file=<src>/examples/routing.cpp line=140 function="int main(int, char**)" thread=<id> tags.detector=tracker
+time=<time> kind=log level=WARN msg="channel noisy" file=<src>/examples/routing.cpp line=141 function="int main(int, char**)" thread=<id> tags.detector=tracker tags.channel=17
+time=<time> kind=metric name=hits value=1024 thread=<id> tags.detector=tracker
