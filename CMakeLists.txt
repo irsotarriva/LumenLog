@@ -33,6 +33,7 @@ option(LUMEN_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 option(LUMEN_BUILD_EXAMPLES "Build the examples" ${PROJECT_IS_TOP_LEVEL})
 option(LUMEN_INSTALL "Generate install rules and the lumen CMake package" ${PROJECT_IS_TOP_LEVEL})
 option(LUMEN_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ${PROJECT_IS_TOP_LEVEL})
+option(LUMEN_COVERAGE "Tests write GCC coverage counts on abort and _exit; benchmarks are not built" OFF)
 
 # Warnings
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

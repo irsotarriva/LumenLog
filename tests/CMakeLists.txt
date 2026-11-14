@@ -1,3 +1,11 @@
+# A coverage build measures what the tests run, including the processes that
+# end by a fatal record or by _exit(): see coverage_exit.cpp. Linked into
+# every program this directory and its subdirectories define.
+if(LUMEN_COVERAGE)
+  add_library(lumen_coverage_exit OBJECT coverage_exit.cpp)
+  link_libraries(lumen_coverage_exit)
+endif()
+
 add_executable(lumen_tests
   test_record.cpp
   test_record_builder.cpp
@@ -162,23 +170,27 @@ target_link_libraries(lumen_test_allocations PRIVATE lumen GTest::gtest GTest::g
 target_compile_features(lumen_test_allocations PRIVATE cxx_std_23)
 gtest_discover_tests(lumen_test_allocations PROPERTIES TIMEOUT 120)
 
-# Ring buffer throughput. Built with the tests so that it keeps compiling, but
-# not registered with ctest: it prints measurements and has nothing to pass or
-# fail. Run it from a Release build (see the comment at the top of the file).
-add_executable(lumen_bench_transport
-  bench_transport.cpp
-)
+if(NOT LUMEN_COVERAGE)
+  # Ring buffer throughput. Built with the tests so that it keeps compiling, but
+  # not registered with ctest: it prints measurements and has nothing to pass or
+  # fail. Run it from a Release build (see the comment at the top of the file).
+  # Left out of a coverage build: its code never runs there, and would count as
+  # library code that no test reaches.
+  add_executable(lumen_bench_transport
+    bench_transport.cpp
+  )
 
-target_link_libraries(lumen_bench_transport PRIVATE lumen)
-target_compile_features(lumen_bench_transport PRIVATE cxx_std_23)
+  target_link_libraries(lumen_bench_transport PRIVATE lumen)
+  target_compile_features(lumen_bench_transport PRIVATE cxx_std_23)
 
-# Cost of one producer statement (log, metric, progress) with the whole
-# library; built, not run by ctest, like the transport benchmark.
-add_executable(lumen_bench_emit bench_emit.cpp)
-target_link_libraries(lumen_bench_emit PRIVATE lumen)
-target_compile_features(lumen_bench_emit PRIVATE cxx_std_23)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_compile_definitions(lumen_bench_emit PRIVATE PLATFORM_LINUX)
+  # Cost of one producer statement (log, metric, progress) with the whole
+  # library; built, not run by ctest, like the transport benchmark.
+  add_executable(lumen_bench_emit bench_emit.cpp)
+  target_link_libraries(lumen_bench_emit PRIVATE lumen)
+  target_compile_features(lumen_bench_emit PRIVATE cxx_std_23)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(lumen_bench_emit PRIVATE PLATFORM_LINUX)
+  endif()
 endif()
 
 # Optional frameworks for the bridge tests and the bridge compile checks.

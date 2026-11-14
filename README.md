@@ -233,6 +233,7 @@ one that defines a different queue capacity fails to compile.
 | `LUMEN_INSTALL` | `ON` when top level | Install rules and the `lumen` CMake package |
 | `LUMEN_INSTALL_CMAKEDIR` | `${CMAKE_INSTALL_LIBDIR}/cmake/lumen` | Where the package files are installed |
 | `LUMEN_WARNINGS_AS_ERRORS` | `ON` when top level | `-Werror` or `/WX` |
+| `LUMEN_COVERAGE` | `OFF` | For a GCC `--coverage` build (the `coverage` preset turns it on): the test programs also write their coverage counts when they end by `SIGABRT` or `_exit()`, and the benchmarks are not built |
 | `LUMEN_REQUIRED_BRIDGE_FRAMEWORKS` | empty | Bridge frameworks whose tests must be built (`Eigen3;OpenMP;Torch;ROOT`); configuring fails if one is missing |
 
 `LUMEN_MIN_LEVEL` and the capacities change what the public headers compile

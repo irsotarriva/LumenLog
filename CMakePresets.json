@@ -56,6 +56,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "LUMEN_SANITIZER": "none",
+        "LUMEN_COVERAGE": "ON",
         "CMAKE_CXX_FLAGS": "--coverage -fprofile-update=atomic",
         "CMAKE_EXE_LINKER_FLAGS": "--coverage",
         "CMAKE_SHARED_LINKER_FLAGS": "--coverage",

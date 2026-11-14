@@ -368,10 +368,11 @@ jobs:
 
   # Line and branch coverage of the library's own code (src/ and include/,
   # bridges excepted), dashboard included, measured by the tests of the
-  # coverage test preset. The report is uploaded as an artifact. The job
-  # fails below the thresholds: 3 points under the values measured with the
-  # dashboard off (89.4 % of lines; 83.1 % of branches, not counting the
-  # branches that only an exception would take).
+  # coverage test preset, including the processes that end by a fatal record
+  # or by _exit() (tests/coverage_exit.cpp). The report is uploaded as an
+  # artifact. The job fails below the thresholds. With the dashboard off the
+  # same command measured 90.7 % of lines and 82.4 % of branches, not counting
+  # the branches that only an exception would take.
   coverage:
     name: coverage (gcovr)
     runs-on: ubuntu-24.04
